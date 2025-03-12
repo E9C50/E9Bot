@@ -300,9 +300,49 @@ function processTerminalResource(room: Room) {
         }
     }
 
-    // 以下操作都是非中央仓库房间，每100t处理一次
+    if (room.storage != undefined && room.storage.store.energy > 600000) {
+        var maxPrice = 0
+        var orderPrice = 0
+        var orderRoom = ''
+        var dealAmount = 0
+        var dealOrder = ''
+        const sellAmount = 10000
+        const allOrder = Game.market.getAllOrders({ type: ORDER_BUY, resourceType: RESOURCE_ENERGY });
+        for (let order of allOrder) {
+            if (order.roomName != undefined) {
+                const costEnergy = Game.market.calcTransactionCost(sellAmount, room.name, order.roomName)
+                const avgPrice = (order.price * sellAmount) / (sellAmount + costEnergy)
+                if (avgPrice > maxPrice) {
+                    maxPrice = avgPrice
+                    dealOrder = order.id
+                    orderRoom = order.roomName
+                    orderPrice = order.price
+                    dealAmount = Math.min(order.remainingAmount, sellAmount)
+                }
+            }
+        }
+        if (dealOrder != '' && maxPrice > 20) {
+            Game.market.deal(dealOrder, dealAmount, room.name)
+            console.log(`卖出能量 [${room.name}] => [${orderRoom}]，单价为：${orderPrice}，数量为：${dealAmount}，综合单价为：${maxPrice}`)
+        }
+    }
+
+    // 每100t处理一次
     if (room.level < 8) return
     if (Game.time % 100 != 0) return
+
+    // 能量大于400000，发到能量最少的房间
+    if (room.storage != undefined && room.storage.store.energy > 500000) {
+        const targetRoom = Object.values(Game.rooms)
+            .filter(room => room.my && room.storage != undefined && room.storage.store.energy < 400000)
+            .sort((room1, room2) => room1.storage!.store.energy - room2.storage!.store.energy)
+        if (targetRoom.length > 0) {
+            room.sendResource(targetRoom[0].name, RESOURCE_ENERGY, 50000)
+            console.log(`[${room.name}] -> [${targetRoom[0].name}] ${RESOURCE_ENERGY} ${50000}`)
+        }
+    }
+
+    // 以下操作都是非中央仓库房间
     if (room.name == centerStorage) return
 
     // 把房间产的矿发到中央仓库
@@ -312,17 +352,6 @@ function processTerminalResource(room: Room) {
     if (mineralAmount > 10000 && !mineralJobExists) {
         room.sendResource(centerStorage, room.mineral.mineralType, mineralAmount - 10000)
         console.log(`[${room.name}] -> [${centerStorage}] ${room.mineral.mineralType} ${mineralAmount - 10000}`)
-    }
-
-    // 能量大于400000，发到能量最少的房间
-    if (room.terminal.store.energy > 400000) {
-        const targetRoom = Object.values(Game.rooms)
-            .filter(room => room.my && room.storage != undefined && room.storage.store.energy < 200000)
-            .sort((room1, room2) => room1.storage!.store.energy - room2.storage!.store.energy)
-        if (targetRoom.length > 0) {
-            room.sendResource(targetRoom[0].name, RESOURCE_ENERGY, 50000)
-            console.log(`[${room.name}] -> [${targetRoom[0].name}] ${RESOURCE_ENERGY} ${50000}`)
-        }
     }
 
     // 检查缺的资源，小于阈值80%，向中央仓库下单；多的矿，大于阈值20%发到中央仓库

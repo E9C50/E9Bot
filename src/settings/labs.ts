@@ -2,7 +2,7 @@
 export const reactionConfig = {
     [RESOURCE_HYDROXIDE]: 10000,
 
-    [RESOURCE_ZYNTHIUM_KEANITE]: 20000,
+    [RESOURCE_ZYNTHIUM_KEANITE]: 10000,
     [RESOURCE_UTRIUM_LEMERGITE]: 10000,
     [RESOURCE_GHODIUM]: 10000,                      // Nuker    !!!
 
