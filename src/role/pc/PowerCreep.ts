@@ -21,6 +21,12 @@ export const powerSpawnController = function (): void {
 
         if (pc.room == undefined) return
 
+        // 不在指定房间，就过去
+        if (pc.room.name != pcFlag.pos.roomName) {
+            pc.moveTo(pcFlag, { swampCost: 1, plainCost: 1, visualizePathStyle: {} })
+            return
+        }
+
         // 快死了就续命
         pc.memory.needRenew = pc.memory.needRenew || (pc.ticksToLive != undefined && pc.ticksToLive <= 500)
         if (pc.memory.needRenew) {
@@ -36,12 +42,6 @@ export const powerSpawnController = function (): void {
             return
         }
 
-        // 不在指定房间，就过去
-        if (pc.room.name != pcFlag.pos.roomName) {
-            pc.moveTo(pcFlag, { swampCost: 1, plainCost: 1, visualizePathStyle: {} })
-            return
-        }
-
         // OPS没了就去拿
         if (pc.store[RESOURCE_OPS] <= 200 && pc.isRoomHaveOps()) {
             pc.takeOps()
@@ -52,6 +52,35 @@ export const powerSpawnController = function (): void {
         if (pc.store.getFreeCapacity() < 10 && pc.room.my) {
             pc.saveOps()
             return
+        }
+
+        // 有敌人不出去点矿和source
+        const warMode = pc.room.memory.npcTarget != undefined && Game.getObjectById(pc.room.memory.npcTarget) != undefined && Memory.warMode[pc.room.name]
+
+        // 元素矿重生技能
+        if (pc.isPowerAvailable(PWR_REGEN_MINERAL) && !warMode) {
+            if (pc.room.mineral != undefined && pc.room.mineral.mineralAmount > 0) {
+                if (getDistance(pc.pos, pc.room.mineral.pos) >= 3) {
+                    pc.moveTo(pc.room.mineral)
+                    return
+                }
+                pc.usePower(PWR_REGEN_MINERAL, pc.room.mineral)
+                return
+            }
+        }
+
+        // Source重生技能
+        if (pc.isPowerAvailable(PWR_REGEN_SOURCE) && !warMode) {
+            for (let index in pc.room.sources) {
+                if ((pc.room.sources[index].effects == undefined || pc.room.sources[index].effects.length == 0) && pc.room.sources[index].energy > 0) {
+                    if (getDistance(pc.pos, pc.room.sources[index].pos) >= 3) {
+                        pc.moveTo(pc.room.sources[index])
+                        return
+                    }
+                    pc.usePower(PWR_REGEN_SOURCE, pc.room.sources[index])
+                    return
+                }
+            }
         }
 
         if (pcFlag.color == COLOR_RED) {
@@ -149,35 +178,6 @@ export const powerSpawnController = function (): void {
         //         }
         //     }
         // }
-
-        // 有敌人不出去点矿和source
-        const warMode = pc.room.memory.npcTarget != undefined && Game.getObjectById(pc.room.memory.npcTarget) != undefined && Memory.warMode[pc.room.name]
-
-        // 元素矿重生技能
-        if (pc.isPowerAvailable(PWR_REGEN_MINERAL) && !warMode) {
-            if (pc.room.mineral != undefined && pc.room.mineral.mineralAmount > 0) {
-                if (getDistance(pc.pos, pc.room.mineral.pos) >= 3) {
-                    pc.moveTo(pc.room.mineral)
-                    return
-                }
-                pc.usePower(PWR_REGEN_MINERAL, pc.room.mineral)
-                return
-            }
-        }
-
-        // Source重生技能
-        if (pc.isPowerAvailable(PWR_REGEN_SOURCE) && !warMode) {
-            for (let index in pc.room.sources) {
-                if ((pc.room.sources[index].effects == undefined || pc.room.sources[index].effects.length == 0) && pc.room.sources[index].energy > 0) {
-                    if (getDistance(pc.pos, pc.room.sources[index].pos) >= 3) {
-                        pc.moveTo(pc.room.sources[index])
-                        return
-                    }
-                    pc.usePower(PWR_REGEN_SOURCE, pc.room.sources[index])
-                    return
-                }
-            }
-        }
 
         // Tower加成技能
         // if (pc.isPowerAvailable(PWR_OPERATE_TOWER)) {

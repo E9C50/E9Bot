@@ -47,7 +47,7 @@ function updateLabReactionConfig(room: Room): void {
             return
         }
     }
-    room.memory.roomLabConfig.labReactionConfig = 'XKHO2'
+    room.memory.roomLabConfig.labReactionConfig = 'XLH2O'
 }
 
 function updateLabBoostConfig(room: Room): void {
@@ -284,6 +284,8 @@ function processTerminalResource(room: Room) {
         if (room.terminal.store.getFreeCapacity() == 0 && room.terminal.store[resourceType] > 0) {
             sendAmount = room.terminal.store[resourceType]
         }
+
+        sendAmount = Math.min(sendAmount, 100000)
 
         if (room.terminal.store[resourceType] >= sendAmount && room.terminal.cooldown == 0) {
             const result = room.terminal.send(resourceType, sendAmount, sendTargetRoom)
