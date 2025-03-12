@@ -314,6 +314,17 @@ function processTerminalResource(room: Room) {
         console.log(`[${room.name}] -> [${centerStorage}] ${room.mineral.mineralType} ${mineralAmount - 10000}`)
     }
 
+    // 能量大于400000，发到能量最少的房间
+    if (room.terminal.store.energy > 400000) {
+        const targetRoom = Object.values(Game.rooms)
+            .filter(room => room.my && room.storage != undefined && room.storage.store.energy < 200000)
+            .sort((room1, room2) => room1.storage!.store.energy - room2.storage!.store.energy)
+        if (targetRoom.length > 0) {
+            room.sendResource(targetRoom[0].name, RESOURCE_ENERGY, 50000)
+            console.log(`[${room.name}] -> [${targetRoom[0].name}] ${RESOURCE_ENERGY} ${50000}`)
+        }
+    }
+
     // 检查缺的资源，小于阈值80%，向中央仓库下单；多的矿，大于阈值20%发到中央仓库
     Object.keys(defaultAutoResource).forEach(resType => {
         const resourceType = resType as ResourceConstant

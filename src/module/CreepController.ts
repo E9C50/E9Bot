@@ -585,7 +585,7 @@ export const creepWorkController = function (): void {
     });
 
     // Debug信息
-    const debug = true && Game.shard.name == 'shard3'
+    const debug = false && Game.shard.name == 'shard3'
     if (debug) {
         workCpu = workCpu.sort((a, b) => b[1] - a[1])
         for (let role in Object.keys(workCpu)) {

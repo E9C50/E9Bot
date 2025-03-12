@@ -54,7 +54,7 @@ export const loop = ErrorMapper.wrapLoop(() => {
         if (global['cpuList'] == undefined) global['cpuList'] = []
         global['cpuList'].push(Game.cpu.getUsed())
         if (global['cpuList'].length > 100) global['cpuList'].shift()
-        console.log(global['cpuList'].length, getAverage(global['cpuList']), Game.cpu.bucket)
+        // console.log(global['cpuList'].length, getAverage(global['cpuList']), Game.cpu.bucket)
     }
 })
 
