@@ -96,11 +96,11 @@ export const bodyConfigs: { [role in CreepRoleConstant]: BodySet[] } = {
     miner: workerBodyConfigs,
     filler: carryBodyConfigs,
 
-    rBuilder: workerBodyConfigs,
+    // rBuilder: workerBodyConfigs,
     rFiller: carryBodyConfigs,
     // rBuilder: Array.from({ length: 8 }, () => ({ [WORK]: 32, [CARRY]: 1, [MOVE]: 17 })),
     // rBuilder: Array.from({ length: 8 }, () => ({ [WORK]: 39, [CARRY]: 1, [MOVE]: 10 })),
-    // rBuilder: Array.from({ length: 8 }, () => ({ [WORK]: 20, [CARRY]: 20, [MOVE]: 10 })),
+    rBuilder: Array.from({ length: 8 }, () => ({ [WORK]: 20, [CARRY]: 20, [MOVE]: 10 })),
     // rFiller: Array.from({ length: 8 }, () => ({ [CARRY]: 44, [MOVE]: 6 })),
 
     processer: carryBodyConfigs,
@@ -152,8 +152,9 @@ export const bodyConfigs: { [role in CreepRoleConstant]: BodySet[] } = {
         { [TOUGH]: 0, [MOVE]: 0, [RANGED_ATTACK]: 0, [HEAL]: 0 },
         { [TOUGH]: 0, [MOVE]: 0, [RANGED_ATTACK]: 0, [HEAL]: 0 },
         { [TOUGH]: 0, [MOVE]: 0, [RANGED_ATTACK]: 0, [HEAL]: 0 },
-        // { [TOUGH]: 2, [RANGED_ATTACK]: 36, [MOVE]: 10, [HEAL]: 2 }, // 防御
-        { [TOUGH]: 7, [RANGED_ATTACK]: 19, [MOVE]: 10, [HEAL]: 14 }, // 7级房进攻
+        // { [TOUGH]: 5, [RANGED_ATTACK]: 30, [MOVE]: 10, [HEAL]: 5 },
+        { [TOUGH]: 2, [RANGED_ATTACK]: 36, [MOVE]: 10, [HEAL]: 2 }, // 防御
+        // { [TOUGH]: 7, [RANGED_ATTACK]: 19, [MOVE]: 10, [HEAL]: 14 }, // 7级房进攻
         // { [TOUGH]: 8, [MOVE]: 10, [RANGED_ATTACK]: 15, [HEAL]: 17 }, // 四级要塞
         // { [TOUGH]: 2, [RANGED_ATTACK]: 25, [HEAL]: 13, [MOVE]: 10 }, // 一级要塞
     ],

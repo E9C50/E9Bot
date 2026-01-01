@@ -1,7 +1,7 @@
 export const STRUCTURE_PRIVATEKEY_PERFIX = '_'
 export const STRUCTURE_MEMORYKEY_PERFIX = 'IDOF_'
 
-export const creepWhiteList = ['NoName_', 'MoSaSa', 'Kaoruko', 'keqing']
+export const creepWhiteList = ['NoName_', 'MoSaSa', 'Kaoruko', 'keqing', 'RainbowCandy']
 
 // 永不踏入这些房间
 export const findPathAvoidRooms = [

@@ -546,7 +546,7 @@ export const creepNumberController = function (): void {
 }
 
 function callTower(target: Creep) {
-    if (target.my && target.hits < target.hitsMax) {
+    if (target.room.my && target.my && target.hits < target.hitsMax) {
         target.room.towers[0].heal(target)
         return
     }
@@ -569,7 +569,7 @@ export const creepWorkController = function (): void {
         workCpu.push([creep.name + ' prepare', (Game.cpu.getUsed() - cpu)])
         if (!prepared) return
 
-        if (creep.hits < creep.hitsMax) {
+        if (creep.room.my && creep.hits < creep.hitsMax) {
             callTower(creep)
         }
 

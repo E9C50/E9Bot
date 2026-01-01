@@ -48,7 +48,7 @@ export const roleBoostConfig: { [role in CreepRoleConstant]?: BoostTypeConstant[
     // builder: [boostTypeEnum.BoostTypeBuild],
     // repairer: [boostTypeEnum.BoostTypeBuild, boostTypeEnum.BoostTypeCarry],
 
-    // rBuilder: [boostTypeEnum.BoostTypeBuild, boostTypeEnum.BoostTypeCarry],
+    // rBuilder: [boostTypeEnum.BoostTypeUpgrade, boostTypeEnum.BoostTypeCarry, boostTypeEnum.BoostTypeMove],
     // rFiller: [boostTypeEnum.BoostTypeCarry, boostTypeEnum.BoostTypeMove],
 
     defender: [boostTypeEnum.BoostTypeAttack, boostTypeEnum.BoostTypeMove],

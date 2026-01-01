@@ -45,7 +45,7 @@ export const loop = ErrorMapper.wrapLoop(() => {
     exportStats()
 
     // 利用空闲CPU生成Pixel
-    if (Game.cpu.bucket >= 10000 && typeof Game.cpu.generatePixel === 'function') Game.cpu.generatePixel()
+    if (Game.shard.name != 'shard3' && Game.cpu.bucket >= 10000 && typeof Game.cpu.generatePixel === 'function') Game.cpu.generatePixel()
 
     // 私服买能量
     privateServerWork()

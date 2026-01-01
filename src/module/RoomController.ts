@@ -47,7 +47,7 @@ function updateLabReactionConfig(room: Room): void {
             return
         }
     }
-    room.memory.roomLabConfig.labReactionConfig = 'XLH2O'
+    room.memory.roomLabConfig.labReactionConfig = undefined
 }
 
 function updateLabBoostConfig(room: Room): void {
@@ -261,7 +261,49 @@ function findTowerEnemy(room: Room): void {
     if (npcList.length > 0) room.memory.npcTarget = npcList[0].id
 }
 
-// 终端资源自动平衡
+/**
+ * 通用资源出售函数
+ * @param room 房间
+ * @param resourceType 资源类型
+ * @param threshold 出售阈值
+ * @param minPrice 最小出售价格
+ * @param sellAmount 每次出售数量
+ */
+function sellResource(room: Room, resourceType: ResourceConstant, threshold: number, minPrice: number = 20, sellAmount: number = 10000) {
+    if (room.storage == undefined || room.storage.store[resourceType] <= threshold) return
+    if (room.terminal == undefined || room.terminal.cooldown > 0) return
+
+    var maxPrice = 0
+    var orderPrice = 0
+    var orderRoom = ''
+    var dealAmount = 0
+    var dealOrder = ''
+    const allOrder = Game.market.getAllOrders({ type: ORDER_BUY, resourceType: resourceType });
+    for (let order of allOrder) {
+        if (order.roomName != undefined && order.remainingAmount > 100) {
+            const costEnergy = Game.market.calcTransactionCost(sellAmount, room.name, order.roomName)
+            var avgPrice = 0;
+            if (resourceType == RESOURCE_ENERGY) {
+                avgPrice = (order.price * sellAmount) / (sellAmount + costEnergy)
+            } else {
+                avgPrice = ((order.price * sellAmount) - (costEnergy * 20)) / sellAmount
+            }
+
+            if (avgPrice > maxPrice) {
+                maxPrice = avgPrice
+                dealOrder = order.id
+                orderRoom = order.roomName
+                orderPrice = order.price
+                dealAmount = Math.min(order.remainingAmount, sellAmount)
+            }
+        }
+    }
+    if (dealOrder != '' && maxPrice > minPrice) {
+        Game.market.deal(dealOrder, dealAmount, room.name)
+        console.log(`卖出${resourceType} [${room.name}] => [${orderRoom}]，单价为：${orderPrice}，数量为：${dealAmount}，综合单价为：${maxPrice}`)
+    }
+}
+
 function processTerminalResource(room: Room) {
     if (room.terminal == undefined) return
     const centerStorage = Memory.centerStorage
@@ -272,7 +314,6 @@ function processTerminalResource(room: Room) {
 
     // 终端发送任务
     for (let jobId in room.memory.terminalSendJob) {
-
         const sendTargetRoom = room.memory.terminalSendJob[jobId].targetRoom
         const resourceType = room.memory.terminalSendJob[jobId].resourceType
         let sendAmount = room.memory.terminalSendJob[jobId].amount
@@ -297,33 +338,6 @@ function processTerminalResource(room: Room) {
                 }
                 break;
             }
-        }
-    }
-
-    if (room.storage != undefined && room.storage.store.energy > 600000) {
-        var maxPrice = 0
-        var orderPrice = 0
-        var orderRoom = ''
-        var dealAmount = 0
-        var dealOrder = ''
-        const sellAmount = 10000
-        const allOrder = Game.market.getAllOrders({ type: ORDER_BUY, resourceType: RESOURCE_ENERGY });
-        for (let order of allOrder) {
-            if (order.roomName != undefined) {
-                const costEnergy = Game.market.calcTransactionCost(sellAmount, room.name, order.roomName)
-                const avgPrice = (order.price * sellAmount) / (sellAmount + costEnergy)
-                if (avgPrice > maxPrice) {
-                    maxPrice = avgPrice
-                    dealOrder = order.id
-                    orderRoom = order.roomName
-                    orderPrice = order.price
-                    dealAmount = Math.min(order.remainingAmount, sellAmount)
-                }
-            }
-        }
-        if (dealOrder != '' && maxPrice > 20) {
-            Game.market.deal(dealOrder, dealAmount, room.name)
-            console.log(`卖出能量 [${room.name}] => [${orderRoom}]，单价为：${orderPrice}，数量为：${dealAmount}，综合单价为：${maxPrice}`)
         }
     }
 
@@ -540,6 +554,40 @@ export const roomController = function (): void {
         processTerminalResource(room)
 
         if (debug && (Game.cpu.getUsed() - cpu) > 1) console.log(`处理资源平衡 CPU 使用量：${(Game.cpu.getUsed() - cpu).toFixed(2)}`)
+        cpu = Game.cpu.getUsed()
+
+        sellResource(room, RESOURCE_ENERGY, 600000, 20, 10000)
+        if (room.name == Memory.centerStorage) {
+            room.memory.terminalAmount[RESOURCE_KEANIUM] = 5000
+            room.memory.terminalAmount[RESOURCE_LEMERGIUM] = 5000
+            room.memory.terminalAmount[RESOURCE_OXYGEN] = 5000
+            room.memory.terminalAmount[RESOURCE_HYDROGEN] = 5000
+            room.memory.terminalAmount[RESOURCE_ZYNTHIUM] = 5000
+            room.memory.terminalAmount[RESOURCE_UTRIUM] = 5000
+            room.memory.terminalAmount[RESOURCE_CATALYST] = 5000
+            room.memory.terminalAmount[RESOURCE_OPS] = 5000
+
+            room.memory.terminalAmount[RESOURCE_ZYNTHIUM_KEANITE] = 5000
+            room.memory.terminalAmount[RESOURCE_GHODIUM_OXIDE] = 5000
+            room.memory.terminalAmount[RESOURCE_KEANIUM_OXIDE] = 5000
+
+            sellResource(room, RESOURCE_KEANIUM, 300000, 10, 5000)
+            sellResource(room, RESOURCE_LEMERGIUM, 300000, 10, 5000)
+            sellResource(room, RESOURCE_OXYGEN, 300000, 1, 5000)
+            sellResource(room, RESOURCE_HYDROGEN, 300000, 1, 5000)
+            sellResource(room, RESOURCE_ZYNTHIUM, 300000, 0.001, 5000)
+            sellResource(room, RESOURCE_UTRIUM, 300000, 10, 5000)
+            sellResource(room, RESOURCE_CATALYST, 300000, 10, 5000)
+            sellResource(room, RESOURCE_OPS, 300000, 0.001, 5000)
+
+            sellResource(room, RESOURCE_ZYNTHIUM_KEANITE, 300000, 0.001, 5000)
+            sellResource(room, RESOURCE_GHODIUM_OXIDE, 300000, 0.001, 5000)
+            sellResource(room, RESOURCE_KEANIUM_OXIDE, 300000, 0.001, 5000)
+
+            sellResource(room, RESOURCE_ENERGY, 300000, 0.001, 10000)
+        }
+
+        if (debug && (Game.cpu.getUsed() - cpu) > 1) console.log(`出售资源 CPU 使用量：${(Game.cpu.getUsed() - cpu).toFixed(2)}`)
         cpu = Game.cpu.getUsed()
 
         // 更新LabBoost配置

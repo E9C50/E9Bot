@@ -42,6 +42,20 @@ export const powerSpawnController = function (): void {
             return
         }
 
+        // Storage扩容技能
+        if (pc.isPowerAvailable(PWR_OPERATE_STORAGE)) {
+            if (pc.room.storage != undefined) {
+                if (pc.room.storage.effects == undefined || pc.room.storage.effects.length == 0 || pc.room.storage.effects[0].ticksRemaining < 10) {
+                    if (getDistance(pc.pos, pc.room.storage.pos) >= 3) {
+                        pc.moveTo(pc.room.storage)
+                        return
+                    }
+                    pc.usePower(PWR_OPERATE_STORAGE, pc.room.storage)
+                    return
+                }
+            }
+        }
+
         // OPS没了就去拿
         if (pc.store[RESOURCE_OPS] <= 200 && pc.isRoomHaveOps()) {
             pc.takeOps()
@@ -86,20 +100,6 @@ export const powerSpawnController = function (): void {
         if (pcFlag.color == COLOR_RED) {
             if (!pc.pos.isEqualTo(pcFlag.pos)) pc.moveTo(pcFlag)
             return
-        }
-
-        // Storage扩容技能
-        if (pc.isPowerAvailable(PWR_OPERATE_STORAGE)) {
-            if (pc.room.storage != undefined) {
-                if (pc.room.storage.effects == undefined || pc.room.storage.effects.length == 0 || pc.room.storage.effects[0].ticksRemaining < 10) {
-                    if (getDistance(pc.pos, pc.room.storage.pos) >= 3) {
-                        pc.moveTo(pc.room.storage)
-                        return
-                    }
-                    pc.usePower(PWR_OPERATE_STORAGE, pc.room.storage)
-                    return
-                }
-            }
         }
 
         // Terminal技能
