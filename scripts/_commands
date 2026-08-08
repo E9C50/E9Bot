@@ -15,7 +15,7 @@ storage.db['rooms.objects'].update({ _id: '67c820eeab2f8d0045d37df8' }, { $set: 
 storage.db['rooms.objects'].update({ _id: '679f6ec5661d06003cfcd750' }, { $set: { store: { energy: 500000 } } })
 storage.db['rooms.objects'].update({ _id: '678733422e22d4003e4cc53d' }, { $set: { store: { XLHO2: 3000 } } })
 
-storage.db['rooms.objects'].find({ type: 'constructionSite', room: { $in: ['W4N1'] } }).then(resp => resp.map(cs => storage.db['rooms.objects'].findOne({ _id: cs._id }).then(csDetail => storage.db['rooms.objects'].update({ _id: cs._id }, { $set: { progress: csDetail.progressTotal - 1 } }))))
+storage.db['rooms.objects'].find({ type: 'constructionSite', room: { $in: ['W1N9'] } }).then(resp => resp.map(cs => storage.db['rooms.objects'].findOne({ _id: cs._id }).then(csDetail => storage.db['rooms.objects'].update({ _id: cs._id }, { $set: { progress: csDetail.progressTotal - 1 } }))))
 storage.db['rooms.objects'].find({ type: { $in: ['constructedWall', 'rampart'] }, room: { $in: ['W4N1'] } }).then(resp => resp.map(cs => storage.db['rooms.objects'].findOne({ _id: cs._id }).then(csDetail => storage.db['rooms.objects'].update({ _id: cs._id }, { $set: { hits: 10000000 } }))))
 storage.db['rooms.objects'].find({ type: { $in: ['spawn', 'extension', 'tower', 'link'] }, room: { $in: ['E13N8'] } }).then(resp => resp.map(cs => storage.db['rooms.objects'].findOne({ _id: cs._id }).then(csDetail => storage.db['rooms.objects'].update({ _id: cs._id }, { $set: { store: { "energy": 300 } } }))))
 storage.db['rooms.objects'].find({ type: { $in: ['tower'] }, room: { $in: ['E12N6'] } }).then(resp => resp.map(cs => storage.db['rooms.objects'].findOne({ _id: cs._id }).then(csDetail => storage.db['rooms.objects'].update({ _id: cs._id }, { $set: { store: { "energy": 1000 } } }))))
@@ -29,13 +29,13 @@ storage.db['rooms.objects'].update({ _id: '678592d7611bd0004a3f0b3b' }, { $set: 
 // 用户端控制台指令
 Game.profiler.profile(100)
 
-Game.rooms['E38N6'].sendResource('E39S2', 'Z', 500000)
-Game.rooms['E38N6'].terminal.send('Z', 5000, 'E39S2', '')
+Game.rooms['E38N6'].sendResource('W41N53', 'XLH2O', 150000)
+Game.rooms['E38N6'].terminal.send('energy', 45000, 'E35N1', '')
 
 Game.market.cancelOrder('677904f7a59e02004ad0d76c');
 Game.market.extendOrder('68b7d6afa6a3ee0012f6209b', 500000);
 Game.market.changeOrderPrice('68651585fdeaad0013dce17e', 0.001);
-Game.market.deal('691e78c44daf1f00129c1cc8', 3000, "E38N6");
+Game.market.deal('696bc21899821e001232ca59', 3000, "E38N6");
 
 Game.creeps['MANAGER_90A9C5DFD3'].transfer(Game.rooms['E38N6'].terminal, 'XLH2O');
 Game.creeps['MANAGER_90A9C5DFD3'].withdraw(Game.rooms['E38N6'].storage, 'energy');
@@ -43,12 +43,18 @@ Game.creeps['MANAGER_90A9C5DFD3'].withdraw(Game.rooms['E38N6'].storage, 'energy'
 Game.rooms['E5S1'].ramparts.forEach(wall => { if (wall.pos.y == 2) wall.destroy() })
 Object.values(Game.creeps).forEach(creep => {if (creep.memory.role == 'repairer') {creep.suicide()}})
 
-Game.rooms['E38N6'].terminal.send('XLH20', 1, 'E45N9', '')
+Game.rooms['E38N6'].terminal.send('XKH2O', 1, 'E45N9', '')
 controller = Game.getObjectById('5bbcaf309099fc012e63a4b7');(controller.progressTotal - controller.progress) / 92 / 8 * 2.5 / 60 / 60
 
-Game.market.createOrder({ type: ORDER_BUY, resourceType: 'energy', price: 10, totalAmount: 100000, roomName: "E38N6" });
+Game.market.createOrder({ type: ORDER_BUY, resourceType: 'energy', price: 40, totalAmount: 100000, roomName: "E31N2" });
 Game.market.createOrder({ type: ORDER_SELL, resourceType: 'K', price: 1, totalAmount: 100000, roomName: "E38N6" });
 
+for (const orderId in Game.market.orders) {
+    const order = Game.market.orders[orderId];
+    if (order.remainingAmount === 0) {
+        Game.market.cancelOrder(orderId);
+    }
+}
 
 [
     { "type": "carry", "hits": new NumberInt("100"), "boost": "XKH2O" },

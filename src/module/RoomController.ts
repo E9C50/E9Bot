@@ -341,20 +341,19 @@ function processTerminalResource(room: Room) {
         }
     }
 
-    // 每100t处理一次
-    if (room.level < 8) return
-    if (Game.time % 30 != 0) return
-
     // 能量大于400000，发到能量最少的房间
     if (room.storage != undefined && room.storage.store.energy > 400000) {
         const targetRoom = Object.values(Game.rooms)
-            .filter(room => room.my && room.storage != undefined && room.storage.store.energy < 300000)
+            .filter(room => room.my && room.storage != undefined && room.terminal != undefined && room.storage.store.energy < 300000)
             .sort((room1, room2) => room1.storage!.store.energy - room2.storage!.store.energy)
         if (targetRoom.length > 0) {
             room.sendResource(targetRoom[0].name, RESOURCE_ENERGY, 50000)
             console.log(`[${room.name}] -> [${targetRoom[0].name}] ${RESOURCE_ENERGY} ${50000}`)
         }
     }
+
+    if (room.level < 8) return
+    if (Game.time % 30 != 0) return
 
     // 以下操作都是非中央仓库房间
     if (room.name == centerStorage) return

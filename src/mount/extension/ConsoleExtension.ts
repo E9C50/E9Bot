@@ -23,7 +23,7 @@ export default class ConsoleExtension {
         ];
 
         let html = '<html><style>tr,th,td{text-align:center} table{width:120%}</style>';
-        html += '<body><table border="1"><thead><tr><th>房间名称</th><th>核弹就绪</th><th>核弹CD</th><th>核弹剩余时间</th><th>Lab配方</th><th>Lab工作状态</th><th>容器占用</th><th>终端占用</th><th>最薄墙壁厚度</th>';
+        html += '<body><table border="1"><thead><tr><th>房间名称</th><th>控制器倒计时</th><th>核弹就绪</th><th>核弹CD</th><th>核弹剩余时间</th><th>Lab配方</th><th>Lab工作状态</th><th>容器占用</th><th>终端占用</th><th>最薄墙壁厚度</th>';
 
         resourceTypes.forEach(resourceType => {
             html += `<th>${resourceType}</th>`;
@@ -46,6 +46,8 @@ export default class ConsoleExtension {
             const nukerLeftTime = ((room.nuker?.cooldown || 0) * 2.5 / 60 / 60).toFixed(2);
             let nukerReady = room.nuker?.cooldown == 0 ? '✅' : '❌';
             if (room.nuker != undefined && (room.nuker.store[RESOURCE_ENERGY] < 300000 || room.nuker.store[RESOURCE_GHODIUM] < 5000)) nukerReady = '🔁';
+
+            const controllerCountdown = room.controller?.ticksToDowngrade || 0;
 
             let labWorking = false;
             const labConfig = room.memory.roomLabConfig;
@@ -78,7 +80,7 @@ export default class ConsoleExtension {
                 terminalColor = 'green';
             }
 
-            html += `<tr><td>${room.name}</td><td>${nukerReady}</td><td>${nukerCooldown}</td><td>${nukerLeftTime} h</td>`
+            html += `<tr><td>${room.name}</td><td>${controllerCountdown}</td><td>${nukerReady}</td><td>${nukerCooldown}</td><td>${nukerLeftTime} h</td>`
             html += `<td>${labReaction || '-'}</td><td>${labWorking ? '✅' : '❌'}</td>`
             html += `<td style="color: ${storageColor};">${storagePercent} %</td><td style="color: ${terminalColor};">${terminalPercent} %</td><td>${(minWall / 1000000).toFixed(2)} M</td>`
 
