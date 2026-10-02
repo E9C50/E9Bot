@@ -20,5 +20,6 @@ export function nextCachedMovementStep(position: { x: number; y: number; roomNam
     const step = path[next]
     if (!step || step.roomName !== position.roomName || step.x < 0 || step.x > 49 || step.y < 0 || step.y > 49 ||
         Math.max(Math.abs(step.x - position.x), Math.abs(step.y - position.y)) !== 1) return undefined
-    return { ...step, index: next }
+    // Native RoomPosition coordinates are prototype accessors, not enumerable own fields.
+    return { x: step.x, y: step.y, roomName: step.roomName, index: next }
 }

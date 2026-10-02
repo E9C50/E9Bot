@@ -195,6 +195,24 @@ test('previous movement prediction rejects off-path, exhausted and cross-room bo
     assert.equal(predict(w.p(23), route, 99, 100).x, 24, 'a blocked last step retries its adjacent actual route');
 });
 
+test('native prototype coordinates survive prediction and enable a real execution handoff', () => {
+    const w = world();
+    class NativePosition {
+        constructor(position) { Object.defineProperty(this, 'coordinates', { value: [position.x, position.y, position.roomName] }); }
+        get x() { return this.coordinates[0]; }
+        get y() { return this.coordinates[1]; }
+        get roomName() { return this.coordinates[2]; }
+    }
+    for (const route of Object.values(w.cache)) route.path.posArray = route.path.posArray.map(p => new NativePosition(p));
+    assert.deepEqual(Object.keys(w.cache.donor.path.posArray[20]), [], 'native coordinate accessors cannot be spread');
+    const step = w.loader.globals.BetterMove.getNextCachedStep(w.donor);
+    assert.equal(step.x, 25); assert.equal(step.y, 25); assert.equal(step.roomName, w.home.name);
+    w.loader.load('creep/execution').creepWorkController();
+    assert.equal(w.calls.filter(c => c.type === 'transfer').length, 1);
+    assert.equal(w.calls.filter(c => c.type === 'move').length, 2);
+    assert.equal(w.calls.filter(c => c.type.startsWith('ordinary-')).length, 0);
+});
+
 test('mature rooms do not scan the creep population and relay statistics stay bounded', () => {
     const w = world(); w.home.controller.level = 8;
     Object.defineProperty(w.game, 'creeps', { get() { throw Error('mature relay scanned all creeps'); } });

@@ -16,7 +16,7 @@ async function officialClient() {
         try {
             // Bundled code plus source maps can exceed the ordinary small API response budget.
             response = await fetch(url, { method: body ? 'POST' : 'GET', headers, body: body && JSON.stringify(body),
-                signal: AbortSignal.timeout(endpoint === '/api/user/code' ? 60000 : 20000) });
+                signal: AbortSignal.timeout(endpoint === '/api/user/code' ? 180000 : 20000) });
         } catch { throw new Error('Official API connection failed'); }
         if (!response.ok) throw new Error(`Official API HTTP ${response.status}`);
         token = response.headers.get('x-token') || token;
