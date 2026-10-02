@@ -15,6 +15,7 @@ type AdvancedRoleReserver = 'reserver'
 type AdvancedRoleRemoteHarvester = 'rHarvester'
 type AdvancedRoleRemoteFiller = 'rFiller'
 type AdvancedRoleRemoteBuilder = 'rBuilder'
+type ShardRoleConstant = 'sClaimer' | 'sBuilder' | 'sHauler' | 'sScout'
 
 // 战争角色
 type WarRoleAttacker = 'attacker'
@@ -30,13 +31,13 @@ type WarRoleControllerAttacker = 'cAttacker'
 type CreepRoleBaseConstant = BaseRoleHarvester | BaseRoleFiller | BaseRoleUpgrader | BaseRoleBuilder | BaseRoleRepairer | BaseRoleMiner | BaseRoleScout
 type CreepRoleAdvConstant = AdvancedRoleManager | AdvancedRoleProcesser | AdvancedRoleClaimer | AdvancedRoleReserver | AdvancedRoleRemoteHarvester | AdvancedRoleRemoteFiller | AdvancedRoleRemoteBuilder
 type CreepRoleWarConstant = WarRoleAttacker | WarRoleHealer | WarRoleRangedAttacker | WarRoleDismantler | WarRoleIntegrate | WarRoleDefender | WarRoleRangedDefender | WarRoleControllerAttacker
-type CreepRoleConstant = CreepRoleBaseConstant | CreepRoleAdvConstant | CreepRoleWarConstant
+type CreepRoleConstant = CreepRoleBaseConstant | CreepRoleAdvConstant | CreepRoleWarConstant | ShardRoleConstant
 
 // Creep 工作逻辑集合 包含了每个角色应该做的工作
 type CreepWork = { [role in CreepRoleConstant]: (data: CreepData) => ICreepConfig }
 
 // 所有 Creep 角色的 Data 数据
-type CreepData = EmptyData | HarvesterData | MineralData | FillerData | BuilderData | RepairerData
+type CreepData = EmptyData | HarvesterData | MineralData | FillerData | BuilderData | RepairerData | import('../shard/missions').ShardUnitData
 
 
 // Creep 基本工作接口定义
@@ -80,17 +81,77 @@ interface CreepMemory {
     data: CreepData
     dontPullMe?: boolean
     isTeam?: boolean
+    combatTaskId?: string
+    combatJob?: 'fighter' | 'scout' | 'controller' | 'loot'
+    combatGeneration?: number
     needBoost?: boolean
     needRenew?: boolean
     pathCache?: string
     prePos?: string
+    /** Local-shard aid loading progress and bounded target cooldowns. */
+    aidBuilderEnergy?: AidBuilderEnergyState
+    /** Stable local mine assignment and loading progress for development haulers. */
+    developmentHauler?: import('../creep/developmentHauling').DevelopmentHaulerState
+    /** Per-demand preferences override persistent room role preferences. */
+    bodyProfile?: CreepBodyProfile
+    /** Spawn-selected compounds; tier 0 explicitly opts out of legacy role boosts. */
+    boostPlan?: CreepBoostPlan
+    development?: {
+        workParts?: number
+        carryParts?: number
+        travelTicks?: number
+        stationary?: boolean
+        maximumCost?: number
+    }
+}
+
+interface AidBuilderEnergyState {
+    shard: string
+    roomName: string
+    tick: number
+    loadStarted?: number
+    active?: {
+        targetId: string
+        x: number
+        y: number
+        energy: number
+        progressTick: number
+    }
+    blocked: { targetId: string; until: number }[]
+}
+
+type CreepBoostTier = 0 | 1 | 2 | 3
+type CreepBodyTerrain = 'road' | 'plain' | 'swamp'
+
+interface CreepBodyProfile {
+    /** Exact combat composition selected by a mission; productive economy quotas stay separate. */
+    combatPrimaryParts?: number
+    combatHealParts?: number
+    combatToughParts?: number
+    boostTier?: CreepBoostTier
+    terrain?: CreepBodyTerrain
+    /** A confirmed standing workstation; never infer this from the role alone. */
+    stationary?: boolean
+    workParts?: number
+    carryParts?: number
+    maximumCost?: number
+    boostFallback?: 'unboosted' | 'wait'
+}
+
+interface CreepBoostPlan {
+    tier: CreepBoostTier
+    steps: { type: BoostTypeConstant; resource: ResourceConstant; parts: number }[]
+    startedAt?: number
+    completed?: boolean
+    failed?: boolean
+    failureReason?: string
 }
 
 interface EmptyData { }
 
 interface HarvesterData { sourceId: string, buildTarget?: string }
 interface MineralData { sourceId: string }
-interface FillerData { sourceId: string, targetId?: string }
+interface FillerData { sourceId: string, targetId?: string, mineId?: string }
 
 interface ManagerData { }
 interface ProcesserData { waiting: number }
@@ -104,14 +165,15 @@ interface ReserverData { targetRoom: string }
 interface ClaimerData { targetFlag: string }
 
 interface RemoteFillerData { sourceFlag: string, targetFlag: string, withdrawTarget?: string }
-interface RemoteBuilderData { sourceFlag: string, targetFlag: string, buildTarget?: string }
+interface RemoteBuilderData { sourceFlag: string, targetFlag: string, buildTarget?: string, bootstrap?: boolean }
 interface RemoteHarvesterData { sourceId: string, targetRoom: string, buildTarget?: string }
 
 interface AttackerData { targetFlag: string }
 interface HealerData { targetFlag: string, targetCreep?: string }
 interface IntegrateData { targetFlag: string, attackEnemy?: string }
 
-interface DefenderData { targetEnemy: string, lastEnemy?: string }
+interface DefenderData { targetEnemy: string, lastEnemy?: string, groupKey?: string,
+    guardPosition?: { x: number, y: number, roomName: string }, pursuitStartedAt?: number }
 
 
 interface BodySet {

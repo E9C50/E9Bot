@@ -3,7 +3,9 @@ import { getDistance } from "utils"
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
-        return true
+        const targetFlag = Game.flags[(data as ClaimerData).targetFlag]
+        if (targetFlag == undefined) return false
+        return !(Game.rooms[targetFlag.pos.roomName] || targetFlag.room)?.my
     },
     prepare(creep) {
         return true
@@ -38,19 +40,21 @@ export default (data: CreepData): ICreepConfig => ({
         const owner = creep.room.controller.owner
         const reservation = creep.room.controller.reservation
 
-        // 已经有人控制或者预定，就干他
-        if ((owner != undefined && owner.username != creep.owner.username) || (reservation != undefined && reservation.username != creep.owner.username)) {
-            creep.attackController(creep.room.controller)
-            return false
-        }
+        // 占领成功后保留人类旗帜，停止重复占领和孵化。
+        if (!creep.room.controller.my) {
+            // 已经有人控制或者预定，就干他
+            if ((owner != undefined && owner.username != creep.owner.username) || (reservation != undefined && reservation.username != creep.owner.username)) {
+                creep.attackController(creep.room.controller)
+                return false
+            }
 
-        // 占领
-        creep.claimController(creep.room.controller)
+            if (creep.claimController(creep.room.controller) != OK) return false
+        }
 
         if (targetFlag.color != COLOR_PURPLE) return true
 
         // 设置新签名
-        if (creep.room.memory.roomSignText != undefined && creep.room.controller.sign?.text != creep.room.memory.roomSignText) {
+        if (creep.room.memory.roomSignText == undefined) {
             const existsSigns = Object.values(Game.rooms).map(item => item.memory.roomSignText)
             const unusedSigns = roomSignTextList.filter(item => !existsSigns.includes(item));
             const randomIndex = Math.floor(Math.random() * unusedSigns.length);

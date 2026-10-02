@@ -1,4 +1,5 @@
 import { reactionSource } from "settings/labs";
+import { renderLayoutPreview } from 'planning/layoutPreview'
 
 function showCreepCountInfo(room: Room): void {
     //  统计当前数量
@@ -154,4 +155,5 @@ export const visualController = function (): void {
             })
         }
     }
+    renderLayoutPreview()
 }

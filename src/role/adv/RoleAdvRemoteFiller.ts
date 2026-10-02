@@ -1,5 +1,7 @@
 import { roleAdvEnum, roleBaseEnum } from "settings/creep"
 import { getClosestLineTarget, getClosestTarget, getDistance } from "utils"
+import { rolePolicy } from "settings/rolePolicy"
+import { supportWithTowers } from 'role/support/towers'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -23,7 +25,7 @@ export default (data: CreepData): ICreepConfig => ({
 
         if (sourcePos == undefined) return true
 
-        if (creep.pickupDroppedResource(true, 50)) return true
+        if (creep.pickupDroppedResource(true, rolePolicy.remoteFiller.droppedResourceSearchRange)) return true
 
         // 如果不在目标房间，则去往目标房间
         if (creep.room.name != sourcePos.roomName) {
@@ -31,7 +33,7 @@ export default (data: CreepData): ICreepConfig => ({
             return true
         }
 
-        if (creep.room.my && creep.hits < creep.hitsMax && creep.room.towers.length > 0) creep.room.towers[0].heal(creep)
+        if (creep.room.my && creep.hits < creep.hitsMax) supportWithTowers(creep, { healFriendly: true })
 
         // 如果身上不止有能量，则搬运到Storage
         // if (creep.room.storage != undefined && Object.keys(creep.store).filter(key => key != RESOURCE_ENERGY).length > 0) {
@@ -52,7 +54,7 @@ export default (data: CreepData): ICreepConfig => ({
             withdrawResource = Object.keys(withdrawTarget['store'])[0] as ResourceConstant
         }
 
-        if (creep.room.my && creep.room.level == 8) {
+        if (creep.room.my && creep.room.level == rolePolicy.remoteFiller.preferStorageAtLevel) {
             withdrawTarget = creep.room.storage || creep.room.terminal
             withdrawResource = RESOURCE_ENERGY
         }
@@ -128,7 +130,7 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // powerbank还没好就过去等
-        if (creep.room.powerBanks.length > 0 && getDistance(creep.pos, creep.room.powerBanks[0].pos) > 5) {
+        if (creep.room.powerBanks.length > 0 && getDistance(creep.pos, creep.room.powerBanks[0].pos) > rolePolicy.remoteFiller.powerBankWaitingRange) {
             creep.moveTo(creep.room.powerBanks[0])
             return true
         }
@@ -138,7 +140,7 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
-        if (creep.room.sources.length > 0 && getDistance(creep.room.sources[0].pos, creep.pos) > 3) {
+        if (creep.room.sources.length > 0 && getDistance(creep.room.sources[0].pos, creep.pos) > rolePolicy.remoteFiller.sourceWaitingRange) {
             creep.moveTo(creep.room.sources[0])
         }
 
@@ -167,7 +169,7 @@ export default (data: CreepData): ICreepConfig => ({
             return true
         }
 
-        if (creep.room.my && creep.hits < creep.hitsMax && creep.room.towers.length > 0) creep.room.towers[0].heal(creep)
+        if (creep.room.my && creep.hits < creep.hitsMax) supportWithTowers(creep, { healFriendly: true })
 
         // 如果身上不止有能量，则搬运到Storage
         if (creep.room.storage != undefined && Object.keys(creep.store).filter(key => key != RESOURCE_ENERGY).length > 0) {

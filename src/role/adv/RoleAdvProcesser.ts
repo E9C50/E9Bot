@@ -1,6 +1,8 @@
+import { rolePolicy } from "settings/rolePolicy"
+
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
-        return room.level > 6 && room.labs.length > 0
+        return room.level >= rolePolicy.processer.minimumRoomLevel && room.labs.length > 0
     },
     prepare(creep) {
         return true
@@ -12,18 +14,20 @@ export default (data: CreepData): ICreepConfig => ({
         // if (creep.pickupDroppedResource(true, 40)) return true
 
         // 身上有东西就先放下
-        if (creep.room.storage != undefined && creep.store.getUsedCapacity() > 0) {
-            creep.transferToTarget(creep.room.storage, Object.keys(creep.store)[0] as ResourceConstant)
+        const deposit = creep.room.storage || creep.room.terminal
+        if (deposit != undefined && creep.store.getUsedCapacity() > 0) {
+            creep.transferToTarget(deposit, Object.keys(creep.store).find(resource => creep.store[resource] > 0) as ResourceConstant)
             return true
         }
 
         // 优先搬出来lab不需要的东西
-        if (creep.room.storage != undefined && fillJobs.labOut != undefined && fillJobs.labOut.length > 0) {
+        if (deposit != undefined && fillJobs.labOut != undefined && fillJobs.labOut.length > 0) {
             const labId = fillJobs.labOut.filter(labId => Game.getObjectById<StructureLab>(labId)?.mineralType != undefined)[0]
             const lab = Game.getObjectById(labId) as StructureLab
+            if (!lab?.mineralType) { fillJobs.labOut = []; return true }
             if (creep.takeFromTarget(lab, lab.mineralType as ResourceConstant)) {
                 creep.memory.working = true
-                fillJobs.labOut = []
+                fillJobs.labOut = fillJobs.labOut.filter(id => id !== labId)
             }
             return true
         }
@@ -31,14 +35,19 @@ export default (data: CreepData): ICreepConfig => ({
         // 去拿Lab需要的元素
         if (fillJobs.labInMineral != undefined && fillJobs.labInMineral.length > 0) {
             const resourceType = fillJobs.labInMineral[0].resourceType
-            if (creep.room.storage != undefined && creep.room.storage.store[resourceType] > 0) {
-                let takeAmount = 0
-                const targetLab = Game.getObjectById(fillJobs.labInMineral[0].labId) as StructureLab
+            const targetLab = Game.getObjectById<StructureLab>(fillJobs.labInMineral[0].labId)
+            const stock = [creep.room.storage, creep.room.terminal].find(item => item != undefined && item.store[resourceType] > 0)
+            if (stock != undefined && targetLab != undefined) {
+                let takeAmount: number | undefined
                 const singleLabConfig = creep.room.memory.roomLabConfig.singleLabConfig[fillJobs.labInMineral[0].labId]
                 if (singleLabConfig != undefined && singleLabConfig.boostMode) {
-                    takeAmount = creep.room.memory.boostNeed[resourceType] - targetLab.store[resourceType]
+                    takeAmount = Math.max(0, (creep.room.memory.boostNeed[resourceType] || 0) - (targetLab.store[resourceType] || 0))
+                    if (takeAmount === 0) {
+                        fillJobs.labInMineral.shift()
+                        return true
+                    }
                 }
-                if (creep.takeFromTarget(creep.room.storage, resourceType, takeAmount)) {
+                if (creep.takeFromTarget(stock, resourceType, takeAmount)) {
                     creep.memory.working = true
                 }
                 return true
@@ -59,7 +68,7 @@ export default (data: CreepData): ICreepConfig => ({
 
         // 去拿Power
         if (fillJobs.powerSpawnPower && creep.room.storage != undefined && creep.room.storage.store[RESOURCE_POWER] > 0) {
-            const takeAmount = Math.min(90, creep.room.storage.store[RESOURCE_POWER])
+            const takeAmount = Math.min(rolePolicy.processer.powerWithdrawBatch, creep.room.storage.store[RESOURCE_POWER])
             if (creep.takeFromTarget(creep.room.storage, RESOURCE_POWER, takeAmount)) {
                 creep.memory.working = true
                 // fillJobs.powerSpawnPower = false
@@ -78,7 +87,8 @@ export default (data: CreepData): ICreepConfig => ({
             for (let index in labInMineral) {
                 const targetLab = Game.getObjectById(labInMineral[index].labId) as StructureLab
                 if (targetLab == undefined || creep.store[labInMineral[index].resourceType] == 0) continue
-                if (targetLab.mineralType == undefined || targetLab.store.getFreeCapacity(targetLab.mineralType) > 0) {
+                if ((targetLab.mineralType == undefined || targetLab.mineralType === labInMineral[index].resourceType) &&
+                    (targetLab.store.getFreeCapacity(labInMineral[index].resourceType) || 0) > 0) {
                     if (creep.transferToTarget(targetLab, labInMineral[index].resourceType)) {
                         fillJobs.labInMineral = fillJobs.labInMineral.filter(job => job.labId != targetLab.id)
                         creep.memory.working = false
@@ -107,8 +117,10 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 如果携带了其他东西，就放回容器
-        if (creep.room.storage != undefined) {
-            if (creep.transferToTarget(creep.room.storage, creep.store[0])) {
+        const deposit = creep.room.storage || creep.room.terminal
+        if (deposit != undefined) {
+            const resource = Object.keys(creep.store).find(type => creep.store[type] > 0) as ResourceConstant | undefined
+            if (resource === undefined || creep.transferToTarget(deposit, resource)) {
                 creep.memory.working = false
             }
             return true

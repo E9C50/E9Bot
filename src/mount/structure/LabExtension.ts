@@ -1,4 +1,42 @@
+import { structurePolicy } from 'settings/structures'
 import { reactionSource } from "settings/labs"
+
+const energyQueueRuns = new WeakMap<Room, { tick: number; shard: string }>()
+interface ReactionSources {
+    tick: number
+    shard: string
+    firstId: string
+    secondId: string
+    first: StructureLab | null
+    second: StructureLab | null
+}
+const reactionSources = new WeakMap<Room, ReactionSources>()
+
+/** Reuse object resolution only; each output still reads the current reagent values. */
+function sourcePair(room: Room, firstId: string, secondId: string): ReactionSources {
+    const previous = reactionSources.get(room)
+    if (previous?.tick === Game.time && previous.shard === Game.shard.name &&
+        previous.firstId === firstId && previous.secondId === secondId) return previous
+    const pair = { tick: Game.time, shard: Game.shard.name, firstId, secondId,
+        first: Game.getObjectById<StructureLab>(firstId), second: Game.getObjectById<StructureLab>(secondId) }
+    reactionSources.set(room, pair)
+    return pair
+}
+
+/** Compact legacy duplicates once per room/job tick while keeping pending job order. */
+function deduplicateEnergyJobs(room: Room, jobs: string[]): void {
+    const previous = energyQueueRuns.get(room)
+    if (previous?.tick === Game.time && previous.shard === Game.shard.name) return
+    energyQueueRuns.set(room, { tick: Game.time, shard: Game.shard.name })
+    const seen = new Set<string>()
+    let write = 0
+    for (let read = 0; read < jobs.length; read++) {
+        const id = jobs[read]
+        if (seen.has(id)) continue
+        seen.add(id); jobs[write++] = id
+    }
+    jobs.length = write
+}
 
 export default class LabExtension extends StructureLab {
     private labReactionWork(): void {
@@ -14,8 +52,8 @@ export default class LabExtension extends StructureLab {
         if (this.id == sourceLab1 || this.id == sourceLab2) return
 
         // 获取两个lab
-        const lab1 = Game.getObjectById(sourceLab1) as StructureLab;
-        const lab2 = Game.getObjectById(sourceLab2) as StructureLab;
+        const { first: lab1, second: lab2 } = sourcePair(this.room, sourceLab1, sourceLab2)
+        if (lab1 == undefined || lab2 == undefined) return
 
         // 如果两个lab中有一个没有物质，就跳过
         if (lab1.mineralType == undefined || lab2.mineralType == undefined) return
@@ -46,14 +84,16 @@ export default class LabExtension extends StructureLab {
     }
 
     public init(): void {
-        if (Game.time % 10 != 0) return
+        if (Game.time % structurePolicy.lab.jobInterval != 0) return
         if (this.room.memory.roomFillJob.labOut == undefined) this.room.memory.roomFillJob.labOut = []
         if (this.room.memory.roomFillJob.labInEnergy == undefined) this.room.memory.roomFillJob.labInEnergy = []
         if (this.room.memory.roomFillJob.labInMineral == undefined) this.room.memory.roomFillJob.labInMineral = []
+        const energyJobs = this.room.memory.roomFillJob.labInEnergy
+        deduplicateEnergyJobs(this.room, energyJobs)
 
         // 能量不够就请求能量
-        if (this.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-            this.room.memory.roomFillJob.labInEnergy.push(this.id)
+        if (this.store.getFreeCapacity(RESOURCE_ENERGY) > 0 && !energyJobs.includes(this.id)) {
+            energyJobs.push(this.id)
         }
 
         const labConfig = this.room.memory.roomLabConfig
@@ -69,13 +109,13 @@ export default class LabExtension extends StructureLab {
 
             // 如果是boost模式，并且资源不足就补充
             if (this.store[thisLabConfig.resourceType] < this.room.memory.boostNeed[thisLabConfig.resourceType]) {
-                const amount = this.room.getResource(thisLabConfig.resourceType, true, false, false, true)
+                const amount = this.room.getResource(thisLabConfig.resourceType, true, true, false, true)
                 if (amount > 0 && !this.labInJobExists()) this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: thisLabConfig.resourceType })
             }
         } else {
             // 如果不是boost模式，并且不是sourceLab，那么超过1000，或者与当前配方不一致就取出
             if (this.id != labConfig.sourceLab1 && this.id != labConfig.sourceLab2 && this.mineralType != undefined && !labOutJob.includes(this.id)
-                && (labConfig.labReactionConfig == undefined || this.mineralType != labConfig.labReactionConfig || this.store[this.mineralType] > 1000)) {
+                && (labConfig.labReactionConfig == undefined || this.mineralType != labConfig.labReactionConfig || this.store[this.mineralType] > structurePolicy.lab.outputMineralThreshold)) {
                 this.room.memory.roomFillJob.labOut.push(this.id)
             }
 
@@ -91,14 +131,17 @@ export default class LabExtension extends StructureLab {
             // 如果有反应配置，则处理sourceLab
             if (labConfig.labReactionConfig != undefined) {
                 const reactionConfig = reactionSource[labConfig.labReactionConfig]
-                const amount1 = this.room.getResource(reactionConfig[0], true, false, true, true)
-                const amount2 = this.room.getResource(reactionConfig[1], true, false, true, true)
-
-                if (this.id == labConfig.sourceLab1 && amount1 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > 1000) && !this.labInJobExists()) {
-                    this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[0] })
+                if (this.id == labConfig.sourceLab1) {
+                    const amount1 = this.room.getResource(reactionConfig[0], true, false, true, true)
+                    if (amount1 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
+                        this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[0] })
+                    }
                 }
-                if (this.id == labConfig.sourceLab2 && amount2 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > 1000) && !this.labInJobExists()) {
-                    this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[1] })
+                if (this.id == labConfig.sourceLab2) {
+                    const amount2 = this.room.getResource(reactionConfig[1], true, false, true, true)
+                    if (amount2 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
+                        this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[1] })
+                    }
                 }
             }
         }

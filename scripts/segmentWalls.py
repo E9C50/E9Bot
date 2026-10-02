@@ -1,25 +1,20 @@
-import sys
-import json
-import screepsapi
-
-from matplotlib.colors import ListedColormap
-import matplotlib.pyplot as plt
-import numpy as np
 from collections import deque
 
-sys.setrecursionlimit(10000)
-
-with open("./screeps.json", "r") as file:
-    data = json.load(file)
-
-USER = data["main"]["email"]
-PASSWORD = data["main"]["password"]
-
-# 定义矩阵大小
-rows, cols = 50, 50
+if __package__:
+    from .client import create_api
+    from .policy import SEGMENT_POLICY, ROOM_SIZE
+else:
+    from client import create_api
+    from policy import SEGMENT_POLICY, ROOM_SIZE
 
 
-def find_closed_loop(matrix, rows, cols, start_row, start_col):
+rows, cols = ROOM_SIZE, ROOM_SIZE
+
+
+def find_closed_loop(
+    matrix, rows, cols, start_row, start_col,
+    center_range=SEGMENT_POLICY["center_exclusion_radius"],
+):
     # 将一维数组转换为二维矩阵
     grid = [list(matrix[i * cols : (i + 1) * cols]) for i in range(rows)]
 
@@ -40,7 +35,6 @@ def find_closed_loop(matrix, rows, cols, start_row, start_col):
     closed_loop_coords = [(start_row, start_col)]
 
     # 定义中心点周围三格的范围
-    center_range = 3
     min_row = max(0, start_row - center_range)
     max_row = min(rows - 1, start_row + center_range)
     min_col = max(0, start_col - center_range)
@@ -78,6 +72,8 @@ def find_closed_loop(matrix, rows, cols, start_row, start_col):
 
 
 def plot_closed_loop(matrix, rows, cols, closed_loop_coords):
+    import matplotlib.pyplot as plt
+
     # 将一维数组转换为二维矩阵
     grid = [list(matrix[i * cols : (i + 1) * cols]) for i in range(rows)]
 
@@ -115,16 +111,16 @@ def plot_closed_loop(matrix, rows, cols, closed_loop_coords):
     plt.show()
 
 
-def process_room(room_name):
-    room_objects = api.room_objects(room_name, "shard3")["objects"]
-    room_terrain = api.room_terrain(room_name, True, "shard3")["terrain"][0]["terrain"]
+def process_room(room_name, api_client, shard):
+    room_objects = api_client.room_objects(room_name, shard)["objects"]
+    room_terrain = api_client.room_terrain(room_name, True, shard)["terrain"][0]["terrain"]
     room_terrain_list = list(room_terrain)
 
     storage = None
 
     for structure in room_objects:
         if structure["type"] == "constructedWall" or structure["type"] == "rampart":
-            index = structure["y"] * 50 + structure["x"]
+            index = structure["y"] * ROOM_SIZE + structure["x"]
             room_terrain_list[index] = "6"
         if structure["type"] == "storage":
             storage = structure
@@ -135,16 +131,14 @@ def process_room(room_name):
     plot_closed_loop(room_terrain_list, rows, cols, closed_loop_coords)
 
     ### 注意！！！此处为写入内存的路径
-    # api.set_memory(f"rooms.{room_name}.defenderCostMatrix", room_terrain_list, "shard3")
+    # api_client.set_memory(f"rooms.{room_name}.defenderCostMatrix", room_terrain_list, shard)
+
+
+def main():
+    api_client = create_api(SEGMENT_POLICY["profile"])
+    for room_name in SEGMENT_POLICY["rooms"]:
+        process_room(room_name, api_client, SEGMENT_POLICY["shard"])
 
 
 if __name__ == "__main__":
-    api = screepsapi.API(USER, PASSWORD, host="10.1.1.50:21025", secure=False)
-    process_room("E5S1")
-
-# if __name__ == "__main__":
-# api = screepsapi.API(USER, PASSWORD, host="screeps.com", secure=True)
-# process_room("E35N1")
-# process_room("E35N3")
-# process_room("E34N3")
-# process_room("E36N2")
+    main()

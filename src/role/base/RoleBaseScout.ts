@@ -1,4 +1,6 @@
 import { defaultReserverSign } from "settings/room"
+import { rolePolicy } from "settings/rolePolicy"
+import { populationPolicy } from 'settings/population'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -28,7 +30,7 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 没有标点位置就检查没有视野的外矿，去探路
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < populationPolicy.maximumRemoteRooms; i++) {
             const flag = Game.flags[creep.memory.spawnRoom + '_OUT' + i]
             if (flag == undefined) continue
             if (Game.rooms[flag.pos.roomName] == undefined) {
@@ -38,7 +40,7 @@ export default (data: CreepData): ICreepConfig => ({
 
             const myCreeps = Game.rooms[flag.pos.roomName].find(FIND_MY_CREEPS)
             if (myCreeps.length == 0 || (myCreeps.length == 1 && myCreeps[0].id == creep.id)) {
-                creep.moveTo(flag.pos.x, flag.pos.y, { range: 3 })
+                creep.moveTo(flag.pos.x, flag.pos.y, { range: rolePolicy.scout.flagApproachRange })
                 return true
             }
         }

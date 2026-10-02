@@ -1,4 +1,5 @@
 import { getDistance } from "utils";
+import { rolePolicy } from 'settings/rolePolicy'
 
 export default class PowerCreepExtension extends PowerCreep {
     /**
@@ -16,7 +17,7 @@ export default class PowerCreepExtension extends PowerCreep {
 
         if (takeTarget == undefined) return
         if (getDistance(this.pos, takeTarget.pos) <= 1) {
-            const amount = this.store.getFreeCapacity() * 0.5
+            const amount = this.store.getFreeCapacity() * rolePolicy.powerCreep.takeOpsFreeCapacityRatio
             this.withdraw(takeTarget, RESOURCE_OPS, amount)
         } else {
             this.moveTo(takeTarget)
@@ -29,7 +30,7 @@ export default class PowerCreepExtension extends PowerCreep {
     public saveOps(): void {
         if (this.room == undefined || this.room.storage == undefined) return
         if (getDistance(this.pos, this.room.storage.pos) <= 1) {
-            const amount = this.store[RESOURCE_OPS] * 0.5
+            const amount = this.store[RESOURCE_OPS] * rolePolicy.powerCreep.saveOpsAmountRatio
             this.transfer(this.room.storage, RESOURCE_OPS, amount)
         } else {
             this.moveTo(this.room.storage)

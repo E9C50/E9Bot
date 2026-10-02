@@ -46,7 +46,8 @@ export const getBodyConfig = function (room: Room, bodyConfigs: BodySet[], force
     const energy = forceSpawn ? room.energyAvailable : room.energyCapacityAvailable;
 
     var bodyConfig: BodyPartConstant[] = [];
-    for (let i = 7; i >= 0; i--) {
+    for (let i = bodyConfigs.length - 1; i >= 0; i--) {
+        if (!bodyConfigs[i]) continue
         var needEnergy = 0;
         for (let config in bodyConfigs[i]) {
             needEnergy += BODYPART_COST[config] * bodyConfigs[i][config];

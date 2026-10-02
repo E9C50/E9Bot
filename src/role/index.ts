@@ -19,9 +19,12 @@ import RoleWarDefenderRanged from "./war/RoleWarDefenderRanged"
 import RoleWarDismantle from "./war/RoleWarDismantle"
 import RoleWarHealer from "./war/RoleWarHealer"
 import RoleWarIntegrate from "./war/RoleWarIntegrate"
+import { createShardRole } from 'shard/workers'
+import { createShardScoutRole } from 'shard/scouting'
+import { withDevelopmentRemoteRole } from 'creep/developmentRemotes'
 
 const notImplemented = function (data: CreepData): ICreepConfig {
-    throw new Error("Function not implemented.")
+    throw new Error("Role rAttacker is not implemented.")
 }
 
 const creepWork: CreepWork = {
@@ -40,6 +43,10 @@ const creepWork: CreepWork = {
     rHarvester: RoleAdvRemoteHarvester,
     rFiller: RoleAdvRemoteFiller,
     rBuilder: RoleAdvRemoteBuilder,
+    sClaimer: createShardRole('claimer'),
+    sBuilder: createShardRole('builder'),
+    sHauler: createShardRole('hauler'),
+    sScout: createShardScoutRole,
 
     attacker: RoleWarAttacker,
     healer: RoleWarHealer,
@@ -52,3 +59,13 @@ const creepWork: CreepWork = {
 }
 
 export default creepWork
+
+/** 显式排除未实现角色，同时防止继承属性被误当作角色。 */
+export function isRoleSupported(role: string | undefined): role is CreepRoleConstant {
+    return role !== undefined && Object.prototype.hasOwnProperty.call(creepWork, role)
+        && creepWork[role as CreepRoleConstant] !== notImplemented
+}
+
+export function createRoleBehavior(role: string | undefined, data: CreepData): ICreepConfig | undefined {
+    return isRoleSupported(role) ? withDevelopmentRemoteRole(data, creepWork[role](data)) : undefined
+}

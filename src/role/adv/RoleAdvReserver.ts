@@ -1,5 +1,6 @@
 import { defaultReserverSign } from "settings/room"
 import { getDistance } from "utils"
+import { rolePolicy } from "settings/rolePolicy"
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -41,8 +42,8 @@ export default (data: CreepData): ICreepConfig => ({
             creep.attackController(creep.room.controller)
         }
 
-        // 预定时间小于4800就干活
-        if (reservation == undefined || reservation.ticksToEnd < 4800) {
+        // 预定时间低于续订阈值就干活
+        if (reservation == undefined || reservation.ticksToEnd < rolePolicy.reserver.renewBelowTicks) {
             creep.reserveController(creep.room.controller)
         }
 

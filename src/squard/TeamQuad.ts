@@ -1,8 +1,2 @@
-export default (data: TeamConfig): ITeamConfig => ({
-    prepare: function (): boolean {
-        return true
-    },
-    doWork: function (): boolean {
-        return true
-    }
-})
+/** Four-member tactics are implemented in combat/tactics, shared by every mission. */
+export { default } from './TeamDuo'

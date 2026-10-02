@@ -13,6 +13,8 @@ interface ITeamConfig {
 }
 
 interface TeamConfig {
+    taskId?: string
+    targetRoom?: string
     teamFlag: string
     teamType: TeamTypeConstant
     creepNameList: string[]

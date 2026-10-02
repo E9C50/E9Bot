@@ -1,6 +1,27 @@
-import { boostBodyPart, boostConfig, roleBoostConfig } from "settings/boost";
+import { structurePolicy } from 'settings/structures'
+import { runCreepBoosts } from 'creep/boosting'
 import { findPathAvoidRooms } from "settings/settings";
 import { getDistance, getOppositeDirection, serializeMovePath } from "utils";
+
+function collectFromRemains(creep: Creep, targets: readonly (Tombstone | Ruin)[], range: number, allResources: boolean): boolean {
+    for (const target of targets) {
+        const distance = getDistance(target.pos, creep.pos)
+        if (distance > range) continue
+        if (!allResources) {
+            if (!(target.store[RESOURCE_ENERGY] > 0)) continue
+            if (distance > 1) creep.moveTo(target)
+            else creep.withdraw(target, RESOURCE_ENERGY)
+            return true
+        }
+        for (const resource in target.store) {
+            if (!(target.store[resource as ResourceConstant] > 0)) continue
+            if (distance > 1) creep.moveTo(target)
+            else creep.withdraw(target, resource as ResourceConstant)
+            return true
+        }
+    }
+    return false
+}
 
 export default class CreepExtension extends Creep {
 
@@ -50,49 +71,22 @@ export default class CreepExtension extends Creep {
         if (Memory.warMode[this.room.name]) range = 1
         // 没有携带空间的跳过
         if (this.store.getFreeCapacity() == 0) return false
-        const spawnRoomStorage = Game.rooms[this.memory.spawnRoom].storage
+        const allResources = allSource && Game.rooms[this.memory.spawnRoom]?.storage != undefined
 
         // 优先捡起附近掉落的资源
-        const droppedEnergy = this.room.droppedResource.filter(
-            resource => resource.amount > 100 && getDistance(resource.pos, this.pos) <= range
-            // && resource.resourceType != RESOURCE_ENERGY
-        );
-        if (droppedEnergy.length > 0) {
-            const resource = droppedEnergy[0] as Resource
-            if ((allSource && spawnRoomStorage != undefined) || resource.resourceType == RESOURCE_ENERGY) {
-                if (getDistance(resource.pos, this.pos) > 1) {
-                    this.moveTo(resource);
-                } else {
-                    this.pickup(resource)
-                }
-                return true;
-            }
+        for (const resource of this.room.droppedResource) {
+            if (resource.amount <= structurePolicy.creep.minimumDroppedResource ||
+                (!allResources && resource.resourceType != RESOURCE_ENERGY)) continue
+            const distance = getDistance(resource.pos, this.pos)
+            if (distance > range) continue
+            if (distance > 1) this.moveTo(resource)
+            else this.pickup(resource)
+            return true
         }
 
-        // 查找附近的墓碑和废墟
-        const tombstones: Tombstone[] = this.room.tombstones.filter(tombstone =>
-            getDistance(tombstone.pos, this.pos) <= range && tombstone.store.getUsedCapacity() > 0
-        );
-        const ruins: Ruin[] = this.room.ruins.filter(ruin =>
-            getDistance(ruin.pos, this.pos) <= range && ruin.store.getUsedCapacity() > 0
-        );
-        const destroyed: (Tombstone | Ruin)[] = [...ruins, ...tombstones];
-
-        // 捡取资源
-        if (destroyed.length > 0) {
-            for (let resource in destroyed[0].store) {
-                if (resource != RESOURCE_ENERGY && (!allSource || spawnRoomStorage == undefined)) {
-                    continue;
-                }
-                if (getDistance(destroyed[0].pos, this.pos) > 1) {
-                    this.moveTo(destroyed[0]);
-                } else {
-                    this.withdraw(destroyed[0], resource as ResourceConstant)
-                }
-            }
-            return true;
-        }
-        return false;
+        // 保留废墟优先于墓碑；找到可取资源即停止，不筛选/合并整份列表。
+        return collectFromRemains(this, this.room.ruins, range, allResources) ||
+            collectFromRemains(this, this.room.tombstones, range, allResources)
     }
 
     /**
@@ -259,37 +253,6 @@ export default class CreepExtension extends Creep {
      * @param boostList
      */
     public goBoost(): boolean {
-        if (this.spawning) return false
-        if (this.room.labs.length == 0) return true
-
-        let boostList = roleBoostConfig[this.memory.role]
-        if (boostList == undefined || boostList.length == 0) return true
-        boostList = boostList.filter(boostType => this.body.filter(body => body.type == boostBodyPart[boostType] && !body.boost).length > 0)
-
-        if (boostList.length == 0) {
-            this.memory.ready = true
-            return true
-        }
-
-        const singleLabConfig = this.room.memory.roomLabConfig.singleLabConfig
-        for (let labId in singleLabConfig) {
-            if (boostList.includes(singleLabConfig[labId].boostType)) {
-                const boostLab: StructureLab = Game.getObjectById(labId) as StructureLab
-                if (boostLab.mineralType == undefined || boostLab.store[boostLab.mineralType] < 100) {
-                    if (!this.pos.isNearTo(this.room.spawns[0])) {
-                        this.moveTo(this.room.spawns[0])
-                    }
-                    return false
-                }
-
-                if (getDistance(this.pos, boostLab.pos) > 1) {
-                    this.moveTo(boostLab)
-                    return false
-                } else {
-                    boostLab.boostCreep(this)
-                }
-            }
-        }
-        return false
+        return runCreepBoosts(this)
     }
 }

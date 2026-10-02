@@ -59,6 +59,8 @@ interface RoomPosition {
 }
 
 interface RoomMemory {
+    /** Persisted console settings, independent of regularly refreshed population demands. */
+    bodyProfiles?: Partial<Record<CreepRoleConstant, CreepBodyProfile>>
     creepConfig: { [creepName: string]: CreepMemory }
     teamConfig: { [teamId: string]: TeamConfig }
 
@@ -88,9 +90,14 @@ interface RoomMemory {
     roomLabConfig: ILabConfig
 
     autoLaylout?: boolean
+    roomBlueprint?: import('../planning/types').RoomBlueprint
+    roomBlueprintState?: import('../planning/types').RoomBlueprintState
     needUpdateCache?: boolean
     centerLinkSentMode?: boolean
     enableTowerRepairWall?: boolean
+    /** false 时恢复该房原有运营策略；RCL8 自动退出发展策略。 */
+    fastUpgrade?: boolean
+    developmentRemotes?: import('../creep/developmentRemotes').DevelopmentRemoteState
 }
 
 interface IRoomPositionList {

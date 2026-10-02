@@ -1,4 +1,5 @@
 import { getDistance } from "utils"
+import { rolePolicy } from "settings/rolePolicy"
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -6,7 +7,7 @@ export default (data: CreepData): ICreepConfig => ({
     },
     prepare(creep) {
         // 如果不在目标位置则移动
-        if (!creep.memory.ready || Game.time % 10 == 0) {
+        if (!creep.memory.ready || Game.time % rolePolicy.manager.positionCheckInterval == 0) {
             creep.memory.ready = false
             var managerPos: RoomPosition = creep.room.memory.roomPosition.managerPos as RoomPosition
             if (managerPos != undefined) {

@@ -1,4 +1,5 @@
 import { getDistance } from "utils";
+import { rolePolicy } from "settings/rolePolicy";
 
 export const powerSpawnController = function (): void {
     Object.values(Game.powerCreeps).forEach(pc => {
@@ -10,7 +11,7 @@ export const powerSpawnController = function (): void {
 
         // 如果不存在，且插旗房间有powerSpawn，就生成
         if (pcFlag != undefined && pc.room == undefined) {
-            if (pcFlagTargetRoom.powerSpawn == undefined) return
+            if (pcFlagTargetRoom?.powerSpawn == undefined) return
             pc.spawn(pcFlagTargetRoom.powerSpawn)
         }
 
@@ -23,20 +24,21 @@ export const powerSpawnController = function (): void {
 
         // 不在指定房间，就过去
         if (pc.room.name != pcFlag.pos.roomName) {
-            pc.moveTo(pcFlag, { swampCost: 1, plainCost: 1, visualizePathStyle: {} })
+            pc.moveTo(pcFlag, { ...rolePolicy.powerCreep.travel, visualizePathStyle: {} })
             return
         }
 
         // 快死了就续命
-        pc.memory.needRenew = pc.memory.needRenew || (pc.ticksToLive != undefined && pc.ticksToLive <= 500)
+        pc.memory.needRenew = pc.memory.needRenew || (pc.ticksToLive != undefined && pc.ticksToLive <= rolePolicy.powerCreep.renewAtOrBelowTicks)
         if (pc.memory.needRenew) {
             const powerTarget = pc.room.powerSpawn || pc.room.powerBanks[0]
+            if (powerTarget == undefined) return
             if (getDistance(pc.pos, powerTarget.pos) > 1) {
                 pc.moveTo(powerTarget)
             } else {
                 pc.renew(powerTarget)
             }
-            if (pc.ticksToLive != undefined && pc.ticksToLive >= 4900) {
+            if (pc.ticksToLive != undefined && pc.ticksToLive >= rolePolicy.powerCreep.stopRenewAtOrAboveTicks) {
                 pc.memory.needRenew = false
             }
             return
@@ -45,7 +47,7 @@ export const powerSpawnController = function (): void {
         // Storage扩容技能
         if (pc.isPowerAvailable(PWR_OPERATE_STORAGE)) {
             if (pc.room.storage != undefined) {
-                if (pc.room.storage.effects == undefined || pc.room.storage.effects.length == 0 || pc.room.storage.effects[0].ticksRemaining < 10) {
+                if (pc.room.storage.effects == undefined || pc.room.storage.effects.length == 0 || pc.room.storage.effects[0].ticksRemaining < rolePolicy.powerCreep.effectRefreshBelowTicks) {
                     if (getDistance(pc.pos, pc.room.storage.pos) >= 3) {
                         pc.moveTo(pc.room.storage)
                         return
@@ -57,13 +59,13 @@ export const powerSpawnController = function (): void {
         }
 
         // OPS没了就去拿
-        if (pc.store[RESOURCE_OPS] <= 200 && pc.isRoomHaveOps()) {
+        if (pc.store[RESOURCE_OPS] <= rolePolicy.powerCreep.takeOpsAtOrBelowAmount && pc.isRoomHaveOps()) {
             pc.takeOps()
             return
         }
 
         // OPS满了就放下一部分
-        if (pc.store.getFreeCapacity() < 10 && pc.room.my) {
+        if (pc.store.getFreeCapacity() < rolePolicy.powerCreep.saveOpsBelowFreeCapacity && pc.room.my) {
             pc.saveOps()
             return
         }
@@ -105,7 +107,7 @@ export const powerSpawnController = function (): void {
         // Terminal技能
         if (pc.isPowerAvailable(PWR_OPERATE_TERMINAL) && Object.keys(pc.room.memory.terminalSendJob).length > 0) {
             if (pc.room.terminal != undefined) {
-                if (pc.room.terminal.effects == undefined || pc.room.terminal.effects.length == 0 || pc.room.terminal.effects[0].ticksRemaining < 10) {
+                if (pc.room.terminal.effects == undefined || pc.room.terminal.effects.length == 0 || pc.room.terminal.effects[0].ticksRemaining < rolePolicy.powerCreep.effectRefreshBelowTicks) {
                     if (getDistance(pc.pos, pc.room.terminal.pos) >= 3) {
                         pc.moveTo(pc.room.terminal)
                         return
@@ -133,7 +135,7 @@ export const powerSpawnController = function (): void {
 
         // Extension填充技能
         if (opSpawnFlag && opSpawnFlag.color == COLOR_GREEN && pc.isPowerAvailable(PWR_OPERATE_EXTENSION)) {
-            if (pc.room.energyAvailable < (pc.room.energyCapacityAvailable * 0.6)) {
+            if (pc.room.energyAvailable < (pc.room.energyCapacityAvailable * rolePolicy.powerCreep.refillExtensionsBelowEnergyRatio)) {
                 if (pc.room.storage != undefined && pc.room.storage.store[RESOURCE_ENERGY] > 0) {
                     if (getDistance(pc.pos, pc.room.storage.pos) >= 3) {
                         pc.moveTo(pc.room.storage)

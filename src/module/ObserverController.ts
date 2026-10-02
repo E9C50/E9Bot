@@ -1,3 +1,3 @@
-export const obScannerController = function (): void {
+import { runPortalDiscovery } from 'shard/portalIntel'
 
-}
+export const obScannerController = runPortalDiscovery

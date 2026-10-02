@@ -42,7 +42,8 @@ export const boostConfig: BoostResourceConfig = {
 }
 
 
-// 角色对应的需要boost的配置
+// 仅无显式 boostPlan 的旧单位采用这些 T3 默认值。
+// 新孵化单位始终携带 tier0 空计划或精确等级/部件数计划；同一身体类型只选一种强化动作。
 export const roleBoostConfig: { [role in CreepRoleConstant]?: BoostTypeConstant[] } = {
     // upgrader: [boostTypeEnum.BoostTypeUpgrade],
     // builder: [boostTypeEnum.BoostTypeBuild],

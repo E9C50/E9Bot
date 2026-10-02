@@ -1,0 +1,39 @@
+/** 需求发布与孵化策略。身体模板、角色优先级仍在 creep.ts。 */
+export const populationPolicy = {
+    refreshInterval: 5,
+    maximumJobFlags: 20,
+    maximumRemoteRooms: 10,
+    bootstrap: {
+        enabled: true,
+        localBuilderCount: 1,
+        remoteBuilderCount: 1,
+        maxHomeDistance: 5,
+        sourceHarvestRange: 1,
+        prioritizeFirstSpawn: true,
+    },
+    base: {
+        maximumHarvestersPerSource: 2,
+        singleHarvesterAfterLevel: 3,
+        downgradeWarningTicks: 150000,
+        energyPerUpgrader: 10000,
+        maximumUpgraders: 4,
+        energyPerRepairer: 100000,
+        singleRepairerBelowLevel: 6,
+        maximumRepairers: 1,
+        sourceContainerRange: 3,
+        extraFillerEnergy: 1000,
+        extraBuilderEnergy: 1500,
+        containerEnergyPerUpgrader: 1000,
+    },
+    remote: {
+        reserveAfterLevel: 2,
+        roadRepairRatio: 0.5,
+        builderStorageEnergy: 100000,
+    },
+    defense: {
+        enemyGroupRange: 2,
+        minimumDamage: 1000,
+        duoDamage: 7000,
+        flagUpdateInterval: 5,
+    },
+}

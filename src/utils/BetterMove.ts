@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { navigationPolicy } from 'settings/navigation'
+import { getHarvestPower } from 'runtime/harvestPower'
 /*
 creep对穿+跨房间寻路+寻路缓存
 跑的比香港记者还快从你做起
@@ -75,23 +77,17 @@ require('超级移动优化').deletePathInRoom(roomName);
 */
 
 import { findPathAvoidRooms, observersFindPathIdList } from "settings/settings";
+import { scheduleObservation } from 'runtime/observerScheduling'
 
 /***************************************
  *  模块参数
  */
 // 初始化参数
-let config = {
-    地图房号最大数字超过100: false,
-    changeMove: true,   // 【未启用】为creep.move增加对穿能力
-    changeMoveTo: true, // 全面优化creep.moveTo，跨房移动也可以一个moveTo解决问题
-    changeFindClostestByPath: true,     // 【未启用】轻度修改findClosestByPath，使得默认按照ignoreCreeps寻找最短
-    autoVisual: true,  // 【未启用】
-    enableFlee: false   // 【未启用】是否添加flee()函数，注意这会在Creep.prototype上添加官方未有键值，flee()用法见最底下module.exports处
-}
+let config = { ...navigationPolicy.initialization }
 // 运行时参数
-let pathClearDelay = 3000;  // 清理相应时间内都未被再次使用的路径，同时清理死亡creep的缓存，设为undefined表示不清除缓存
-let hostileCostMatrixClearDelay = 500; // 自动清理相应时间前创建的其他玩家房间的costMatrix
-let coreLayoutRange = 3; // 核心布局半径，在离storage这个范围内频繁检查对穿（减少堵路的等待
+let pathClearDelay = navigationPolicy.pathClearDelay;  // 清理相应时间内都未被再次使用的路径，同时清理死亡creep的缓存，设为undefined表示不清除缓存
+let hostileCostMatrixClearDelay = navigationPolicy.hostileCostMatrixClearDelay; // 自动清理相应时间前创建的其他玩家房间的costMatrix
+let coreLayoutRange = navigationPolicy.coreLayoutRange; // 核心布局半径，在离storage这个范围内频繁检查对穿（减少堵路的等待
 
 let avoidRooms = findPathAvoidRooms
 let observers = observersFindPathIdList
@@ -375,7 +371,7 @@ function doObTask() {
             let ob = Game.getObjectById(obData.id);
             if (ob) {
                 //console.log('ob ' + roomName);
-                ob.observeRoom(roomName);
+                if (scheduleObservation(ob, roomName, 'path') !== OK) break;
                 if (!(Game.time + 1 in obTimer)) {
                     obTimer[Game.time + 1] = [];
                 }
@@ -493,7 +489,7 @@ function generateCostMatrix(room, pos) {
                 if (status.status == 'closed') {
                     avoidRooms[neighbors[direction]] = 1;
                 } else if (status.status != 'normal' && status.timestamp != null) {
-                    let estimateTickToChange = (status.timestamp - new Date().getTime()) / 10000; // 10s per tick
+                    let estimateTickToChange = (status.timestamp - new Date().getTime()) / navigationPolicy.estimatedTickMilliseconds; // 10s per tick
                     clearDelay = clearDelay > estimateTickToChange ? Math.ceil(estimateTickToChange) : clearDelay;
                 }
             }
@@ -763,7 +759,7 @@ function findTemporalPath(creep, toPos, ops) {
             return false;
         }
         PathFinderOpts.maxRooms = PathFinderOpts.maxRooms || route.length + 1;
-        PathFinderOpts.maxOps = ops.maxOps || 4000 + route.length ** 2 * 100;  // 跨10room则有4000+10*10*100=14000
+        PathFinderOpts.maxOps = ops.maxOps || navigationPolicy.baseMaxOps + route.length ** 2 * navigationPolicy.routeMaxOpsFactor;  // 跨10room则有4000+10*10*100=14000
         route = route.reduce(routeReduce, { [creep.pos.roomName]: 1 });     // 因为 key in Object 比 Array.includes(value) 快，但不知道值不值得reduce
         PathFinderOpts.roomCallback = bypassRoomCallbackWithRoute;
     } else {
@@ -858,7 +854,7 @@ function findPath(fromPos, toPos, ops) {
         if (route == ERR_NO_PATH) {
             return { path: [] };
         }
-        PathFinderOpts.maxOps = ops.maxOps || 4000 + route.length ** 2 * 100;  // 跨10room则有2000+10*10*50=7000
+        PathFinderOpts.maxOps = ops.maxOps || navigationPolicy.baseMaxOps + route.length ** 2 * navigationPolicy.routeMaxOpsFactor;  // 跨10room则有2000+10*10*50=7000
         PathFinderOpts.maxRooms = PathFinderOpts.maxRooms || route.length + 1;
         route = route.reduce(routeReduce, { [fromPos.roomName]: 1 });   // 因为 key in Object 比 Array.includes(value) 快，但不知道值不值得reduce
         //console.log(fromPos + ' using route ' + JSON.stringify(route));
@@ -1251,18 +1247,26 @@ function betterMoveTo(firstArg, secondArg, opts) {
     if (creepCache) {  // 有缓存
         path = creepCache.path;
         idx = creepCache.idx;
-        if (path && idx in path.posArray && path.ignoreStructures == !!ops.ignoreDestructibleStructures) {  // 缓存路条件相同
+        // A blocked final step in this room still needs bypass handling. After automatic edge
+        // transfer, an exhausted path ending in the old room must instead be searched again.
+        if (path && (idx + 1 in path.posArray || (idx in path.posArray && this.pos.roomName == path.posArray[idx].roomName)) &&
+            path.ignoreStructures == !!ops.ignoreDestructibleStructures) {
             posArray = path.posArray;
             if (isEqual(toPos, creepCache.dst) || inRange(posArray[posArray.length - 1], toPos, ops.range)) {   // 正向走，目的地没变
                 if (isEqual(this.pos, posArray[idx])) {    // 正常
-                    if ('storage' in this.room && this.room.storage && inRange(this.room.storage.pos, this.pos, coreLayoutRange) && ops.ignoreCreeps) {
-                        testNearStorageCheck++;
-                        if (trySwap(this, posArray[idx + 1], false, true) == OK) {
-                            testNearStorageSwap++;
+                    // An incomplete path may end before the destination. Only advance to an existing
+                    // step, and validate a newly visible room before using its cached direction.
+                    if (path.directionArray[idx + 1] || (checkRoom(this.room, path, idx) && path.directionArray[idx + 1])) {
+                        if ('storage' in this.room && this.room.storage && inRange(this.room.storage.pos, this.pos, coreLayoutRange) && ops.ignoreCreeps) {
+                            testNearStorageCheck++;
+                            if (trySwap(this, posArray[idx + 1], false, true) == OK) {
+                                testNearStorageSwap++;
+                            }
                         }
+                        //this.say('正常');
+                        return moveOneStep(this, ops.visualizePathStyle, toPos);
                     }
-                    //this.say('正常');
-                    return moveOneStep(this, ops.visualizePathStyle, toPos);
+                    deletePath(path);
                 } else if (idx + 1 in posArray && idx + 2 in posArray && isEqual(this.pos, posArray[idx + 1])) {  // 跨房了
                     creepCache.idx++;
                     if (!path.directionArray[idx + 2]) {  // 第一次见到该房则检查房间
@@ -1664,14 +1668,16 @@ if (!Creep.prototype.$harvest) {
 
         // 统计采集信息
         const source = e[0];
-        const roomName = this.memory.room || source.room.name;
-        const workLength = this.body.filter(body => body.type == WORK).length;
-        if (source && source.energyCapacity && result == OK && Memory.stats.rooms[roomName]) {
-            const lastNum = Memory.stats.rooms[roomName].energyHarvested;
-            if (!lastNum) {
-                Memory.stats.rooms[roomName].energyHarvested = 0;
+        if (result == OK && source?.energyCapacity > 0 && typeof source.energy === 'number') {
+            const roomName = this.memory.room || source.pos.roomName;
+            const stats = Memory.stats?.rooms?.[roomName];
+            if (stats != undefined) {
+                const capacity = this.store.getCapacity(RESOURCE_ENERGY);
+                const available = capacity === 0 ? Infinity : Math.max(0, this.store.getFreeCapacity(RESOURCE_ENERGY));
+                const harvested = Math.min(getHarvestPower(this), source.energy, available);
+                const previous = stats.energyHarvested;
+                stats.energyHarvested = (Number.isFinite(previous) ? previous : 0) + harvested;
             }
-            Memory.stats.rooms[roomName].energyHarvested = lastNum + workLength * 2;
         }
         return result
     };

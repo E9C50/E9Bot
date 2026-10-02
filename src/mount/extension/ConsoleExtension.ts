@@ -1,9 +1,41 @@
+import { structurePolicy } from 'settings/structures'
 import { reactionSource } from "settings/labs";
+import { createShardTask, listShardPortals, listShardTasks, setShardTaskState } from 'shard/controller'
+import type { ShardTaskInput } from 'shard/missions'
+import { getCpuProfile, getCpuProfileWindow, resetCpuProfile } from 'runtime/profiling'
+import { runtimePolicy } from 'settings/runtime'
+import { configureBody, previewBodies } from 'creep/bodyConsole'
+import { createCombatTask, listCombatTasks, cancelCombatTask } from 'combat/missions'
+import type { CombatTaskOptions } from 'combat/types'
 
 export default class ConsoleExtension {
+    public combatTask(home: string, target: string, options?: CombatTaskOptions): string { return createCombatTask(home, target, options) }
+    public combatTasks(id?: string): string { return listCombatTasks(id) }
+    public combatTaskCancel(id: string): string { return cancelCombatTask(id) }
     public help(): string {
-        return 'Hello World'
+        return 'combatTask("起点房间", "目标房间", {mode:"attack"或"hold"}) 发布战斗任务；combatTasks(id?) 查看；combatTaskCancel(id) 撤收；' + 'bodyPreview("房间", "角色") 预览未强化/T1/T2/T3身体；bodyConfig("房间", "角色", 配置或null) 设置/恢复默认；shardTask("起点房间", "目标shard/终点房间", 可选配置) 自动观察 Portal 并规划路线；shardTasks() 状态；shardPortals() 情报；shardTaskPause(id)/shardTaskResume(id)/shardTaskCancel(id)；CPU 默认统计最近 100 tick 并定期输出：cpuProfile() 查看，cpuProfile(false) 关闭，cpuProfile(true) 开启；cpuReset() 清空。详见 README。'
     }
+
+    public bodyConfig(room: string, role: string, profile?: CreepBodyProfile | null): string { return configureBody(room, role, profile) }
+    public bodyPreview(room: string, role: string): string { return previewBodies(room, role) }
+
+    public shardTask(configOrSource: ShardTaskInput | string, target?: string, options?: Partial<ShardTaskInput>): string { return createShardTask(configOrSource, target, options) }
+    public shardTasks(): string { return listShardTasks() }
+    public shardPortals(): string { return listShardPortals() }
+    public shardTaskPause(id: string): string { return setShardTaskState(id, 'paused') }
+    public shardTaskResume(id: string): string { return setShardTaskState(id, 'active') }
+    public shardTaskCancel(id: string): string { return setShardTaskState(id, 'cancelled') }
+
+    public cpuProfile(enabled?: boolean, limit?: number): string {
+        if (enabled != undefined) runtimePolicy.profiling.enabled = enabled
+        return JSON.stringify({
+            enabled: runtimePolicy.profiling.enabled,
+            window: getCpuProfileWindow(),
+            logInterval: runtimePolicy.profiling.logInterval,
+            stages: getCpuProfile(limit),
+        }, null, 2)
+    }
+    public cpuReset(): string { resetCpuProfile(); return 'CPU 统计已清空' }
 
     /**
      * 显示房间信息
@@ -45,7 +77,7 @@ export default class ConsoleExtension {
             const nukerCooldown = room.nuker?.cooldown || 0;
             const nukerLeftTime = ((room.nuker?.cooldown || 0) * 2.5 / 60 / 60).toFixed(2);
             let nukerReady = room.nuker?.cooldown == 0 ? '✅' : '❌';
-            if (room.nuker != undefined && (room.nuker.store[RESOURCE_ENERGY] < 300000 || room.nuker.store[RESOURCE_GHODIUM] < 5000)) nukerReady = '🔁';
+            if (room.nuker != undefined && (room.nuker.store.getFreeCapacity(RESOURCE_ENERGY) > 0 || room.nuker.store.getFreeCapacity(RESOURCE_GHODIUM) > 0)) nukerReady = '🔁';
 
             const controllerCountdown = room.controller?.ticksToDowngrade || 0;
 
@@ -89,21 +121,21 @@ export default class ConsoleExtension {
                 let color = 'yellow'; // 默认黄色
                 const resourceAmount = room.getResource(resourceType, true, true, true, true) || 0;
                 if (room.name == Memory.centerStorage) {
-                    if (resourceAmount < 10000) {
+                    if (resourceAmount < structurePolicy.dashboard.minerals.low) {
                         color = 'red';
-                    } else if (resourceAmount >= 100000) {
+                    } else if (resourceAmount >= structurePolicy.dashboard.minerals.high) {
                         color = 'green';
                     }
                 } else if (resourceType == RESOURCE_OPS || resourceType == RESOURCE_POWER) {
-                    if (resourceAmount < 1000) {
+                    if (resourceAmount < structurePolicy.dashboard.ops.low) {
                         color = 'red';
-                    } else if (resourceAmount >= 2000) {
+                    } else if (resourceAmount >= structurePolicy.dashboard.ops.high) {
                         color = 'green';
                     }
                 } else {
-                    if (resourceAmount < 5000) {
+                    if (resourceAmount < structurePolicy.dashboard.compounds.low) {
                         color = 'red'; // 小于3000显示红色
-                    } else if (resourceAmount >= 20000) {
+                    } else if (resourceAmount >= structurePolicy.dashboard.compounds.high) {
                         color = 'green'; // 大于5000显示绿色
                     }
                 }

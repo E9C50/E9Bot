@@ -1,11 +1,9 @@
-import json
-import screepsapi
-
-with open("./screeps.json", "r") as file:
-    data = json.load(file)
-
-USER = data["main"]["email"]
-PASSWORD = data["main"]["password"]
+if __package__:
+    from .client import create_api
+    from .policy import AUTO_BUY_POLICY
+else:
+    from client import create_api
+    from policy import AUTO_BUY_POLICY
 
 
 def new_order(room_name, resource_type, order_price):
@@ -18,11 +16,13 @@ def new_order(room_name, resource_type, order_price):
         + resource_type
         + "', price: "
         + str(order_price)
-        + ", totalAmount: 50000, roomName: '"
+        + ", totalAmount: "
+        + str(AUTO_BUY_POLICY["order_amount"])
+        + ", roomName: '"
         + room_name
         + "' });"
     )
-    api.console(command, "shard3")
+    api.console(command, AUTO_BUY_POLICY["shard"])
 
 
 def modify_price(room_name, order_id, order_price, old_price):
@@ -32,7 +32,7 @@ def modify_price(room_name, order_id, order_price, old_price):
     command = (
         "Game.market.changeOrderPrice('" + order_id + "', " + str(order_price) + ");"
     )
-    api.console(command, "shard3")
+    api.console(command, AUTO_BUY_POLICY["shard"])
 
 
 def order_resource(room_name, resource_type):
@@ -59,7 +59,7 @@ def cancel_order():
     for order in my_orders:
         if order["remainingAmount"] == 0:
             command = f"Game.market.cancelOrder('{order["_id"]}')"
-            api.console(command, "shard3")
+            api.console(command, AUTO_BUY_POLICY["shard"])
             print(f"删除空订单 {order['roomName']}")
 
 
@@ -73,7 +73,7 @@ def get_resource_by_type(room_name, resource_type, room_objects):
 
 
 # def compute_buy_price(resource_type):
-#     all_orders = api.market_order_by_type(resource_type, "shard3")["list"]
+#     all_orders = api.market_order_by_type(resource_type, AUTO_BUY_POLICY["shard"])["list"]
 #     all_buy_orders = [
 #         order
 #         for order in all_orders
@@ -86,9 +86,9 @@ def get_resource_by_type(room_name, resource_type, room_objects):
 #     return max_buy_price["price"] if resource_type == 'energy' else max_buy_price["price"] * 1.1
 
 
-def compute_buy_price(resource_type, max_deviation=0.2):
+def compute_buy_price(resource_type, max_deviation=AUTO_BUY_POLICY["max_price_deviation"]):
     # 获取所有订单
-    all_orders = api.market_order_by_type(resource_type, "shard3")["list"]
+    all_orders = api.market_order_by_type(resource_type, AUTO_BUY_POLICY["shard"])["list"]
 
     # 过滤出符合条件的买单
     all_buy_orders = [
@@ -111,7 +111,7 @@ def compute_buy_price(resource_type, max_deviation=0.2):
 
     # 累加订单数量，直到总量达到或超过1000000
     for order in sorted_buy_orders:
-        if total_amount >= 1000000:
+        if total_amount >= AUTO_BUY_POLICY["price_sample_volume"]:
             break
         selected_orders.append(order)
         total_amount += order["amount"]
@@ -140,7 +140,7 @@ def compute_buy_price(resource_type, max_deviation=0.2):
 
 
 def process_room(room_name):
-    room_objects = api.room_objects(room_name, "shard3")["objects"]
+    room_objects = api.room_objects(room_name, AUTO_BUY_POLICY["shard"])["objects"]
 
     for resource_type in room_resource_config[room_name]:
         amount = get_resource_by_type(room_name, resource_type, room_objects)
@@ -148,18 +148,18 @@ def process_room(room_name):
             order_resource(room_name, resource_type)
 
 
-room_resource_config = {
-    "E35N1": {
-        "energy": 800000,
-    }
-}
+room_resource_config = AUTO_BUY_POLICY["room_resources"]
+
+
+def main():
+    global api, my_orders
+    api = create_api(AUTO_BUY_POLICY["profile"])
+    shard = AUTO_BUY_POLICY["shard"]
+    my_orders = api.my_orders(shard)["shards"][shard]
+    cancel_order()
+    for room_name in room_resource_config:
+        process_room(room_name)
 
 
 if __name__ == "__main__":
-    api = screepsapi.API(USER, PASSWORD, host="screeps.com", secure=True)
-    my_orders = api.my_orders("shard3")["shards"]["shard3"]
-
-    cancel_order()
-
-    for room_n in room_resource_config:
-        process_room(room_n)
+    main()

@@ -21,9 +21,10 @@ export default class BattleCalc {
      * 计算塔伤
      */
     public static calcTowerDamage(distance: number) {
-        if (distance <= 5) return 600
-        else if (distance <= 20) return 750 - 30 * distance
-        else return 150
+        if (distance <= TOWER_OPTIMAL_RANGE) return TOWER_POWER_ATTACK
+        const falloffDistance = Math.min(distance, TOWER_FALLOFF_RANGE) - TOWER_OPTIMAL_RANGE
+        const damagePerTile = TOWER_POWER_ATTACK * TOWER_FALLOFF / (TOWER_FALLOFF_RANGE - TOWER_OPTIMAL_RANGE)
+        return TOWER_POWER_ATTACK - damagePerTile * falloffDistance
     }
 
     /**

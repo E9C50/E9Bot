@@ -1,12 +1,44 @@
 import { getDistance } from "utils"
 import BaseRoleUpgrader from "./RoleBaseUpgrader"
+import { rolePolicy } from "settings/rolePolicy"
+
+let criticalTick: number | undefined, criticalShard: string | undefined
+interface CriticalRepairIndex { target?: Structure; hasTargets: boolean }
+let criticalByRoom = new WeakMap<Room, CriticalRepairIndex>()
+
+/** Tick-local only: another newly built or damaged barrier can supersede a healthy cached target. */
+function criticalRepairIndex(room: Room): CriticalRepairIndex {
+    if (criticalTick !== Game.time || criticalShard !== Game.shard?.name) {
+        criticalTick = Game.time; criticalShard = Game.shard?.name; criticalByRoom = new WeakMap()
+    }
+    const cached = criticalByRoom.get(room)
+    if (cached != undefined) return cached
+    let selected: Structure | undefined, minimumHits = Infinity, hasTargets = false
+    for (const target of room.wallsNeedRepair) {
+        const hits = target.hits
+        if (hits >= target.hitsMax) continue
+        hasTargets = true
+        if (hits > rolePolicy.repairer.cpuMaintenance.criticalHits) continue
+        if (hits < minimumHits) { selected = target; minimumHits = hits }
+    }
+    const index = { target: selected, hasTargets }
+    criticalByRoom.set(room, index)
+    return index
+}
+
+function maintenanceTurn(creep: Creep): boolean {
+    const interval = Math.max(1, Math.floor(rolePolicy.repairer.cpuMaintenance.interval))
+    let offset = 0
+    for (let index = 0; index < creep.name.length; index++) offset = (offset + creep.name.charCodeAt(index)) % interval
+    return Game.time % interval === offset
+}
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
-        return room.storage != undefined && room.storage.store[RESOURCE_ENERGY] > 10000 && room.wallsNeedRepair.length > 0
+        return room.storage != undefined && room.storage.store[RESOURCE_ENERGY] > rolePolicy.repairer.minimumStorageEnergy && room.wallsNeedRepair.length > 0
     },
     prepare(creep) {
-        if (creep.room.level == 8) {
+        if (creep.room.level == rolePolicy.repairer.boostAtLevel) {
             return creep.goBoost()
         }
         return true
@@ -45,15 +77,30 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 找到要修复的建筑
-        var repairTarget = Game.getObjectById<Structure>(creepData.repairTarget || '');
-        if (repairTarget == undefined || repairTarget.hits == repairTarget.hitsMax) {
-            let repairTargets = creep.room.wallsNeedRepair
-            if (Memory.warMode[creep.room.name]) {
-                const defenderCostMatrix = creep.room.getDefenderCostMatrix()
-                repairTargets = repairTargets.filter(target => defenderCostMatrix.get(target.pos.x, target.pos.y) != 255)
+        let repairTarget = creepData.repairTarget ? Game.getObjectById<Structure>(creepData.repairTarget) : null
+        if (Game.cpu?.bucket < rolePolicy.repairer.cpuMaintenance.minimumBucket &&
+            !Memory.warMode?.[creep.room.name] && creep.room.enemies.length === 0) {
+            const { target: critical, hasTargets } = criticalRepairIndex(creep.room)
+            if (critical != undefined) {
+                repairTarget = critical
+                creepData.repairTarget = critical.id
+            } else {
+                const highBarrier = repairTarget != undefined && repairTarget.hits < repairTarget.hitsMax ?
+                    (repairTarget.structureType === STRUCTURE_WALL || repairTarget.structureType === STRUCTURE_RAMPART) &&
+                        repairTarget.hits > rolePolicy.repairer.cpuMaintenance.criticalHits : hasTargets
+                if (highBarrier && !maintenanceTurn(creep)) return true
             }
-            repairTargets = repairTargets.sort((a, b) => a.hits - b.hits)
-            if (repairTargets.length > 0) creepData.repairTarget = repairTargets[0].id
+        }
+        if (repairTarget == undefined || repairTarget.hits >= repairTarget.hitsMax) {
+            repairTarget = null
+            const defenderCostMatrix = Memory.warMode?.[creep.room.name] ? creep.room.getDefenderCostMatrix() : undefined
+            let minimumHits = Infinity
+            // Keep the original list order for equal hits, without sorting the shared room cache.
+            for (const target of creep.room.wallsNeedRepair) {
+                if (target.hits >= target.hitsMax || (defenderCostMatrix !== undefined && defenderCostMatrix.get(target.pos.x, target.pos.y) === 255)) continue
+                if (target.hits < minimumHits) { repairTarget = target; minimumHits = target.hits }
+            }
+            creepData.repairTarget = repairTarget?.id || ''
         }
 
         // 如果没有就去升级
