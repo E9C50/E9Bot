@@ -1,5 +1,6 @@
 import { controllerEnergyBuffer, controllerUpgradePosition } from 'creep/developmentLogistics'
-import { developmentWorkAllowed } from 'creep/development'
+import { developmentWorkAllowed, isDevelopingRoom } from 'creep/development'
+import { controllerCarryIntentReserved, runControllerEnergyRelay } from 'creep/controllerEnergyRelay'
 
 interface WorkSeat {
     id: string
@@ -85,11 +86,12 @@ export function upgradeBuilderAtStablePosition(creep: Creep, controller: Structu
         creep.memory.working = energy > 0
         let supplied = false
         if (energy > 0 && developmentWorkAllowed(creep)) creep.upgradeController(controller)
-        if (buffer !== undefined && buffer.store[RESOURCE_ENERGY] > 0 && creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+        const connected = runControllerEnergyRelay(creep, buffer)
+        if (!controllerCarryIntentReserved(creep, 'withdraw') && buffer !== undefined && buffer.store[RESOURCE_ENERGY] > 0 && creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
             supplied = creep.withdraw(buffer, RESOURCE_ENERGY) === OK
         }
         // CARRY supply and WORK upgrade are independent native intents. Empty native cargo only receives a withdraw.
-        const staying = energy > 0 || supplied
+        const staying = energy > 0 || supplied || connected
         creep.memory.dontPullMe = staying
         if (staying) reservations.set(seatKey(creep.room.name, creep.pos.x, creep.pos.y), creep.name)
         return staying
@@ -104,7 +106,7 @@ export function upgradeBuilderAtStablePosition(creep: Creep, controller: Structu
     const buffer = controllerEnergyBuffer(creep.room)
     const previous = destinations.get(creep.name)
     const retained = previous?.id === creep.id && previous.controllerId === controller.id && previous.bufferId === buffer?.id ? previous : undefined
-    const seat = buffer !== undefined ? controllerUpgradePosition(creep, buffer, retained) : mobileSeat(creep, controller, retained)
+    const seat = isDevelopingRoom(creep.room) ? controllerUpgradePosition(creep, buffer, retained) : mobileSeat(creep, controller, retained)
     if (seat === undefined) { destinations.delete(creep.name); return false }
     destinations.set(creep.name, { id: creep.id, roomName: creep.room.name, controllerId: controller.id, bufferId: buffer?.id, x: seat.x, y: seat.y })
     const result = creep.moveTo(seat, { range: 0, ignoreCreeps: false })

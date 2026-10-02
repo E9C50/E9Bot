@@ -25,7 +25,7 @@ function room({ level = 1, capacity = 300, sources = [[10, 10]], spawn = [20, 20
         memory: { creepConfig: {} }, controller: { my: true, level, pos: position(40, 40), ticksToDowngrade: 200000 },
         spawns: [structure('spawn', 'spawn', ...spawn)], containers: [], links: [], constructionSites: [], labs: [],
         wallsNeedRepair: [], mineral: { id: 'mineral', mineralAmount: 10000, pos: position(8, 8) },
-        getTerrain: () => ({ get: () => 0 }), lookForAt: () => [],
+        getTerrain: () => ({ get: () => 0 }), lookForAt: () => [], find: () => [],
     };
     result.sources = sources.map(([x, y], index) => ({ id: `source${index}`, energy: 3000, energyCapacity: 3000,
         pos: position(x, y), room: result }));
@@ -64,7 +64,7 @@ function makeWorld(home, { creeps = {}, visibleSources = [], automaticHauling = 
         RANGED_ATTACK: 'ranged_attack', HEAL: 'heal', CARRY_CAPACITY: 50, HARVEST_POWER: 2,
         ENERGY_REGEN_TIME: 300, CREEP_SPAWN_TIME: 3, MAX_CREEP_SIZE: 50, BUILD_POWER: 5,
         STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link',
-        TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps',
+        TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', FIND_STRUCTURES: 'structures',
     }, modules: { role: factories, './demand': demand } });
     if (automaticHauling) for (const source of home.sources) {
         if (!Object.values(creeps).some(creep => !creep.spawning && creep.memory.role === 'harvester' &&
@@ -500,10 +500,11 @@ test('development adopts old local consumers and assigns retained upgraders thei
     assert.deepEqual(Object.keys(oldUpgrader.memory.development), []);
     assert.equal(visitor.memory.development, undefined);
     assert.ok(configs.every(config => config.name !== oldBuilder.memory.name), 'unselected adopted builders can retire');
-    assert.equal(byRole(configs, 'upgrader').find(config => config.name === oldUpgrader.memory.name).development.workParts, 1);
+    assert.equal(byRole(configs, 'upgrader').find(config => config.name === oldUpgrader.memory.name).development.workParts, 20);
+    assert.equal(byRole(configs, 'upgrader').length, 1, 'excess live WORK stops new births rather than throttling the paid body');
 });
 
-test('development duty-cycle limits an existing 4-WORK builder and 20-WORK upgrader to their new quotas', () => {
+test('development duty-cycle constrains builders while existing upgraders ignore stale lower quotas', () => {
     const home = room({ level: 4 });
     const state = makeWorld(home);
     const allowed = state.loader.load('creep/development').developmentWorkAllowed;
@@ -513,7 +514,7 @@ test('development duty-cycle limits an existing 4-WORK builder and 20-WORK upgra
         const before = JSON.stringify(home.memory);
         let actions = 0;
         for (let tick = 0; tick < work * 2; tick++) { state.game.time = tick; if (allowed(unit)) actions++; }
-        assert.equal(actions, quota * 2);
+        assert.equal(actions, (role === 'upgrader' ? work : quota) * 2);
         assert.equal(JSON.stringify(home.memory), before, 'budget scheduling does not persist timing credits');
     }
 });
@@ -571,16 +572,16 @@ test('a surviving 1-WORK bootstrap upgrader does not occupy a newly affordable 1
     assert.ok(upgraders.length <= state.policy.upgrading.maximumCreeps);
 });
 
-test('a bootstrap upgrader inside its replacement lead cannot block the new 17-WORK upgrade budget', () => {
+test('a bootstrap upgrader inside its replacement lead keeps working and only its actual WORK reduces new demand', () => {
     const { state, upgrader } = growingUpgradeWorld({ ttl: 1 });
     const upgraders = byRole(state.release(), 'upgrader');
-    assert.ok(upgraders.every(config => config.name !== upgrader.memory.name));
+    assert.equal(upgraders.find(config => config.name === upgrader.memory.name).development.workParts, 1);
     const replacement = upgraders.filter(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
-    assert.equal(replacement.reduce((total, config) => total + config.development.workParts, 0), 17);
+    assert.equal(replacement.reduce((total, config) => total + config.development.workParts, 0), 16);
     assert.ok(upgraders.length <= state.policy.upgrading.maximumCreeps);
 });
 
-test('four old two-WORK upgraders leave an expansion slot for a genuinely larger affordable body', () => {
+test('four occupied controller seats retain all old two-WORK upgraders without forcing an expansion retirement', () => {
     const home = room({ capacity: 550, level: 2, sources: [[10, 10], [40, 10]] });
     home.containers = [structure('controller-container', 'container', 38, 40, 1000)];
     home.getTerrain = () => ({ get: (x, y) => x === 39 && y >= 39 && y <= 41 || x === 38 && y === 40 ? 0 : 1 });
@@ -595,15 +596,12 @@ test('four old two-WORK upgraders leave an expansion slot for a genuinely larger
     const upgrades = byRole(state.release(), 'upgrader');
     assert.equal(upgrades.length, 4, 'the actual four-seat geometry is full');
     const additions = upgrades.filter(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
-    assert.equal(additions.length, 1);
-    assert.equal(additions[0].development.workParts, 4);
-    assert.equal(requestedWork(upgrades), 10);
-    const body = state.loader.load('creep/developmentBodies').getDevelopmentBody(home, additions[0]);
-    assert.equal(body.filter(part => part === 'work').length, 4);
-    assert.ok(body.reduce((sum, part) => sum + costs[part], 0) <= home.energyCapacityAvailable);
+    assert.equal(additions.length, 0);
+    assert.equal(requestedWork(upgrades), 8);
+    assert.ok(upgrades.every(config => config.development.workParts === 2));
 });
 
-test('successive small-upgrader replacements reach the full four-body throughput instead of oscillating', () => {
+test('small-upgrader seats only receive larger bodies after their occupants die naturally', () => {
     const home = room({ capacity: 550, level: 2, sources: [[10, 10], [40, 10]] });
     const buffer = structure('controller-container', 'container', 38, 40, 1000);
     home.containers = [buffer];
@@ -616,11 +614,16 @@ test('successive small-upgrader replacements reach the full four-body throughput
         old.name = `UPGRADER_${name}`; creeps[old.name] = old;
     }
     const state = makeWorld(home, { creeps });
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8);
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8, 'refreshing a full station cannot omit a living upgrader');
     for (const expected of [10, 12, 14, 16]) {
+        const dying = Object.entries(state.game.creeps).find(([, creep]) => creep.memory.role === 'upgrader' && creep.getActiveBodyparts('work') === 2);
+        assert.ok(dying);
+        delete state.game.creeps[dying[0]];
         const configs = byRole(state.release(), 'upgrader');
         assert.equal(requestedWork(configs), expected);
-        const names = new Set(configs.map(config => state.demand.createCreepName(config.role, config.name)));
-        for (const [name, creep] of Object.entries(state.game.creeps)) if (creep.memory.role === 'upgrader' && !names.has(name)) delete state.game.creeps[name];
+        assert.ok(Object.values(state.game.creeps).filter(creep => creep.memory.role === 'upgrader')
+            .every(creep => configs.some(config => config.name === creep.memory.name)), 'every survivor keeps its demand entry');
         for (const config of configs) {
             const key = state.demand.createCreepName(config.role, config.name);
             if (!state.game.creeps[key]) {
@@ -635,7 +638,7 @@ test('successive small-upgrader replacements reach the full four-body throughput
     assert.ok(settled.every(config => state.game.creeps[state.demand.createCreepName(config.role, config.name)]));
 });
 
-test('default development demand can exceed four upgraders while respecting six real controller seats', () => {
+test('default development demand can exceed four upgraders while respecting the full controller work area', () => {
     const home = room({ capacity: 550, level: 2, sources: [[10, 10], [40, 10]] });
     const buffer = structure('controller-container', 'container', 40, 43, 1000);
     home.containers = [buffer];
@@ -644,7 +647,7 @@ test('default development demand can exceed four upgraders while respecting six 
         second: worker(home, { source: home.sources[1], name: 'second' }),
     } });
     const seats = state.loader.load('creep/developmentLogistics').controllerUpgradeSeatCount(home, buffer);
-    assert.equal(seats, 6);
+    assert.ok(seats >= 6);
     const upgrades = byRole(state.release(), 'upgrader');
     assert.equal(upgrades.length, 5);
     assert.equal(requestedWork(upgrades), 17);
@@ -669,7 +672,66 @@ test('a retained large upgrader receives its real consumption quota instead of a
     } });
     const upgrades = byRole(state.release(), 'upgrader');
     assert.equal(upgrades.length, 1);
-    assert.equal(upgrades[0].development.workParts, 17);
+    assert.equal(upgrades[0].development.workParts, 20);
+});
+
+test('empty geometry and reduced policy ceilings stop new births without omitting surviving upgraders', () => {
+    const { state, upgrader } = growingUpgradeWorld();
+    state.home.getTerrain = () => ({ get: () => 1 });
+    assert.equal(state.loader.load('creep/developmentLogistics').controllerUpgradeSeatCount(state.home, state.home.containers[0]), 0);
+    let configs = byRole(state.release(), 'upgrader');
+    assert.equal(configs.length, 1);
+    assert.equal(configs[0].name, upgrader.memory.name);
+    assert.equal(configs[0].development.workParts, 1);
+    state.home.getTerrain = () => ({ get: () => 0 });
+    state.policy.upgrading.maximumCreeps = 0;
+    configs = byRole(state.release(), 'upgrader');
+    assert.equal(configs.length, 1);
+    assert.equal(configs[0].name, upgrader.memory.name);
+});
+
+test('existing upgrader configurations survive a temporarily missing energy endpoint', () => {
+    const home = room({ capacity: 550, level: 2, sources: [] });
+    const old = worker(home, { source: { id: 'lost-source', pos: position(10, 10) }, role: 'upgrader', work: 2,
+        name: 'endpoint-lost', data: { sourceId: 'lost-container' } });
+    const state = makeWorld(home, { creeps: { old } });
+    const upgrades = byRole(state.release(), 'upgrader');
+    assert.equal(upgrades.length, 1);
+    assert.equal(upgrades[0].data.sourceId, 'lost-container');
+    assert.equal(upgrades[0].development.workParts, 2);
+});
+
+test('spawning and nearly expired live upgrade bodies count their actual WORK without double-funded replacements', () => {
+    const { state, upgrader } = growingUpgradeWorld({ ttl: 1 });
+    upgrader.spawning = true;
+    let configs = byRole(state.release(), 'upgrader');
+    assert.equal(requestedWork(configs), 17);
+    assert.equal(configs.find(config => config.name === upgrader.memory.name).development.workParts, 1);
+    upgrader.spawning = false;
+    configs = byRole(state.release(), 'upgrader');
+    assert.equal(requestedWork(configs), 17);
+    assert.equal(configs.find(config => config.name === upgrader.memory.name).development.workParts, 1);
+});
+
+test('an active aid upgrader away from the buffer occupies a full controller-area seat', () => {
+    const home = room({ capacity: 550, level: 2, sources: [[10, 10], [40, 10]] });
+    const buffer = structure('controller-container', 'container', 38, 40, 1000);
+    home.containers = [buffer];
+    home.getTerrain = () => ({ get: (x, y) => y === 40 && (x === 38 || x === 39 || x === 41) || x === 40 && y === 39 ? 0 : 1 });
+    const aid = worker(home, { role: 'sBuilder', work: 1, name: 'far-buffer-aid', x: 41, y: 40,
+        data: { unitKind: 'builder', phase: 'work', task: { targetRoom: home.name, targetShard: 'shard1', targetLevel: 4 } } });
+    aid.store = store(20, 100);
+    const state = makeWorld(home, { creeps: { aid,
+        first: worker(home, { source: home.sources[0], name: 'first' }),
+        second: worker(home, { source: home.sources[1], name: 'second' }),
+    } });
+    const seats = state.loader.load('creep/developmentLogistics').controllerUpgradeSeatCount(home, buffer);
+    assert.equal(seats, 4);
+    const upgrades = byRole(state.release(), 'upgrader');
+    assert.equal(upgrades.length, 3, 'the active aid occupies its far-buffer controller seat');
+    assert.equal(requestedWork(upgrades), 12);
+    aid.store = store(0, 100);
+    assert.equal(byRole(state.release(), 'upgrader').length, 3, 'an active empty aid still occupies its upgrade station');
 });
 
 test('active stable aid WORK and its occupied controller seat reduce new upgrader demand', () => {

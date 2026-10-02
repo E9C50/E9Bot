@@ -130,7 +130,7 @@ test('ordinary units do not read development state, while retained same-name leg
 
 test('growth jobs retire only after a catalog refresh removes a nonessential tagged unit', () => {
     const w = transitionWorld({ level: 4 });
-    const unit = w.unit('surplus-upgrader', 'upgrader');
+    const unit = w.unit('surplus-builder', 'builder');
     delete w.home.memory.creepConfig;
     assert.equal(w.retire(unit), false, 'a first population refresh has not happened');
     w.home.memory.creepConfig = { [unit.name]: { development: { workParts: 1 } } };
@@ -255,7 +255,7 @@ test('RCL8 filling continuity waits for a living legacy hauler with active CARRY
 test('retiring nonessential growth workers return carried energy before recycling', () => {
     const w = transitionWorld();
     w.home.storage = w.structure('storage', 'storage', 15, 15, 500, 1000);
-    const unit = w.unit('old-upgrader', 'upgrader', { energy: 50 });
+    const unit = w.unit('old-builder', 'builder', { energy: 50 });
     unit.transferCode = -9;
     assert.equal(w.retire(unit), true);
     assert.deepEqual(w.calls.map(call => call.kind), ['transfer', 'move']);
@@ -273,6 +273,25 @@ test('an unavailable or lost home does not claim a normal role has retired', () 
     delete w.game.rooms[w.home.name];
     assert.equal(w.retire(unit), false);
     assert.deepEqual(w.calls, []);
+});
+
+test('living development upgraders never return energy or recycle when budgets, catalogs or room stages change', () => {
+    for (const level of [4, 8]) for (const energy of [0, 50]) {
+        const w = transitionWorld({ level });
+        const unit = w.unit('existing-upgrader', 'upgrader', { work: 20, energy });
+        unit.memory.dontPullMe = true;
+        for (const catalog of [undefined, {}, { [unit.name]: { role: 'upgrader', development: { workParts: 1 } } }]) {
+            w.home.memory.creepConfig = catalog;
+            assert.equal(w.retire(unit), false);
+        }
+        w.home.memory.fastUpgrade = false;
+        w.home.memory.creepConfig = {};
+        assert.equal(w.retire(unit), false);
+        assert.equal(unit.memory.dontPullMe, true);
+        assert.deepEqual(w.calls, []);
+        Object.defineProperty(w.game.rooms, w.home.name, { get() { throw new Error('already-born upgraders do not consult retirement catalogs'); } });
+        assert.equal(w.retire(unit), false);
+    }
 });
 
 function controllerLinks(w) {
@@ -363,14 +382,25 @@ test('execution permits automatic remote safety preparation during war while man
     assert.ok(w.calls.every(call => call.kind !== 'source' || call.name !== 'automatic'));
 });
 
-test('execution finishes local development retirement before creating a new normal role action', () => {
+test('execution finishes local builder retirement before creating a new normal role action', () => {
     const w = transitionWorld();
-    w.unit('retiring-upgrader', 'upgrader');
+    w.unit('retiring-builder', 'builder');
     w.unit('ordinary-filler', 'filler', { development: false });
     w.loader.load('creep/execution').creepWorkController();
-    assert.ok(w.calls.some(call => call.kind === 'recycle' && call.name === 'retiring-upgrader'));
-    assert.ok(w.calls.every(call => !['prepare', 'source', 'target'].includes(call.kind) || call.name !== 'retiring-upgrader'));
+    assert.ok(w.calls.some(call => call.kind === 'recycle' && call.name === 'retiring-builder'));
+    assert.ok(w.calls.every(call => !['prepare', 'source', 'target'].includes(call.kind) || call.name !== 'retiring-builder'));
     assert.ok(w.calls.some(call => call.kind === 'source' && call.name === 'ordinary-filler'));
+});
+
+test('RCL8 execution continues old development upgraders with carried energy through the mature role', () => {
+    const w = transitionWorld();
+    const unit = w.unit('surviving-upgrader', 'upgrader', { energy: 50 });
+    unit.memory.working = true;
+    w.loader.load('creep/execution').creepWorkController();
+    assert.ok(w.calls.some(call => call.kind === 'prepare' && call.name === unit.name));
+    assert.ok(w.calls.some(call => call.kind === 'target' && call.name === unit.name));
+    assert.ok(w.calls.every(call => !['recycle', 'transfer', 'move'].includes(call.kind) || call.name !== unit.name));
+    assert.equal(unit.store.energy, 50);
 });
 
 function recoveryQueue(w, sourceId = w.source.id) {

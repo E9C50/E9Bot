@@ -1,7 +1,8 @@
 import { isDevelopingRoom } from './development'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
+import { developmentPolicy } from 'settings/development'
 
-function range(first: RoomPosition, second: RoomPosition): number {
+function range(first: { x: number; y: number }, second: { x: number; y: number }): number {
     return Math.max(Math.abs(first.x - second.x), Math.abs(first.y - second.y))
 }
 
@@ -20,21 +21,23 @@ function walkable(room: Room, x: number, y: number, creepName?: string): boolean
     return true
 }
 
-function seats(room: Room, buffer: StructureLink | StructureContainer, creepName?: string): Array<{ x: number; y: number }> {
-    const controller = room.controller
-    if (controller == undefined) return []
-    const result: Array<{ x: number; y: number }> = []
-    for (let x = buffer.pos.x - 1; x <= buffer.pos.x + 1; x++) for (let y = buffer.pos.y - 1; y <= buffer.pos.y + 1; y++) {
-        if (Math.max(Math.abs(x - controller.pos.x), Math.abs(y - controller.pos.y)) <= 3 && walkable(room, x, y, creepName)) result.push({ x, y })
-    }
-    return result
-}
-
 function findControllerEnergyBuffer(room: Room): StructureLink | StructureContainer | undefined {
     const controller = room.controller!
+    const hasAdjacentSeat = (target: StructureLink | StructureContainer): boolean => {
+        const checked = checkedGeometry.get(room.name)
+        if (geometryTick === Game.time && geometryShard === Game.shard.name && checked?.room === room) {
+            return checked.geometry.seats.some(seat => range(seat, target.pos) <= 1)
+        }
+        // Link/filler queries need one usable neighboring tile, not the entire upgrade-area graph.
+        for (let x = target.pos.x - 1; x <= target.pos.x + 1; x++) for (let y = target.pos.y - 1; y <= target.pos.y + 1; y++) {
+            if (range({ x, y }, controller.pos) <= 3 && walkable(room, x, y)) return true
+        }
+        return false
+    }
     const usable = (target: StructureLink | StructureContainer | undefined): target is StructureLink | StructureContainer =>
         target != undefined && target.pos.roomName == room.name && range(target.pos, controller.pos) <= 3 &&
-        (!('my' in target) || target.my !== false) && (!('isActive' in target) || target.isActive()) && seats(room, target).length > 0
+        (!('my' in target) || target.my !== false) && (!('isActive' in target) || target.isActive()) &&
+        hasAdjacentSeat(target)
     const linked = room.controllerLink
     if (usable(linked)) return linked
     for (const link of room.links) if (usable(link)) return link
@@ -70,35 +73,131 @@ let reservationTick: number | undefined
 let reservationShard: string | undefined
 let reservedSeats = new Map<string, string>()
 
-/** Permanent upgrade/withdraw geometry; current creeps do not reduce the room's seat capacity. */
-export function controllerUpgradeSeatCount(room: Room, buffer: StructureLink | StructureContainer): number {
-    return seats(room, buffer).length
-}
+interface ControllerSeat { x: number; y: number }
+interface Geometry { signature: string; checkedAt: number; seats: ControllerSeat[]; connected: Map<string, ControllerSeat[]> }
+const geometries = new Map<string, Geometry>()
+let geometryTick: number | undefined, geometryShard: string | undefined
+let checkedGeometry = new Map<string, { room: Room; geometry: Geometry }>()
+let occupiedSeats = new Map<string, { room: Room; tiles: Map<string, string> }>()
+const controllerDestinations = new Map<string, { id: string; room: string; buffer?: string; x: number; y: number }>()
 
-/** Reserve a walkable tile that supports both native upgrade and withdraw ranges. */
-export function controllerUpgradePosition(creep: Creep, buffer: StructureLink | StructureContainer, preferred?: { x: number; y: number }): RoomPosition | undefined {
-    if (!isDevelopingRoom(creep.room)) return undefined
-    if (reservationTick != Game.time || reservationShard != Game.shard.name) {
+function syncControllerSeats(): void {
+    if (geometryTick === Game.time && geometryShard === Game.shard.name) return
+    if (geometryShard !== Game.shard.name || geometryTick !== undefined && Game.time < geometryTick) { geometries.clear(); controllerDestinations.clear() }
+    geometryTick = Game.time; geometryShard = Game.shard.name
+    checkedGeometry = new Map(); occupiedSeats = new Map()
+    if (Game.creeps !== undefined) for (const [name, seat] of controllerDestinations) {
+        const creep = Game.creeps[name]
+        if (creep === undefined || creep.id !== seat.id || creep.room.name !== seat.room) controllerDestinations.delete(name)
+    }
+    if (Game.rooms !== undefined && Game.time % developmentPolicy.controller.geometryCacheTicks === 0) {
+        for (const name of geometries.keys()) if (Game.rooms[name] === undefined) geometries.delete(name)
+    }
+    if (reservationTick !== Game.time || reservationShard !== Game.shard.name) {
         reservationTick = Game.time; reservationShard = Game.shard.name; reservedSeats = new Map()
     }
-    const available = seats(creep.room, buffer, creep.name).filter(seat => {
+}
+
+function geometry(room: Room): Geometry | undefined {
+    syncControllerSeats()
+    const controller = room.controller
+    if (controller === undefined) return undefined
+    const checked = checkedGeometry.get(room.name)
+    if (checked?.room === room) return checked.geometry
+    // RoomExtension already indexes structures once per tick. Only scalar geometry survives to the next tick.
+    const structures = (room.structures || room.find(FIND_STRUCTURES)).filter(item => range(item.pos, controller.pos) <= 3)
+    const natural = [controller.pos, ...room.sources.map(source => source.pos), ...(room.mineral ? [room.mineral.pos] : [])]
+    const signature = `${controller.pos.x}/${controller.pos.y}:` + structures.map(item =>
+        `${item.pos.x}/${item.pos.y}/${item.structureType}/${(item as StructureRampart).my}/${(item as StructureRampart).isPublic}`).join(';') +
+        ':' + natural.map(pos => `${pos.x}/${pos.y}`).join(';')
+    let cached = geometries.get(room.name)
+    if (cached === undefined || cached.signature !== signature || Game.time - cached.checkedAt >= developmentPolicy.controller.geometryCacheTicks) {
+        const blocked = new Set(natural.map(pos => `${pos.x}/${pos.y}`))
+        for (const structure of structures) {
+            const rampart = structure as StructureRampart
+            if (structure.structureType !== STRUCTURE_ROAD && structure.structureType !== STRUCTURE_CONTAINER &&
+                !(structure.structureType === STRUCTURE_RAMPART && (rampart.my || rampart.isPublic))) blocked.add(`${structure.pos.x}/${structure.pos.y}`)
+        }
+        const terrain = room.getTerrain(), seats: ControllerSeat[] = []
+        for (let x = controller.pos.x - 3; x <= controller.pos.x + 3; x++) for (let y = controller.pos.y - 3; y <= controller.pos.y + 3; y++) {
+            if (x <= 0 || x >= 49 || y <= 0 || y >= 49 || blocked.has(`${x}/${y}`) || (terrain.get(x, y) & TERRAIN_MASK_WALL) !== 0) continue
+            seats.push({ x, y })
+        }
+        cached = { signature, checkedAt: Game.time, seats, connected: new Map() }
+        geometries.set(room.name, cached)
+    }
+    checkedGeometry.set(room.name, { room, geometry: cached })
+    return cached
+}
+
+/** All static upgrade tiles connected to the buffer; neither live occupancy nor reservations reduce capacity. */
+export function controllerUpgradeSeats(room: Room, buffer?: StructureLink | StructureContainer): readonly ControllerSeat[] {
+    const area = geometry(room)
+    if (area === undefined || buffer === undefined) return area?.seats || []
+    const key = `${buffer.id}/${buffer.pos.x}/${buffer.pos.y}`
+    const cached = area.connected.get(key)
+    if (cached !== undefined) return cached
+    const remaining = new Map(area.seats.map(seat => [`${seat.x}/${seat.y}`, seat]))
+    const connected = area.seats.filter(seat => range(seat, buffer.pos) <= 1)
+    for (const seat of connected) remaining.delete(`${seat.x}/${seat.y}`)
+    for (let index = 0; index < connected.length; index++) {
+        const seat = connected[index]
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+            const key = `${seat.x + dx}/${seat.y + dy}`, next = remaining.get(key)
+            if (next !== undefined) { connected.push(next); remaining.delete(key) }
+        }
+    }
+    area.connected.set(key, connected)
+    return connected
+}
+
+export function controllerUpgradeSeatCount(room: Room, buffer?: StructureLink | StructureContainer): number {
+    return controllerUpgradeSeats(room, buffer).length
+}
+
+function occupancy(room: Room): Map<string, string> {
+    const cached = occupiedSeats.get(room.name)
+    if (cached?.room === room) return cached.tiles
+    const tiles = new Map<string, string>()
+    for (const unit of [...room.find(FIND_CREEPS), ...room.find(FIND_POWER_CREEPS)]) tiles.set(`${unit.pos.x}/${unit.pos.y}`, unit.name)
+    occupiedSeats.set(room.name, { room, tiles })
+    return tiles
+}
+
+/** Keep productive current positions; approaching workers prefer the buffer side without swapping occupants. */
+export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink | StructureContainer, preferred?: { x: number; y: number }, retainCurrent = true): RoomPosition | undefined {
+    if (!isDevelopingRoom(creep.room)) return undefined
+    const area = controllerUpgradeSeats(creep.room, buffer), occupied = occupancy(creep.room)
+    const previous = controllerDestinations.get(creep.name)
+    if (preferred === undefined && previous?.id === creep.id && previous.room === creep.room.name && previous.buffer === buffer?.id) preferred = previous
+    const current = controllerUpgradeSeats(creep.room).find(seat => seat.x === creep.pos.x && seat.y === creep.pos.y)
+    const currentOwner = reservedSeats.get(`${creep.room.name}/${creep.pos.x}/${creep.pos.y}`)
+    if (retainCurrent && current !== undefined && (currentOwner === undefined || currentOwner === creep.name)) {
+        reservedSeats.set(`${creep.room.name}/${current.x}/${current.y}`, creep.name)
+        controllerDestinations.delete(creep.name); creep.memory.dontPullMe = true
+        return creep.pos
+    }
+    const available = area.filter(seat => {
+        if (!retainCurrent && seat.x === creep.pos.x && seat.y === creep.pos.y) return false
         const owner = reservedSeats.get(`${creep.room.name}/${seat.x}/${seat.y}`)
-        return owner == undefined || owner == creep.name
+        const occupant = occupied.get(`${seat.x}/${seat.y}`)
+        return (owner == undefined || owner == creep.name) && (occupant === undefined || occupant === creep.name)
     })
     available.sort((a, b) => {
         // An occupied legal seat is already productive; do not trade it for a theoretically better inner seat.
         const current = (seat: { x: number; y: number }): number => seat.x === creep.pos.x && seat.y === creep.pos.y ? 0 : 1
         const retained = (seat: { x: number; y: number }): number => preferred?.x === seat.x && preferred?.y === seat.y ? 0 : 1
-        // Keep the outer face available to haulers; every selected seat can still withdraw directly.
+        const supply = (seat: ControllerSeat): number => buffer === undefined ? 0 : Math.max(1, range(seat, buffer.pos))
         const inner = (seat: { x: number; y: number }): number => Math.max(Math.abs(seat.x - creep.room.controller!.pos.x),
             Math.abs(seat.y - creep.room.controller!.pos.y)) < controllerLayoutPolicy.containerRange ? 0 : 1
-        return current(a) - current(b) || retained(a) - retained(b) || inner(a) - inner(b) || Math.max(Math.abs(a.x - creep.pos.x), Math.abs(a.y - creep.pos.y)) -
+        return current(a) - current(b) || retained(a) - retained(b) || supply(a) - supply(b) || inner(a) - inner(b) || Math.max(Math.abs(a.x - creep.pos.x), Math.abs(a.y - creep.pos.y)) -
             Math.max(Math.abs(b.x - creep.pos.x), Math.abs(b.y - creep.pos.y))
     })
     const selected = available[0]
     creep.memory.dontPullMe = selected !== undefined && selected.x === creep.pos.x && selected.y === creep.pos.y
-    if (selected == undefined) return undefined
+    if (selected == undefined) { controllerDestinations.delete(creep.name); return undefined }
     reservedSeats.set(`${creep.room.name}/${selected.x}/${selected.y}`, creep.name)
+    controllerDestinations.set(creep.name, { id: creep.id, room: creep.room.name, buffer: buffer?.id, x: selected.x, y: selected.y })
     return new RoomPosition(selected.x, selected.y, creep.room.name)
 }
 

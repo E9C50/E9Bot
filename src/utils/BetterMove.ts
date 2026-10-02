@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { navigationPolicy } from 'settings/navigation'
 import { getHarvestPower } from 'runtime/harvestPower'
+import { nextCachedMovementStep } from './cachedMovement'
 /*
 creep对穿+跨房间寻路+寻路缓存
 跑的比香港记者还快从你做起
@@ -1451,6 +1452,9 @@ global.BetterMove = {
         return OK;
     },
     creepPathCache: creepPathCache,
+    getNextCachedStep(creep) {
+        return nextCachedMovementStep(creep.pos, creepPathCache[creep.name], creepMoveCache[creep.name], Game.time);
+    },
     setChangeMoveTo(bool) {
         Creep.prototype.moveTo = wrapFn(bool ? betterMoveTo : originMoveTo, 'moveTo');
         PowerCreep.prototype.moveTo = wrapFn(bool ? betterMoveTo : originMoveTo, 'moveTo');

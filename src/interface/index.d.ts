@@ -3,6 +3,8 @@ declare module NodeJS {
     interface Global {
         BetterMove: {
             deletePathInRoom: (roomName: string) => boolean
+            creepPathCache?: Record<string, import('../utils/cachedMovement').CachedMovementPath>
+            getNextCachedStep?: (creep: Creep) => import('../utils/cachedMovement').CachedMovementStep | undefined
         }
     }
 }

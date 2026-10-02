@@ -22,7 +22,7 @@ function world({ buffered = true } = {}) {
             const list = type === 'structures' ? room.structures : type === 'creeps' ? units : type === 'power' ? Object.values(game.powerCreeps) : [];
             return list.filter(item => item.pos.x === x && item.pos.y === y);
         },
-        find: type => type === 'sources' ? room.sources : type === 'dropped' ? room.droppedResource : [],
+        find: type => type === 'sources' ? room.sources : type === 'dropped' ? room.droppedResource : type === 'myCreeps' || type === 'creeps' ? units : [],
     };
     room.controller = { id: 'controller', my: true, level: 3, ticksToDowngrade: 10000, pos: p(11, 28) };
     const source = { id: 'source', energy: 3000, pos: p(36, 34), room };
@@ -34,7 +34,7 @@ function world({ buffered = true } = {}) {
     const transport = { readRemoteShardState: () => undefined, getLocalShardState: () => ({ reports: {} }), markShardStateDirty() {} };
     const loader = createSourceLoader({ globals: { Game: game, Memory: { warMode: {}, creeps: {} }, RoomPosition,
         RESOURCE_ENERGY: 'energy', WORK: 'work', LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', LOOK_POWER_CREEPS: 'power',
-        FIND_DROPPED_RESOURCES: 'dropped', TERRAIN_MASK_WALL: 1,
+        FIND_DROPPED_RESOURCES: 'dropped', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures', TERRAIN_MASK_WALL: 1,
         STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_SPAWN: 'spawn',
         STRUCTURE_WALL: 'wall', OK: 0, ERR_NOT_IN_RANGE: -9, ERR_NO_PATH: -2, ERR_INVALID_TARGET: -7 },
         modules: { utils: { getDistance: distance, getClosestTarget: (pos, values) => [...values].sort((a, b) => distance(pos, a) - distance(pos, b))[0] },
@@ -170,9 +170,12 @@ test('controllerUpgradePosition keeps an existing valid outer seat and protects 
     const selected = w.logistics.controllerUpgradePosition(unit, w.buffer);
     assert.equal(selected.isEqualTo(unit.pos), true, 'an open inner seat does not displace a working occupant');
     assert.equal(unit.memory.dontPullMe, true);
-    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 6);
-    for (const [x, y] of [[10, 30], [11, 30], [12, 30], [10, 31], [12, 31]]) w.creep(`fixed-${x}-${y}`, 'upgrader', x, y);
-    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 6, 'static capacity includes temporarily occupied seats');
+    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 48);
+    for (const seat of w.logistics.controllerUpgradeSeats(w.room, w.buffer)) {
+        if (!unit.pos.isEqualTo(seat)) w.creep(`fixed-${seat.x}-${seat.y}`, 'upgrader', seat.x, seat.y);
+    }
+    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 48, 'static capacity includes temporarily occupied seats');
+    w.game.time++;
     const arriving = w.creep('arriving', 'sBuilder', 11, 40);
     assert.equal(w.behavior(arriving).target(arriving), false);
     assert.equal(w.calls.filter(call => call.type === 'move').length, 0, 'full seats are not swapped out');
@@ -202,6 +205,7 @@ test('departing or empty workers release movement protection and emergency contr
     assert.equal(unit.memory.dontPullMe, true); assert.equal(w.calls.some(call => call.type === 'build'), false);
     unit.store.energy = 0;
     w.buffer.store.energy = 0;
+    w.game.time++;
     assert.equal(w.helper.upgradeBuilderAtStablePosition(unit, w.room.controller), false);
     assert.equal(unit.memory.dontPullMe, false); assert.equal(unit.memory.working, false);
     unit.store.energy = 200; unit.memory.working = true; unit.pos = w.p(11, 40);
@@ -282,7 +286,7 @@ test('controller seat capacity excludes permanent walls, natural objects and obs
     w.walls.add('10/30');
     w.room.sources.push({ id: 'controller-source', pos: w.p(12, 30) });
     w.room.structures.push({ structureType: 'spawn', pos: w.p(10, 31) });
-    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 3);
+    assert.equal(w.logistics.controllerUpgradeSeatCount(w.room, w.buffer), 45);
     w.room.controller.level = 8;
     Object.defineProperty(w.room.memory, 'fastUpgrade', { get() { throw new Error('RCL8 must not read development state'); } });
     assert.equal(w.logistics.controllerUpgradePosition(unit, w.buffer), undefined);

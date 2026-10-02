@@ -263,42 +263,40 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         const builderCount = building ? Math.min(policy.building.maximumCreeps, Math.ceil(constructionWork / builderWork)) : 0
         for (let index = 0; index < builderCount; index++) publish(room, 'builder', `${room.name}_DEVELOP_BUILDER_${index}`,
             { sourceId: energySource.id, buildTarget: '' }, { workParts: Math.min(builderWork, constructionWork - index * builderWork) })
-        const totalWork = Math.max(policy.upgrading.minimumWorkParts, Math.min(policy.upgrading.maximumTotalWorkParts,
-            Math.floor(income *
-                (building ? policy.upgrading.incomeShareWhileBuilding : policy.upgrading.incomeShare)) + burst + local.backlogWork))
-        const reserve = getDevelopmentSpawnReserve(room, 'upgrader')
-        const workPerCreep = Math.max(1, affordableWork(room.energyCapacityAvailable - reserve,
-            policy.upgrading.maximumWorkPartsPerCreep, buffer != undefined))
-        const aid = Object.values(Game.creeps).filter(creep => !creep.spawning && creep.room.name === room.name && hasAidUpgradeTask(creep, room) &&
-            range(creep.pos, room.controller!.pos) <= 3 && workParts(creep) > 0 &&
-            ((creep.store?.[RESOURCE_ENERGY] || 0) > 0 || buffer !== undefined && range(creep.pos, buffer.pos) <= 1))
-        const externalWork = aid.reduce((total, creep) => total + workParts(creep), 0)
-        const occupiedSeats = buffer === undefined ? 0 : aid.filter(creep => range(creep.pos, buffer.pos) <= 1).length
-        const maximum = buffer === undefined ? policy.upgrading.maximumCreeps :
-            Math.max(0, Math.min(policy.upgrading.maximumCreeps, controllerUpgradeSeatCount(room, buffer) - occupiedSeats))
-        let remaining = Math.max(0, totalWork - externalWork), count = 0
-        const upgrades = creeps.filter(creep => creep.memory.role === 'upgrader' && workParts(creep) > 0)
-            .sort((first, second) => workParts(second) - workParts(first))
-        for (const creep of upgrades) {
-            if (remaining <= 0 || count >= maximum) break
-            if (!creep.memory.name || (!creep.spawning && (creep.ticksToLive ?? 0) <= replacementLead(room, creep, room.controller!.pos))) continue
-            const work = Math.min(remaining, workParts(creep))
-            // Keep one expansion slot when old small units would consume every slot
-            // without meeting the energy budget. The removed unit retires normally.
-            if (count === maximum - 1 && work < remaining && work < workPerCreep) continue
-            publish(room, 'upgrader', creep.memory.name, { sourceId: buffer?.id || energySource.id },
-                { workParts: work, stationary: buffer != undefined })
-            remaining -= work; count++
-        }
-        for (let index = 0; remaining > 0 && count < maximum &&
-            index < upgrades.length + maximum + policy.replacement.maximumReplacementsPerRoom; index++) {
-            const name = `${room.name}_DEVELOP_UPGRADER_${index}`
-            if (Game.creeps[createCreepName('upgrader', name)]) continue
-            const work = Math.min(workPerCreep, remaining)
-            publish(room, 'upgrader', name, { sourceId: buffer?.id || energySource.id },
-                { workParts: work, stationary: buffer != undefined },
-                upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
-            remaining -= work; count++
-        }
+    }
+    const totalWork = Math.max(policy.upgrading.minimumWorkParts, Math.min(policy.upgrading.maximumTotalWorkParts,
+        Math.floor(income *
+            (building ? policy.upgrading.incomeShareWhileBuilding : policy.upgrading.incomeShare)) + burst + local.backlogWork))
+    const aid = Object.values(Game.creeps).filter(creep => !creep.spawning && creep.room.name === room.name && hasAidUpgradeTask(creep, room) &&
+        range(creep.pos, room.controller!.pos) <= 3 && workParts(creep) > 0)
+    const externalWork = aid.filter(creep => (creep.store?.[RESOURCE_ENERGY] || 0) > 0 ||
+        buffer !== undefined && range(creep.pos, buffer.pos) <= 1).reduce((total, creep) => total + workParts(creep), 0)
+    const occupiedSeats = aid.length
+    const maximum = Math.max(0, Math.min(policy.upgrading.maximumCreeps,
+        controllerUpgradeSeatCount(room, buffer) - occupiedSeats))
+    const upgrades = creeps.filter(creep => creep.memory.role === 'upgrader')
+    let remaining = Math.max(0, totalWork - externalWork), count = upgrades.length
+    // Paid-for bodies work until natural death. Budget and geometry constrain only
+    // additional births, never the live unit's WORK quota or continued operation.
+    for (const creep of upgrades) {
+        const work = workParts(creep)
+        remaining -= work
+        if (!creep.memory.name) continue
+        const sourceId = buffer?.id || energySource?.id || (creep.memory.data as UpgraderData).sourceId
+        publish(room, 'upgrader', creep.memory.name, { sourceId }, { workParts: work, stationary: buffer != undefined })
+    }
+    if (!energySource || remaining <= 0 || count >= maximum) return
+    const reserve = getDevelopmentSpawnReserve(room, 'upgrader')
+    const workPerCreep = Math.max(1, affordableWork(room.energyCapacityAvailable - reserve,
+        policy.upgrading.maximumWorkPartsPerCreep, buffer != undefined))
+    for (let index = 0; remaining > 0 && count < maximum &&
+        index < upgrades.length + maximum + policy.replacement.maximumReplacementsPerRoom; index++) {
+        const name = `${room.name}_DEVELOP_UPGRADER_${index}`
+        if (Game.creeps[createCreepName('upgrader', name)]) continue
+        const work = Math.min(workPerCreep, remaining)
+        publish(room, 'upgrader', name, { sourceId: buffer?.id || energySource.id },
+            { workParts: work, stationary: buffer != undefined },
+            upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
+        remaining -= work; count++
     }
 }

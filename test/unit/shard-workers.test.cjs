@@ -28,11 +28,18 @@ function world(kind, options = {}) {
         name: spec.targetRoom, my: true, level: 1, memory: {},
         sources: [], constructionSites: [], spawns: [], extensions: [], containers: [], links: [], ramparts: [], structuresNeedRepair: [], droppedResources: [],
         controller: { my: true, level: 1, ticksToDowngrade: 10000, pos: position(10, 10, spec.targetRoom) },
+        getTerrain: () => ({ get: () => 0 }),
+        lookForAt(type, x, y) {
+            const values = type === 'look-structures' ? this.find('structures') : type === 'look-power' ? Object.values(game.powerCreeps) : this.find('creeps');
+            return values.filter(value => value.pos.x === x && value.pos.y === y);
+        },
         find(type) {
             if (type === 'sources') return this.sources;
             if (type === 'dropped') return this.droppedResources;
             if (type === 'my-sites' || type === 'sites') return this.constructionSites;
             if (type === 'my-spawns') return this.spawns;
+            if (type === 'creeps' || type === 'my-creeps') return Object.values(game.creeps).filter(unit => unit.room.name === this.name && (type !== 'my-creeps' || unit.my));
+            if (type === 'power-creeps') return Object.values(game.powerCreeps).filter(unit => unit.room.name === this.name);
             if (type === 'structures' || type === 'my-structures') return [this.storage, this.terminal, ...this.spawns, ...this.extensions, ...this.containers].filter(Boolean);
             return [];
         },
@@ -41,7 +48,7 @@ function world(kind, options = {}) {
     room.sources.push(source);
     const objects = { source };
     const game = {
-        time: 10, shard: { name: spec.targetShard }, rooms: { [room.name]: room }, creeps: {}, structures: {}, gcl: { level: 10 }, cpu: { bucket: 10000, getUsed: () => 0 },
+        time: 10, shard: { name: spec.targetShard }, rooms: { [room.name]: room }, creeps: {}, powerCreeps: {}, structures: {}, gcl: { level: 10 }, cpu: { bucket: 10000, getUsed: () => 0 },
         map: { getRoomStatus: () => ({ status: 'normal' }), getRoomLinearDistance: () => 1, findRoute: () => [] },
         getObjectById: id => objects[id] || [room.storage, room.terminal, ...room.sources, ...room.containers,
             ...room.droppedResources, ...room.constructionSites].find(item => item?.id === id),
@@ -56,6 +63,8 @@ function world(kind, options = {}) {
             WORK: 'work', CARRY: 'carry', MOVE: 'move', CLAIM: 'claim', ATTACK: 'attack', HEAL: 'heal', TOUGH: 'tough', RANGED_ATTACK: 'ranged_attack',
             FIND_SOURCES: 'sources', FIND_DROPPED_RESOURCES: 'dropped', FIND_MY_CONSTRUCTION_SITES: 'my-sites', FIND_CONSTRUCTION_SITES: 'sites',
             FIND_STRUCTURES: 'structures', FIND_MY_STRUCTURES: 'my-structures', FIND_MY_SPAWNS: 'my-spawns',
+            FIND_CREEPS: 'creeps', FIND_MY_CREEPS: 'my-creeps', FIND_POWER_CREEPS: 'power-creeps',
+            TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'look-structures', LOOK_CREEPS: 'look-creeps', LOOK_POWER_CREEPS: 'look-power',
             STRUCTURE_SPAWN: 'spawn', STRUCTURE_EXTENSION: 'extension', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container', STRUCTURE_TERMINAL: 'terminal', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall', STRUCTURE_OBSERVER: 'observer', STRUCTURE_PORTAL: 'portal',
             OBSERVER_RANGE: 10, OK: 0, ERR_NO_PATH: -2, ERR_NOT_ENOUGH_RESOURCES: -6, ERR_INVALID_TARGET: -7,
             ERR_NOT_IN_RANGE: -9, ERR_GCL_NOT_ENOUGH: -15, RoomPosition: class { constructor(x, y, roomName) { Object.assign(this, position(x, y, roomName)); } },

@@ -118,7 +118,7 @@ test('disabled creep profiling allocates no values list for Game.creeps and perf
         name, spawning: false, memory: { role: 'builder', working, data: { name } },
         room: { name: 'W1N1', my: true, towers: [] }, hits: 100, hitsMax: 100,
     });
-    const game = { creeps: { a: unit('a'), b: unit('b', true) } };
+    const game = { time: 1, shard: { name: 'shard3' }, rooms: {}, creeps: { a: unit('a'), b: unit('b', true) } };
     const loader = createSourceLoader({
         globals: {
             Game: game, Memory: { warMode: {} },
@@ -159,7 +159,7 @@ function profiledUnit(name, role = 'builder', options = {}) {
 function roleProfilingWorld(creeps, costs, warMode = {}) {
     let used = 0, reads = 0, creepValues = 0;
     const calls = [], logs = [];
-    const game = { time: 1, shard: { name: 'shard3' }, creeps, cpu: { getUsed() { reads++; return used; } } };
+    const game = { time: 1, shard: { name: 'shard3' }, rooms: {}, creeps, cpu: { getUsed() { reads++; return used; } } };
     const loader = createSourceLoader({ globals: {
         Game: game, Memory: { warMode }, console: { log: (...values) => logs.push(values.map(String).join(' ')) },
         Object: new Proxy(Object, { get(target, key) {
@@ -199,10 +199,12 @@ test('role profiling combines same-role units in the current tick without indivi
         'builder-one': { prepare: 1, work: 2 }, 'builder-two': { prepare: 2, work: 3 },
     });
     w.execution.creepWorkController();
-    assert.equal(w.reads(), 4, 'each eligible role invocation needs only its start and end CPU reads');
+    assert.equal(w.reads(), 6, 'two reads measure the relay prepass; each eligible role needs only its own start/end');
     assert.equal(w.creepValues(), 0); assert.equal(w.loader.globals.sortCalls, 0); assert.deepEqual(w.logs, []);
     assert.ok(w.calls.includes('builder-one:source')); assert.ok(w.calls.includes('builder-two:target'));
-    const entries = w.profiling.getCpuProfile(100);
+    const profile = w.profiling.getCpuProfile(100);
+    assert.equal(profile.find(entry => entry.name === 'creep:haulerRelay').current, 0);
+    const entries = profile.filter(entry => entry.name !== 'creep:haulerRelay');
     assert.deepEqual(Array.from(entries, entry => entry.name), ['creep:builder']);
     assert.equal(entries[0].count, 2); assert.equal(entries[0].rollingTotal, 8);
     assert.equal(entries[0].current, 8); assert.equal(entries[0].rollingMax, 8); assert.equal(entries[0].max, 5);
@@ -217,7 +219,7 @@ test('unknown, unprepared and failed unit CPU is recorded while role failures re
         failed: { factory: 1, prepare: 1, work: 4, workFailure: new Error('build failed') }, healthy: { prepare: 1, work: 2 },
     });
     assert.doesNotThrow(() => w.execution.creepWorkController());
-    assert.equal(w.reads(), 8); assert.equal(w.calls.includes('pending:source'), false);
+    assert.equal(w.reads(), 10); assert.equal(w.calls.includes('pending:source'), false);
     assert.ok(w.calls.includes('healthy:source'));
     assert.equal(w.logs.length, 1); assert.match(w.logs[0], /\[unit:failed\].*build failed/s);
     const entries = w.profiling.getCpuProfile(100);
@@ -226,14 +228,14 @@ test('unknown, unprepared and failed unit CPU is recorded while role failures re
     assert.equal(entries.find(entry => entry.name === 'creep:manager').current, 3);
 });
 
-test('spawning, team and war-skipped creeps create no role samples and no CPU reads', () => {
+test('spawning, team and war-skipped creeps create no additional role samples or CPU reads', () => {
     const spawning = profiledUnit('spawning', 'builder', { spawning: true });
     const team = profiledUnit('team'); team.memory.isTeam = true;
     const w = roleProfilingWorld({ spawning, team, peaceful: profiledUnit('peaceful'), fighter: profiledUnit('fighter', 'defender') },
         { fighter: { prepare: 1, work: 2 } }, { W1N1: true });
     w.execution.creepWorkController();
-    assert.equal(w.reads(), 2); assert.equal(w.calls.some(name => /spawning|team|peaceful/.test(name)), false);
-    assert.deepEqual(Array.from(w.profiling.getCpuProfile(100), entry => entry.name), ['creep:defender']);
+    assert.equal(w.reads(), 4); assert.equal(w.calls.some(name => /spawning|team|peaceful/.test(name)), false);
+    assert.deepEqual(Array.from(w.profiling.getCpuProfile(100), entry => entry.name).filter(name => name !== 'creep:haulerRelay'), ['creep:defender']);
 });
 
 test('a role CPU sampler failure cannot stop subsequent units or replace a business failure report', () => {

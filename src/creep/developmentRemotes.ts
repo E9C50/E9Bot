@@ -190,6 +190,16 @@ function activeTarget(state: DevelopmentRemoteState | undefined, task: Developme
     return state?.selectedRooms.includes(task.targetRoom) === true && fresh(intel) &&
         (task.source === undefined || intel.sources.some(source => source.id === task.source!.id))
 }
+/** Read-only safety gate for a handoff that skips this tick's ordinary remote prepare hook. */
+export function canRelayDevelopmentHauler(creep: Creep, data: DevelopmentRemoteData): boolean {
+    const task = data.developmentRemote, home = Game.rooms[creep.memory.spawnRoom]
+    if (task.kind !== 'hauler' || task.retiring || task.homeRoom !== creep.memory.spawnRoom || !enabled(home) || atWar(home) ||
+        manualRooms().has(task.targetRoom) || !activeTarget(home.memory.developmentRemotes, task)) return false
+    const intel = home.memory.developmentRemotes!.intel[task.targetRoom]
+    if ((intel.blockedUntil || 0) > Game.time) return false
+    const visible = Game.rooms[task.targetRoom]
+    return visible === undefined || issue(visible, home) === undefined
+}
 function localEconomyReady(home: Room): boolean {
     if (home.energyCapacityAvailable < policy.minimumMiningCapacity) return false
     const sourceIds = new Set<string>(home.sources.map(source => source.id))

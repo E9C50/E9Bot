@@ -7,13 +7,15 @@ import { runtimePolicy } from 'settings/runtime'
 import { configureBody, previewBodies } from 'creep/bodyConsole'
 import { createCombatTask, listCombatTasks, cancelCombatTask } from 'combat/missions'
 import type { CombatTaskOptions } from 'combat/types'
+import { getHaulerRelayStatus } from 'creep/haulerRelay'
 
 export default class ConsoleExtension {
+    public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
     public combatTask(home: string, target: string, options?: CombatTaskOptions): string { return createCombatTask(home, target, options) }
     public combatTasks(id?: string): string { return listCombatTasks(id) }
     public combatTaskCancel(id: string): string { return cancelCombatTask(id) }
     public help(): string {
-        return 'combatTask("起点房间", "目标房间", {mode:"attack"或"hold"}) 发布战斗任务；combatTasks(id?) 查看；combatTaskCancel(id) 撤收；' + 'bodyPreview("房间", "角色") 预览未强化/T1/T2/T3身体；bodyConfig("房间", "角色", 配置或null) 设置/恢复默认；shardTask("起点房间", "目标shard/终点房间", 可选配置) 自动观察 Portal 并规划路线；shardTasks() 状态；shardPortals() 情报；shardTaskPause(id)/shardTaskResume(id)/shardTaskCancel(id)；CPU 默认统计最近 100 tick 并定期输出：cpuProfile() 查看，cpuProfile(false) 关闭，cpuProfile(true) 开启；cpuReset() 清空。详见 README。'
+        return 'combatTask("起点房间", "目标房间", {mode:"attack"或"hold"}) 发布战斗任务；combatTasks(id?) 查看；combatTaskCancel(id) 撤收；' + 'bodyPreview("房间", "角色") 预览未强化/T1/T2/T3身体；bodyConfig("房间", "角色", 配置或null) 设置/恢复默认；shardTask("起点房间", "目标shard/终点房间", 可选配置) 自动观察 Portal 并规划路线；shardTasks() 状态；shardPortals() 情报；shardTaskPause(id)/shardTaskResume(id)/shardTaskCancel(id)；haulRelay() 查看最近 100 tick 搬运交接次数/能量；CPU 默认统计最近 100 tick 并定期输出：cpuProfile() 查看，cpuProfile(false) 关闭，cpuProfile(true) 开启；cpuReset() 清空。详见 README。'
     }
 
     public bodyConfig(room: string, role: string, profile?: CreepBodyProfile | null): string { return configureBody(room, role, profile) }

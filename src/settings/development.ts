@@ -4,6 +4,7 @@ export const developmentPolicy = {
     minimumLevel: 1,
     maximumLevel: 7,
     mining: { workPartsPerSource: 5, maximumCreepsPerSource: 3, handoverRange: 2, pauseWhenBufferFull: true },
+    controller: { geometryCacheTicks: 100, relayReserveTicks: 1, relayTargetTicks: 2 },
     hauling: {
         maximumCreepsPerSource: 3, maximumCarryPartsPerCreep: 20, travelMargin: 1.3,
         minimumLoadRatio: 1, partialLoadIdleTicks: 10, emergencyLoadEnergy: 50,

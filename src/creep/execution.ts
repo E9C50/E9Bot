@@ -7,6 +7,7 @@ import { isDevelopmentRemoteData } from './developmentRemotes'
 import { retireDevelopmentCreep } from './developmentRetirement'
 import { runCombatUnits } from 'combat/missions'
 import { requestTowerSupport } from 'combat/defense'
+import { runHaulerRelays, haulerRelayHandled } from './haulerRelay'
 
 function reportFailure(name: string, error: unknown): void {
     console.log(
@@ -27,10 +28,15 @@ export function creepWorkController(): void {
     const samples: [string, number][] | undefined = profiling ? [] : undefined
     const warModes = Memory.warMode || {}
     const empireAtWar = runtimePolicy.warModeScope === 'empire' && Object.values(warModes).some(Boolean)
+    const relayStarted = roleProfiling ? Game.cpu.getUsed() : 0
+    try { runHaulerRelays() } catch (error) { reportFailure('haulerRelay', error) }
+    if (roleProfiling) {
+        try { recordCpuSample('creep:haulerRelay', Game.cpu.getUsed() - relayStarted) } catch (_) {}
+    }
 
     for (const name in Game.creeps) {
         const creep = Game.creeps[name]
-        if (creep.spawning || creep.memory.isTeam || creep.memory.combatTaskId) continue
+        if (creep.spawning || creep.memory.isTeam || creep.memory.combatTaskId || haulerRelayHandled(creep)) continue
         const atWar =
             runtimePolicy.warModeScope === 'empire'
                 ? empireAtWar

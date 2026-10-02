@@ -15,7 +15,7 @@ function store(energy = 0, capacity = 50, other = {}) {
 
 function world(level = 3) {
     const objects = new Map(), calls = [], walls = new Set();
-    const game = { time: 100, shard: { name: 'shard3' }, flags: {}, getObjectById: id => objects.get(id) || null };
+    const game = { time: 100, shard: { name: 'shard3' }, flags: {}, creeps: {}, getObjectById: id => objects.get(id) || null };
     function position(value) { return value.pos || value; }
     class RoomPosition {
         constructor(x, y, roomName = 'W1N1') { Object.assign(this, { x, y, roomName }); }
@@ -55,6 +55,7 @@ function world(level = 3) {
     }
     function creep(name = 'worker', role = 'upgrader', x = 23, y = 25, energy = 20, capacity = 100) {
         const unit = { name, id: name, room, pos: p(x, y), memory: { role }, store: store(energy, capacity), spawning: false };
+        unit.getActiveBodyparts = () => 1;
         for (const method of ['upgradeController', 'harvest', 'withdraw', 'transfer', 'pickup', 'repair', 'build', 'signController']) {
             unit[method] = (target, resource, amount) => {
                 calls.push({ method, name, target: target.id, resource, ...(amount === undefined ? {} : { amount }) });
@@ -67,11 +68,11 @@ function world(level = 3) {
         unit.say = text => { calls.push({ method: 'say', name, text }); return 0; };
         unit.pickupDroppedResource = (...args) => { calls.push({ method: 'pickupDroppedResource', name, args }); return false; };
         for (const method of ['takeFromTarget', 'transferToTarget']) unit[method] = (target, resource) => { calls.push({ method, name, target: target.id, resource }); return true; };
-        room.units.push(unit); objects.set(name, unit); return unit;
+        room.units.push(unit); objects.set(name, unit); game.creeps[name] = unit; return unit;
     }
     const loader = createSourceLoader({
         globals: {
-            Game: game, RoomPosition, WORK: 'work', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps',
+            Game: game, RoomPosition, WORK: 'work', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
             LOOK_STRUCTURES: 'structure', LOOK_CREEPS: 'creep', TERRAIN_MASK_WALL: 1,
             STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_LINK: 'link',
             CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
@@ -274,7 +275,7 @@ test('controller seats reject natural Source and Mineral tiles even on plain ter
     const seat = w.logistics.controllerUpgradePosition(unit, buffer);
     assert.equal(seat.isEqualTo(source), false);
     assert.equal(seat.isEqualTo(w.room.mineral), false);
-    assert.equal(seat.isNearTo(buffer), true);
+    assert.equal(seat.isEqualTo(unit), true, 'a legal productive current seat is retained even outside direct withdraw range');
     assert.equal(seat.inRangeTo(w.room.controller, 3), true);
 });
 
@@ -753,7 +754,7 @@ test('continuous controller supply lets a stationary upgrader refill and upgrade
     assert.equal(upgraded, 800, 'the simulated 20 WORK consumer has no source/target transition gap');
 });
 
-test('a living 20 WORK upgrader with quota one consumes at most forty upgrade energy across forty ticks while still refilling', () => {
+test('a living 20 WORK upgrader keeps working across forty ticks despite a reduced new-birth quota', () => {
     const w = world(), buffer = w.structure('buffer', 'container', 22, 25, 1000), unit = w.creep('upgrader', 'upgrader', 23, 25, 20, 50);
     unit.getActiveBodyparts = part => part === 'work' ? 20 : 0;
     w.room.memory.creepConfig = { upgrader: { development: { workParts: 1 } } };
@@ -764,11 +765,11 @@ test('a living 20 WORK upgrader with quota one consumes at most forty upgrade en
         spent += w.intents('upgradeController').length * 20; refills += w.intents('withdraw').length;
         w.game.time++;
     }
-    assert.equal(spent, 40);
-    assert.equal(refills, 40, 'WORK throttling never gates Store logistics');
+    assert.equal(spent, 800);
+    assert.equal(refills, 40, 'a smaller birth budget never throttles existing upgrade or Store logistics');
 });
 
-test('mobile upgrade WORK throttling does not stop movement or adjacent withdrawal', () => {
+test('a reduced birth quota does not interrupt existing mobile upgrade, movement or adjacent withdrawal', () => {
     const w = world(1), unit = w.creep('upgrader', 'upgrader', 10, 10, 20), stock = w.structure('mine', 'container', 10, 11, 1000);
     unit.getActiveBodyparts = part => part === 'work' ? 20 : 0;
     w.room.memory.creepConfig = { upgrader: { development: { workParts: 1 } } };
@@ -780,7 +781,7 @@ test('mobile upgrade WORK throttling does not stop movement or adjacent withdraw
     unit.pos = w.p(23, 25); w.clear();
     let upgraded = 0;
     for (let tick = 0; tick < 40; tick++) { w.clear(); behavior.source(unit); upgraded += w.intents('upgradeController').length * 20; w.game.time++; }
-    assert.equal(upgraded, 40);
+    assert.equal(upgraded, 800);
 });
 
 test('RCL8 upgrade ignores development quotas and retains every-tick native behavior', () => {

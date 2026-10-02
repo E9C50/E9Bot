@@ -6,6 +6,9 @@ import { getSourceMiningWorkTarget } from './developmentEconomy'
 /** Growth units yield to the normal population only after its essential production is working. */
 export function retireDevelopmentCreep(creep: Creep): boolean {
     if (creep.memory.development === undefined) return false
+    // Upgrading bodies have already been paid for. Oversupply and the RCL8
+    // transition stop future births; they never recycle a living upgrader.
+    if (creep.memory.role === 'upgrader') return false
     const home = Game.rooms[creep.memory.spawnRoom]
     if (home?.controller?.my !== true) return false
     const configs = home.memory.creepConfig || {}

@@ -2,6 +2,7 @@ import { getClosestTarget, getDistance } from "utils"
 import { developmentWorkAllowed, isDevelopingRoom } from 'creep/development'
 import { controllerEnergyBuffer, controllerUpgradePosition } from 'creep/developmentLogistics'
 import { runStationaryUpgrading } from 'creep/stationaryUpgrading'
+import { controllerEnergyRelayCanSupply, runControllerEnergyRelay } from 'creep/controllerEnergyRelay'
 
 function usableStore(target: AnyStoreStructure | null | undefined): target is AnyStoreStructure {
     return target != undefined && 'store' in target && (!('my' in target) || target.my !== false) && target.store[RESOURCE_ENERGY] > 0
@@ -20,19 +21,24 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
     const buffer = controllerEnergyBuffer(creep.room)
     creep.memory.working = energy > 0
     if (buffer != undefined) {
-        const seat = controllerUpgradePosition(creep, buffer)
-        if (seat != undefined && !creep.pos.isEqualTo(seat)) creep.moveTo(seat, { range: 0 })
+        const supplied = controllerEnergyRelayCanSupply(creep, buffer)
+        const retainCurrent = energy > 0 || creep.pos.isNearTo(buffer) || supplied
+        const seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent)
+        if (seat != undefined && !creep.pos.isEqualTo(seat)) creep.moveTo(seat, { range: 0, ignoreCreeps: false })
         if (getDistance(creep.pos, controller.pos) <= 3 && energy > 0 && developmentWorkAllowed(creep)) creep.upgradeController(controller)
-        if (creep.pos.isNearTo(buffer) && creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0 && buffer.store[RESOURCE_ENERGY] > 0) {
-            creep.withdraw(buffer, RESOURCE_ENERGY)
-        }
+        runControllerEnergyRelay(creep, buffer)
         return true
     }
 
     // A mobile bootstrap worker consumes partial loads instead of waiting to fill.
     if (energy > 0) {
-        if (getDistance(creep.pos, controller.pos) > 3) creep.moveTo(controller, { range: 3 })
-        else if (developmentWorkAllowed(creep)) creep.upgradeController(controller)
+        if (getDistance(creep.pos, controller.pos) > 3) {
+            creep.memory.dontPullMe = false
+            creep.moveTo(controller, { range: 3, ignoreCreeps: false })
+        } else {
+            controllerUpgradePosition(creep)
+            if (developmentWorkAllowed(creep)) creep.upgradeController(controller)
+        }
         if (creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
             const nearby = energyStores(creep.room).find(target => usableStore(target) && creep.pos.isNearTo(target))
             if (nearby != undefined) creep.withdraw(nearby, RESOURCE_ENERGY)
@@ -40,6 +46,7 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
         return true
     }
 
+    creep.memory.dontPullMe = false
     let stock = Game.getObjectById<AnyStoreStructure>(data.sourceId)
     if (!usableStore(stock)) {
         stock = getClosestTarget(creep.pos, energyStores(creep.room).filter(usableStore)) || null
