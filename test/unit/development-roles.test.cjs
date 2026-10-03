@@ -590,10 +590,14 @@ test('development miner seats support source and link simultaneously and prefer 
     assert.equal(w.intents('transfer')[0].target, link.id);
 });
 
-test('seated development miners remain productive instead of chasing an empty preferred container tile', () => {
+test('development miners remain productive on the preferred container tile after relocating', () => {
     const w = world(), source = w.source(), container = w.structure('container', 'container', 11, 10);
     const unit = w.creep('miner', 'harvester', 11, 11, 20);
     const behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), false);
+    assert.equal(w.intents('moveTo')[0].range, 0);
+    unit.pos = container.pos;
+    w.game.time++;
     for (let tick = 0; tick < 5; tick++) {
         w.clear(); assert.equal(behavior.prepare(unit), true); behavior.source(unit);
         assert.equal(w.intents('moveTo').length, 0);
@@ -601,6 +605,30 @@ test('seated development miners remain productive instead of chasing an empty pr
         assert.equal(w.intents('transfer')[0].target, container.id);
         w.game.time++;
     }
+});
+
+test('an already-ready development miner relocates from an adjacent seat onto a free container', () => {
+    const w = world(), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    const unit = w.creep('miner', 'harvester', 10, 11, 10, 50);
+    unit.memory.ready = true;
+    const behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), false);
+    const move = w.intents('moveTo')[0];
+    assert.equal(move.x, container.pos.x);
+    assert.equal(move.y, container.pos.y);
+    assert.equal(move.range, 0);
+    unit.pos = container.pos; w.game.time++; w.clear();
+    assert.equal(behavior.prepare(unit), true);
+    behavior.source(unit);
+    assert.equal(w.intents('harvest').length, 1);
+    assert.equal(w.intents('moveTo').length, 0);
+});
+
+test('a carrier miner keeps a usable backup seat when another miner occupies the container', () => {
+    const w = world(), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    w.creep('owner', 'harvester', 11, 10, 10, 50);
+    const unit = w.creep('backup', 'harvester', 10, 11, 10, 50);
+    assert.equal(w.logistics.sourceHarvestPosition(unit, source, container).isEqualTo(unit.pos), true);
 });
 
 test('moving development miners reserve separate source/container workstations during one tick', () => {

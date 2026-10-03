@@ -11,7 +11,7 @@
     "copy-local": "rollup -c --environment COPY_LOCAL:true",
     "push-main": "rollup -c --environment DEST:main",
     "push-pserver": "rollup -c --environment DEST:pserver",
-    "push-avarice": "rollup -c --environment DEST:avarice",
+    "push-challenge5": "rollup -c --environment DEST:challenge5",
     "push-local": "rollup -c --environment DEST:local",
     "push-season": "rollup -c --environment DEST:season",
     "push-sim": "rollup -c --environment DEST:sim",

@@ -34,10 +34,18 @@ export default {
 
   plugins: [
     clear({ targets: ["dist"] }),
+    // 旧解析插件遇到 jssha 的双模块声明入口时，显式使用运行时代码。
+    {
+      name: 'jssha-runtime',
+      resolveId(id) {
+        if (id === 'jssha') return require.resolve('jssha');
+      }
+    },
     resolve({ rootDir: "src" }),
 
     commonjs(),
-    typescript(),
+    // 显式匹配扩展名，避免默认 extglob 过滤器漏掉 TypeScript 文件。
+    typescript({ include: /\.tsx?$/, exclude: /\.d\.ts$/ }),
 
     terser(),
 

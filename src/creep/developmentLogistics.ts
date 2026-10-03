@@ -213,8 +213,15 @@ export function sourceHarvestPosition(creep: Creep, source: Source, target: Stru
         const owner = reservedSeats.get(`${creep.room.name}/${x}/${y}`)
         return owner == undefined || owner == creep.name
     }
-    // A functioning source/buffer intersection wins over the preferred container
-    // tile. New arrivals cannot reserve the same workstation this tick.
+    // Prefer the container itself even when the miner already has a usable
+    // adjacent seat. Occupied/reserved containers still allow carrier miners
+    // to share production from another source/buffer intersection.
+    if (target.structureType === STRUCTURE_CONTAINER && source.pos.isNearTo(target) &&
+        owned(target.pos.x, target.pos.y) && walkable(creep.room, target.pos.x, target.pos.y, creep.name)) {
+        reservedSeats.set(`${creep.room.name}/${target.pos.x}/${target.pos.y}`, creep.name)
+        return target.pos
+    }
+    // New arrivals cannot reserve the same workstation this tick.
     if (creep.pos.isNearTo(source) && creep.pos.isNearTo(target) && (!directMining || creep.pos.isEqualTo(target)) && owned(creep.pos.x, creep.pos.y) &&
         walkable(creep.room, creep.pos.x, creep.pos.y, creep.name)) {
         reservedSeats.set(`${creep.room.name}/${creep.pos.x}/${creep.pos.y}`, creep.name)

@@ -20,9 +20,16 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
-        // 如果不在旁边，那就过去
-        if (getDistance(creep.pos, sourceTarget.pos) > 1) {
-            creep.moveTo(sourceTarget)
+        // 矿旁有容器时固定站在容器上，已在矿旁也要调整站位。
+        const container = creep.room.containers.find(candidate => sourceTarget.pos.isNearTo(candidate))
+        if (container != undefined && !creep.pos.isEqualTo(container)) {
+            creep.moveTo(container, { range: 0 })
+            return false
+        }
+
+        // 没有容器时移动到矿旁。
+        if (container == undefined && getDistance(creep.pos, sourceTarget.pos) > 1) {
+            creep.moveTo(sourceTarget, { range: 1 })
             return false
         }
 

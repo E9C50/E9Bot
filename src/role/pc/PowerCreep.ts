@@ -88,7 +88,7 @@ export const powerSpawnController = function (): void {
         // Source重生技能
         if (pc.isPowerAvailable(PWR_REGEN_SOURCE) && !warMode) {
             for (let index in pc.room.sources) {
-                if ((pc.room.sources[index].effects == undefined || pc.room.sources[index].effects.length == 0) && pc.room.sources[index].energy > 0) {
+                if ((pc.room.sources[index].effects?.length ?? 0) == 0 && pc.room.sources[index].energy > 0) {
                     if (getDistance(pc.pos, pc.room.sources[index].pos) >= 3) {
                         pc.moveTo(pc.room.sources[index])
                         return
@@ -122,7 +122,7 @@ export const powerSpawnController = function (): void {
         const opSpawnFlag = Game.flags[pc.room.name + '_OPSPAWN']
         if (opSpawnFlag && opSpawnFlag.color == COLOR_GREEN && pc.isPowerAvailable(PWR_OPERATE_SPAWN)) {
             for (let index in pc.room.spawns) {
-                if (pc.room.spawns[index].effects == undefined || pc.room.spawns[index].effects.length == 0) {
+                if ((pc.room.spawns[index].effects?.length ?? 0) == 0) {
                     if (getDistance(pc.pos, pc.room.spawns[index].pos) >= 3) {
                         pc.moveTo(pc.room.spawns[index])
                         return
