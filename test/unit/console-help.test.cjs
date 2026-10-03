@@ -43,7 +43,7 @@ function world() {
         'creep/haulerRelay': { getHaulerRelayStatus: failAction },
     };
     const loader = createSourceLoader({ globals: { Game: deniedWorld, Memory: deniedWorld }, modules });
-    const catalog = loader.load('console/help');
+    const catalog = loader.load('runtime/consoleHelp');
     const ConsoleExtension = loader.load('mount/extension/ConsoleExtension').default;
     return { ...catalog, console: new ConsoleExtension(), policy: modules['settings/roomPolicy'].roomPolicy };
 }
@@ -165,7 +165,7 @@ test('actual configured flag names and index bounds flow into help instead of st
         'settings/population': { populationPolicy },
         'settings/creep': { spawnPriority: literalSetting('settings/creep.ts', 'spawnPriority') },
     } });
-    const { renderHelp } = loader.load('console/help');
+    const { renderHelp } = loader.load('runtime/consoleHelp');
     assert.ok(renderHelp('previewCustom', 'text').includes('createFlag("previewCustom")'));
     assert.ok(renderHelp('OUT', 'text').includes('i=0..3'));
     assert.ok(renderHelp('RF', 'text').includes('i=0..5'));

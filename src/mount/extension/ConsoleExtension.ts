@@ -8,7 +8,7 @@ import { configureBody, previewBodies } from 'creep/bodyConsole'
 import { createCombatTask, listCombatTasks, cancelCombatTask } from 'combat/missions'
 import type { CombatTaskOptions } from 'combat/types'
 import { getHaulerRelayStatus } from 'creep/haulerRelay'
-import { renderHelp } from 'console/help'
+import { renderHelp } from 'runtime/consoleHelp'
 
 export default class ConsoleExtension {
     public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
