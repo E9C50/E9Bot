@@ -8,6 +8,7 @@ import terser from '@rollup/plugin-terser';
 import copy from 'rollup-plugin-copy'
 import clear from 'rollup-plugin-clear';
 import screeps from 'rollup-plugin-screeps';
+const { validateBundle } = require('./scripts/bundle-validation.cjs');
 
 let cfg;
 // 普通 build 是纯本地构建，即使环境中遗留 DEST 也不会上传或复制。
@@ -48,6 +49,15 @@ export default {
     typescript({ include: /\.tsx?$/, exclude: /\.d\.ts$/ }),
 
     terser(),
+
+    {
+      name: 'screeps-module-validation',
+      generateBundle(_options, bundle) {
+        for (const artifact of Object.values(bundle)) {
+          if (artifact.type === 'chunk') validateBundle(artifact.code, { filename: artifact.fileName });
+        }
+      }
+    },
 
     ...(cfg ? [screeps({ config: cfg })] : []),
 
