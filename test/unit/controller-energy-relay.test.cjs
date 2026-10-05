@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function world() {
-    const calls = [], intents = new Map(), walls = new Set(), units = [], objects = new Map(), spentByName = new Map();
+    const calls = [], intents = new Map(), walls = new Set(), units = [], objects = new Map(), spentByName = new Map(), builtByName = new Map();
     const counters = { terrain: 0, find: {}, look: 0, work: 0 };
     const game = { time: 100, shard: { name: 'shard1' }, creeps: {}, rooms: {}, flags: {}, getObjectById: id => objects.get(id) || null };
     const range = (a, b) => { a = a.pos || a; b = b.pos || b; return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); };
@@ -25,7 +25,7 @@ function world() {
     }
     const buffer = { id: 'buffer', pos: p(22, 25), structureType: 'container', store: store(2000, 2000) };
     room.containers.push(buffer); room.structures.push(buffer); objects.set(buffer.id, buffer);
-    const loader = createSourceLoader({ globals: { Game: game, RoomPosition, RESOURCE_ENERGY: 'energy', WORK: 'work',
+    const loader = createSourceLoader({ globals: { Game: game, RoomPosition, RESOURCE_ENERGY: 'energy', WORK: 'work', BUILD_POWER: 5,
         TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', LOOK_POWER_CREEPS: 'power',
         FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_MY_CREEPS: 'my', FIND_STRUCTURES: 'structures',
         STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_RAMPART: 'rampart', OK: 0, ERR_NOT_IN_RANGE: -9 },
@@ -37,7 +37,14 @@ function world() {
             memory: { role, working: energy > 0, data: role === 'sBuilder' ? { unitKind: 'builder', phase: 'work', task: { targetRoom: room.name, targetShard: game.shard.name, targetLevel: 4 } } : {} },
             getActiveBodyparts() { counters.work++; return work; },
             moveTo(target, options) { calls.push({ type: 'move', name, target, options }); return 0; },
-            upgradeController() { assert.ok(unit.store.energy > 0, 'no upgrade based on hypothetical incoming energy'); calls.push({ type: 'upgrade', name }); intents.set(name, { ...intents.get(name), upgrade: work }); return 0; },
+            upgradeController() { assert.ok(unit.store.energy > 0, 'no upgrade based on hypothetical incoming energy');
+                assert.equal(intents.get(name)?.build, undefined, 'upgrade must not overwrite a build WORK intent');
+                calls.push({ type: 'upgrade', name }); intents.set(name, { ...intents.get(name), upgrade: work }); return 0; },
+            harvest() { assert.equal(intents.get(name)?.build, undefined, 'harvest must not overwrite a build WORK intent');
+                calls.push({ type: 'harvest', name }); return 0; },
+            build(target) { assert.ok(unit.store.energy > 0, 'no build based on hypothetical incoming energy'); assert.ok(range(unit, target) <= 3);
+                assert.equal(intents.get(name)?.upgrade, undefined, 'build must not compete with an upgrade WORK intent');
+                calls.push({ type: 'build', name, target: target.id }); intents.set(name, { ...intents.get(name), build: { target, amount: work * 5 } }); return 0; },
             transfer(target, resource, amount) { assert.ok(range(unit, target) <= 1); assert.ok(amount > 0 && amount <= unit.store.energy && amount <= target.store.getFreeCapacity());
                 calls.push({ type: 'transfer', name, target: target.name, amount }); intents.set(name, { ...intents.get(name), transfer: { target, amount } }); return 0; },
             withdraw(target, resource, amount = unit.store.getFreeCapacity()) { assert.ok(amount > 0 && amount <= unit.store.getFreeCapacity() && amount <= target.store.energy);
@@ -53,6 +60,8 @@ function world() {
             if (intent.transfer) { const amount = Math.min(intent.transfer.amount, unit.store.energy, intent.transfer.target.store.getFreeCapacity()); unit.store.energy -= amount; intent.transfer.target.store.energy += amount; }
             if (intent.withdraw) { const amount = Math.min(intent.withdraw.amount, unit.store.getFreeCapacity(), intent.withdraw.target.store.energy); unit.store.energy += amount; intent.withdraw.target.store.energy -= amount; }
             if (intent.upgrade) { const amount = Math.min(unit.store.energy, intent.upgrade); unit.store.energy -= amount; spent += amount; spentByName.set(unit.name, (spentByName.get(unit.name) || 0) + amount); }
+            if (intent.build) { const amount = Math.min(unit.store.energy, intent.build.amount, intent.build.target.progressTotal - intent.build.target.progress);
+                unit.store.energy -= amount; intent.build.target.progress += amount; builtByName.set(unit.name, (builtByName.get(unit.name) || 0) + amount); }
         }
         intents.clear(); game.time++;
     }
@@ -60,7 +69,11 @@ function world() {
         const item = { id, pos: p(x, y), structureType: 'link', my: true, isActive: () => true, store: store(energy, 800) };
         room.links.push(item); room.structures.push(item); objects.set(id, item); return item;
     }
-    return { game, room, buffer, calls, counters, units, walls, p, creep, link, nextTick, spentByName, spent: () => spent,
+    function containerSite(x, y, id = 'controller-container-site') {
+        const item = { id, pos: p(x, y), structureType: 'container', my: true, progress: 0, progressTotal: 5000 };
+        room.constructionSites.push(item); objects.set(id, item); return item;
+    }
+    return { game, room, buffer, calls, counters, units, walls, p, creep, link, containerSite, nextTick, spentByName, builtByName, spent: () => spent,
         logistics: loader.load('creep/developmentLogistics'), relay: loader.load('creep/controllerEnergyRelay'),
         role: loader.load('role/base/RoleBaseUpgrader').default, aid: loader.load('role/support/builderWorkPosition') };
 }
@@ -253,6 +266,51 @@ test('a mineral-only buffer without an energy key creates neither a NaN withdraw
     assert.equal(w.relay.runControllerEnergyRelay(receiver, w.buffer), true, 'real carried surplus can still supply a neighbor');
     assert.equal(w.calls.some(call => call.type === 'withdraw'), false, 'existing cargo does not make a mineral-only buffer withdrawable');
     assert.ok(w.calls.every(call => Number.isFinite(call.amount)), 'all planned carry quantities are finite');
+});
+
+test('a four-WORK upgrader preserves its real 20-energy build batch while construction and native withdraw coexist', () => {
+    const w = world(), site = w.containerSite(25, 27), root = w.creep('root', 23, 25, 20, 4, 50), outer = w.creep('outer', 24, 24, 0, 2, 50);
+    const initial = w.buffer.store.energy + root.store.energy;
+    const cached = w.relay.prepareControllerEnergyRelay(w.room, w.buffer);
+    assert.equal(cached.nodes.get(root.name).work, 4, 'public WORK remains actual active body parts');
+    assert.equal(cached.nodes.get(root.name).energyDemand, 20, 'native construction reserves BUILD_POWER energy per WORK');
+    for (const unit of [outer, root]) w.role({ sourceId: w.buffer.id }).target(unit);
+    assert.equal(w.calls.some(call => call.name === root.name && call.type === 'transfer'), false, 'the actual construction batch cannot be lent to another worker');
+    assert.deepEqual(w.calls.filter(call => call.name === root.name).map(call => call.type).sort(), ['build', 'withdraw']);
+    assert.equal(w.calls.some(call => call.type === 'upgrade' || call.type === 'harvest'), false, 'the builder has one construction WORK intent and empty receivers use no hypothetical cargo');
+    assert.equal(w.calls.find(call => call.name === root.name && call.type === 'withdraw').amount, 30, 'only initial native free capacity is available');
+    w.nextTick();
+    assert.equal(w.builtByName.get(root.name), 20); assert.equal(site.progress, 20);
+    assert.equal(w.spent(), 0);
+    assert.equal(w.buffer.store.energy + w.units.reduce((sum, unit) => sum + unit.store.energy, 0) + site.progress, initial);
+});
+
+test('a construction donor may lend only surplus above BUILD_POWER while an empty neighbor waits for native next-tick cargo', () => {
+    const w = world(), site = w.containerSite(25, 27), root = w.creep('root', 23, 25, 40, 4, 50), outer = w.creep('outer', 24, 24, 0, 2, 50);
+    for (const unit of [root, outer]) w.role({ sourceId: w.buffer.id }).target(unit);
+    const transfer = w.calls.find(call => call.name === root.name && call.type === 'transfer');
+    assert.equal(transfer.target, outer.name); assert.equal(transfer.amount, 20);
+    assert.equal(w.calls.some(call => call.name === outer.name && call.type === 'build'), false);
+    w.nextTick(); assert.equal(w.builtByName.get(root.name), 20); assert.equal(outer.store.energy, 20);
+    w.calls.length = 0; w.role({ sourceId: w.buffer.id }).target(outer);
+    assert.equal(w.calls.some(call => call.name === outer.name && call.type === 'build'), true);
+    assert.equal(w.calls.some(call => call.name === outer.name && call.type === 'upgrade'), false);
+    w.nextTick(); assert.equal(w.builtByName.get(outer.name), 10); assert.ok(site.progress >= 30);
+});
+
+test('only a real reachable controller Container build changes energy demand, and completed sites restore normal upgrade reserves next tick', () => {
+    const w = world(), root = w.creep('root', 23, 25, 20, 4, 50);
+    const site = w.containerSite(28, 28);
+    assert.equal(w.relay.prepareControllerEnergyRelay(w.room, w.buffer).nodes.get(root.name).energyDemand, 4, 'a far site cannot consume this tick native WORK');
+    site.pos = w.p(25, 27); w.nextTick();
+    assert.equal(w.relay.prepareControllerEnergyRelay(w.room, w.buffer).nodes.get(root.name).energyDemand, 20);
+    w.room.constructionSites.length = 0; w.nextTick();
+    const cached = w.relay.prepareControllerEnergyRelay(w.room, w.buffer);
+    assert.equal(cached.nodes.get(root.name).energyDemand, 4);
+    assert.equal(cached.nodes.get(root.name).downstreamEnergy, 4);
+    w.role({ sourceId: w.buffer.id }).target(root);
+    assert.equal(w.calls.some(call => call.type === 'upgrade'), true);
+    assert.equal(w.calls.some(call => call.type === 'build'), false);
 });
 
 test('geometry/native occupant and relay indexes are shared by all workers and only static changes rebuild terrain geometry', () => {

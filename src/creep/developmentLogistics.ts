@@ -165,19 +165,21 @@ function occupancy(room: Room): Map<string, string> {
 }
 
 /** Keep productive current positions; approaching workers prefer the buffer side without swapping occupants. */
-export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink | StructureContainer, preferred?: { x: number; y: number }, retainCurrent = true, requireAdjacent = false): RoomPosition | undefined {
+export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink | StructureContainer, preferred?: { x: number; y: number }, retainCurrent = true, requireAdjacent = false, construction?: ConstructionSite): RoomPosition | undefined {
     if (!isDevelopingRoom(creep.room)) return undefined
     const area = controllerUpgradeSeats(creep.room, buffer), occupied = occupancy(creep.room)
     const previous = controllerDestinations.get(creep.name)
     if (preferred === undefined && previous?.id === creep.id && previous.room === creep.room.name && previous.buffer === buffer?.id) preferred = previous
     const current = controllerUpgradeSeats(creep.room).find(seat => seat.x === creep.pos.x && seat.y === creep.pos.y)
     const currentOwner = reservedSeats.get(`${creep.room.name}/${creep.pos.x}/${creep.pos.y}`)
-    if (retainCurrent && current !== undefined && (currentOwner === undefined || currentOwner === creep.name)) {
+    if (retainCurrent && current !== undefined && (construction === undefined || range(current, construction.pos) <= 3) &&
+        (currentOwner === undefined || currentOwner === creep.name)) {
         reservedSeats.set(`${creep.room.name}/${current.x}/${current.y}`, creep.name)
         controllerDestinations.delete(creep.name); creep.memory.dontPullMe = true
         return creep.pos
     }
     const available = area.filter(seat => {
+        if (construction !== undefined && range(seat, construction.pos) > 3) return false
         if (requireAdjacent && buffer !== undefined && range(seat, buffer.pos) > 1) return false
         if (!retainCurrent && seat.x === creep.pos.x && seat.y === creep.pos.y) return false
         const owner = reservedSeats.get(`${creep.room.name}/${seat.x}/${seat.y}`)

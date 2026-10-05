@@ -53,6 +53,10 @@ function world(level = 3) {
     function drop(id, x, y, amount = 100, resourceType = 'energy') {
         const target = { id, pos: p(x, y), amount, resourceType }; objects.set(id, target); room.droppedResource.push(target); return target;
     }
+    function site(id, type, x, y, my = true) {
+        const target = { id, structureType: type, pos: p(x, y), my, progress: 0, progressTotal: 5000 };
+        objects.set(id, target); room.constructionSites.push(target); return target;
+    }
     function creep(name = 'worker', role = 'upgrader', x = 23, y = 25, energy = 20, capacity = 100) {
         const unit = { name, id: name, room, pos: p(x, y), memory: { role }, store: store(energy, capacity), spawning: false };
         unit.getActiveBodyparts = () => 1;
@@ -75,7 +79,7 @@ function world(level = 3) {
             Game: game, RoomPosition, WORK: 'work', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
             LOOK_STRUCTURES: 'structure', LOOK_CREEPS: 'creep', TERRAIN_MASK_WALL: 1,
             STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_LINK: 'link',
-            CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
+            BUILD_POWER: 5, CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
         },
         modules: { utils: {
             getDistance: (a, b) => a.getRangeTo(b),
@@ -88,8 +92,10 @@ function world(level = 3) {
         harvester: loader.load('role/base/RoleBaseHarvester').default
     };
     return {
-        game, room, objects, calls, walls, p, source, drop, structure, creep, roles,
+        game, room, objects, calls, walls, p, source, drop, site, structure, creep, roles,
         logistics: loader.load('creep/developmentLogistics'),
+        construction: loader.load('creep/controllerConstruction'),
+        relay: loader.load('creep/controllerEnergyRelay'),
         policy: loader.load('settings/development').developmentPolicy,
         counts: () => ({ terrainReads, structureLooks }),
         intents: method => calls.filter(call => call.method === method),
@@ -301,6 +307,143 @@ test('a dry controller buffer does not interrupt an upgrader that still carries 
     const w = world(); w.structure('buffer', 'container', 22, 25, 0);
     w.roles.upgrader({}).source(w.creep());
     assert.deepEqual(w.calls.map(call => call.method), ['upgradeController']);
+});
+
+for (const phase of ['source', 'target']) test(`RCL1 upgrader ${phase} builds its controller container before upgrading with the same WORK`, () => {
+    const w = world(1), site = w.site('controller-container', 'container', 25, 28);
+    const unit = w.creep('worker', 'upgrader', 23, 25, 20);
+    w.roles.upgrader({})[phase](unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', site.id]]);
+});
+
+test('a supplied upgrader builds and withdraws in one tick, then resumes upgrading after the container finishes', () => {
+    const w = world(3), buffer = w.structure('old-buffer', 'container', 22, 25, 1000);
+    const site = w.site('controller-container', 'container', 25, 28);
+    const unit = w.creep('worker', 'upgrader', 23, 25, 20), behavior = w.roles.upgrader({ sourceId: buffer.id });
+    behavior.source(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', site.id], ['withdraw', buffer.id]]);
+    w.room.constructionSites.length = 0; w.objects.delete(site.id);
+    const finished = w.structure(site.id, 'container', 25, 28, 1500);
+    w.game.time++; w.clear(); behavior.target(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['moveTo', undefined], ['upgradeController', 'controller'], ['withdraw', buffer.id]]);
+    const move = w.intents('moveTo')[0], seat = w.p(move.x, move.y);
+    assert.ok(seat.isNearTo(finished) && seat.inRangeTo(w.room.controller, 3), 'completed stocked container becomes a legal upgrade supply position');
+    assert.equal(w.construction.controllerContainerSite(unit), undefined);
+    assert.ok(finished.store.energy > 0);
+});
+
+test('controller construction ignores foreign, unrelated, distant and non-container sites and shares one scan per tick', () => {
+    const w = world(2);
+    w.site('foreign', 'container', 23, 25, false); w.site('source-container', 'container', 10, 11);
+    w.site('too-far', 'container', 29, 25); w.site('road', 'road', 24, 25);
+    const site = w.site('controller-container', 'container', 25, 28);
+    const sites = w.room.constructionSites;
+    let reads = 0;
+    Object.defineProperty(w.room, 'constructionSites', { get() { reads++; return sites; } });
+    const a = w.creep('a', 'upgrader', 23, 25, 20), b = w.creep('b', 'upgrader', 24, 25, 20);
+    const behavior = w.roles.upgrader({}); behavior.source(a); behavior.target(b);
+    assert.deepEqual(w.intents('build').map(call => call.target), [site.id, site.id]);
+    assert.equal(reads, 1);
+    w.game.time++; w.clear(); behavior.source(a); behavior.target(b);
+    assert.equal(reads, 2);
+});
+
+test('a distant controller site selects a legal construction seat instead of keeping an incompatible upgrade position', () => {
+    const w = world(2), site = w.site('controller-container', 'container', 28, 28);
+    const unit = w.creep('worker', 'upgrader', 22, 22, 20), behavior = w.roles.upgrader({});
+    behavior.source(unit);
+    assert.equal(w.intents('upgradeController').length, 0);
+    assert.equal(w.intents('build').length, 0);
+    const move = w.intents('moveTo')[0], seat = w.p(move.x, move.y);
+    assert.ok(seat.inRangeTo(site, 3) && seat.inRangeTo(w.room.controller, 3));
+    assert.equal(move.range, 0);
+    unit.pos = seat; w.game.time++; w.clear(); behavior.target(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', site.id]]);
+});
+
+test('an opposite construction site preserves one real supply root while its peer builds without oscillating', () => {
+    const w = world(4), buffer = w.structure('buffer', 'container', 22, 22, 1500);
+    const site = w.site('controller-container', 'container', 28, 28);
+    const root = w.creep('a-root', 'upgrader', 23, 23, 20), peer = w.creep('b-builder', 'upgrader', 24, 24, 40);
+    const behavior = w.roles.upgrader({ sourceId: buffer.id });
+    behavior.source(root); behavior.source(peer);
+    assert.equal(w.intents('moveTo').some(call => call.name === root.name), false);
+    const move = w.intents('moveTo').find(call => call.name === peer.name);
+    assert.ok(move);
+    peer.pos = w.p(move.x, move.y); w.game.time++; w.clear();
+    behavior.target(peer); behavior.target(root);
+    assert.deepEqual(w.intents('build').map(call => [call.name, call.target]), [[peer.name, site.id]]);
+    assert.equal(w.intents('moveTo').length, 0, 'the supply root and real construction position stay fixed');
+    peer.store.energy = 0; w.game.time++; w.clear(); behavior.source(peer);
+    const refill = w.intents('moveTo').find(call => call.name === peer.name);
+    assert.ok(refill && w.p(refill.x, refill.y).isNearTo(buffer), 'a disconnected empty constructor returns for actual supply');
+});
+
+test('controller construction preserves a self-harvesting travel batch until loaded, then builds before upgrading', () => {
+    const w = world(1), source = w.source('mine', 10, 10), site = w.site('controller-container', 'container', 25, 28);
+    const unit = w.creep('worker', 'upgrader', 11, 10, 2, 50);
+    const data = { sourceId: source.id, harvestingSourceId: source.id }, behavior = w.roles.upgrader(data);
+    behavior.source(unit); assert.deepEqual(w.calls.map(call => call.method), ['harvest']);
+    unit.store.energy = 50; w.game.time++; w.clear(); behavior.source(unit);
+    assert.equal(data.harvestingSourceId, undefined);
+    assert.equal(w.intents('upgradeController').length, 0);
+    const move = w.intents('moveTo')[0]; unit.pos = w.p(move.x, move.y);
+    w.game.time++; w.clear(); behavior.target(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', site.id]]);
+});
+
+test('a solo supplied constructor keeps travelling toward the site with its cargo instead of being pulled back to the buffer', () => {
+    const w = world(5), buffer = w.structure('buffer', 'link', 22, 25, 800, 800);
+    const site = w.site('controller-container', 'container', 28, 25);
+    const unit = w.creep('solo', 'upgrader', 23, 25, 50, 50), behavior = w.roles.upgrader({ sourceId: buffer.id });
+    behavior.source(unit);
+    const initial = w.intents('moveTo')[0], destination = w.p(initial.x, initial.y);
+    assert.ok(destination.inRangeTo(site, 3));
+    unit.pos = w.p(24, 25); w.game.time++; w.clear(); behavior.target(unit);
+    const next = w.intents('moveTo')[0];
+    assert.ok(next && w.p(next.x, next.y).isEqualTo(destination), 'intermediate travel keeps the construction destination');
+    assert.equal(w.p(next.x, next.y).isNearTo(buffer), false);
+    unit.pos = destination; w.game.time++; w.clear(); behavior.target(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', site.id]]);
+    unit.store.energy = 0; w.game.time++; w.clear(); behavior.source(unit);
+    const refill = w.intents('moveTo')[0];
+    assert.ok(refill && w.p(refill.x, refill.y).isNearTo(buffer), 'empty solo worker comes back for its next real batch');
+});
+
+test('controller downgrade recovery overrides construction and restores the normal relay energy budget', () => {
+    const w = world(3), buffer = w.structure('buffer', 'container', 22, 25, 1500);
+    w.site('controller-container', 'container', 25, 28);
+    const unit = w.creep('worker', 'upgrader', 23, 25, 20), behavior = w.roles.upgrader({ sourceId: buffer.id });
+    w.room.controller.ticksToDowngrade = w.policy.controller.constructionDowngradeWarningTicks;
+    assert.equal(w.construction.controllerContainerSite(unit), undefined);
+    behavior.source(unit);
+    assert.equal(w.relay.prepareControllerEnergyRelay(w.room, buffer).nodes.get(unit.name).energyDemand, 1);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['upgradeController', 'controller'], ['withdraw', buffer.id]]);
+    w.room.controller.ticksToDowngrade++; w.game.time++; w.clear(); behavior.target(unit);
+    assert.equal(w.relay.prepareControllerEnergyRelay(w.room, buffer).nodes.get(unit.name).energyDemand, 5);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['build', 'controller-container'], ['withdraw', buffer.id]]);
+});
+
+test('an urgent controller uses a self-harvesting partial batch immediately instead of waiting to fill or building', () => {
+    const w = world(1), source = w.source('mine', 24, 25);
+    w.site('controller-container', 'container', 25, 28);
+    w.room.controller.ticksToDowngrade = 1;
+    const unit = w.creep('worker', 'upgrader', 23, 25, 2, 50);
+    const data = { sourceId: source.id, harvestingSourceId: source.id };
+    w.roles.upgrader(data).source(unit);
+    assert.equal(data.harvestingSourceId, undefined);
+    assert.deepEqual(w.calls.map(call => call.method), ['upgradeController']);
+});
+
+test('RCL8 and opted-out rooms do not inspect controller construction or change their native upgrading behavior', () => {
+    for (const level of [7, 8]) {
+        const w = world(level); if (level === 7) w.room.memory.fastUpgrade = false;
+        const unit = w.creep('worker', 'upgrader', 23, 25, 20);
+        Object.defineProperty(w.room, 'constructionSites', { get() { throw Error('legacy room scanned controller construction'); } });
+        assert.equal(w.construction.controllerContainerSite(unit), undefined);
+        w.roles.upgrader({}).target(unit);
+        assert.deepEqual(w.calls.map(call => call.method), ['upgradeController']);
+    }
 });
 
 test('mobile RCL1 upgrader self-harvests the source nearest the controller without a container', () => {

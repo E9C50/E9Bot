@@ -2,6 +2,7 @@ import { isDevelopingRoom } from './development'
 import { controllerEnergyBuffer, controllerUpgradeSeats } from './developmentLogistics'
 import { prepareControllerEnergyRelay } from './controllerEnergyRelay'
 import { developmentPolicy } from 'settings/development'
+import { controllerContainerSite } from './controllerConstruction'
 
 type Buffer = StructureLink | StructureContainer
 export interface ControllerSupplyPosition { buffer?: Buffer; requireAdjacent: boolean }
@@ -41,7 +42,7 @@ export function controllerSupplyPosition(creep: Creep): ControllerSupplyPosition
         plan = { room, buffer }
         const relay = buffer && prepareControllerEnergyRelay(room, buffer)
         if (buffer && buffer.store[RESOURCE_ENERGY] > 0 && relay) {
-            let covered = false, candidate: Creep | undefined, nearest = Infinity
+            let covered = false, covering: Creep | undefined, candidate: Creep | undefined, nearest = Infinity
             const previous = roots.get(room.name)
             const node = previous?.buffer === buffer.id ? relay.nodes.get(previous.name) : undefined
             const pending = previous?.buffer === buffer.id ? node?.creep || Game.creeps?.[previous.name] : undefined
@@ -53,15 +54,24 @@ export function controllerSupplyPosition(creep: Creep): ControllerSupplyPosition
                 const unit = node.creep
                 if (unit.store.getCapacity(RESOURCE_ENERGY) <= 0) continue
                 const distance = range(unit.pos, buffer.pos)
-                if (distance <= 1) { covered = true; break }
+                if (distance <= 1) {
+                    covered = true
+                    if (unit.memory.role === 'upgrader' && (!covering || unit === pending ||
+                        covering !== pending && unit.name < covering.name)) covering = unit
+                    continue
+                }
                 if (pending !== undefined && pending === candidate || unit.memory.role !== 'upgrader') continue
                 if (!candidate || distance < nearest || distance === nearest && unit.name < candidate.name) {
                     nearest = distance; candidate = unit
                 }
             }
-            if (!covered && candidate) {
-                plan.root = candidate.name
-                roots.set(room.name, { buffer: buffer.id, name: candidate.name, id: candidate.id })
+            // Keep one real supplier in place while its peers build on the opposite controller face.
+            const constructing = controllerContainerSite(creep) !== undefined
+            const soloBuilding = constructing && relay.nodes.size <= 1 && candidate !== undefined && candidate.store[RESOURCE_ENERGY] > 0
+            const root = covered ? relay.nodes.size > 1 && constructing ? covering : undefined : soloBuilding ? undefined : candidate
+            if (root) {
+                plan.root = root.name
+                roots.set(room.name, { buffer: buffer.id, name: root.name, id: root.id })
             } else roots.delete(room.name)
         } else roots.delete(room.name)
         plans.set(room.name, plan)

@@ -5,6 +5,7 @@ import { controllerSupplyPosition } from 'creep/controllerSupplyPositions'
 import { runStationaryUpgrading } from 'creep/stationaryUpgrading'
 import { controllerEnergyRelayCanSupply, runControllerEnergyRelay } from 'creep/controllerEnergyRelay'
 import { developmentPolicy } from 'settings/development'
+import { controllerContainerSite, controllerNeedsUrgentUpgrade } from 'creep/controllerConstruction'
 
 function usableStore(target: AnyStoreStructure | null | undefined): target is AnyStoreStructure {
     return target != undefined && 'store' in target && (!('my' in target) || target.my !== false) && target.store[RESOURCE_ENERGY] > 0
@@ -20,15 +21,26 @@ function energyStores(room: Room): AnyStoreStructure[] {
 function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
     const controller = creep.room.controller!
     const energy = creep.store[RESOURCE_ENERGY]
+    const construction = controllerContainerSite(creep)
     const supply = controllerSupplyPosition(creep), buffer = supply.buffer
     creep.memory.working = energy > 0
     if (buffer != undefined) {
         delete data.harvestingSourceId
         const supplied = controllerEnergyRelayCanSupply(creep, buffer)
-        const retainCurrent = !supply.requireAdjacent && (energy > 0 || creep.pos.isNearTo(buffer) || supplied)
-        const seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent, supply.requireAdjacent)
+        const collecting = construction !== undefined && energy === 0 && !supplied
+        const requireAdjacent = supply.requireAdjacent || collecting
+        const retainCurrent = (!requireAdjacent || creep.pos.isNearTo(buffer)) && (energy > 0 || creep.pos.isNearTo(buffer) || supplied)
+        const building = collecting ? undefined : construction
+        let seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent, requireAdjacent, building)
+        // The supply root stays beside its buffer if no legal construction seat can also feed the group.
+        if (seat === undefined && building !== undefined)
+            seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent, requireAdjacent)
         if (seat != undefined && !creep.pos.isEqualTo(seat)) creep.moveTo(seat, { range: 0, ignoreCreeps: false })
-        if (getDistance(creep.pos, controller.pos) <= 3 && energy > 0 && developmentWorkAllowed(creep)) creep.upgradeController(controller)
+        if (energy > 0 && developmentWorkAllowed(creep)) {
+            if (construction !== undefined && getDistance(creep.pos, construction.pos) <= 3) creep.build(construction)
+            else if (getDistance(creep.pos, controller.pos) <= 3 &&
+                (construction === undefined || seat === undefined || getDistance(seat, construction.pos) > 3)) creep.upgradeController(controller)
+        }
         runControllerEnergyRelay(creep, buffer)
         return true
     }
@@ -39,7 +51,7 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
         const load = Math.ceil(creep.store.getCapacity(RESOURCE_ENERGY) *
             Math.max(0, Math.min(1, developmentPolicy.upgrading.selfHarvestLoadRatio)))
         if (source?.pos.roomName === creep.room.name && source.energy > 0 && energy < load &&
-            creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+            creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0 && (energy === 0 || !controllerNeedsUrgentUpgrade(creep.room))) {
             creep.memory.working = false
             if (creep.harvest(source) == ERR_NOT_IN_RANGE) creep.moveTo(source, { range: 1 })
             return true
@@ -48,7 +60,15 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
     }
 
     if (energy > 0) {
-        if (getDistance(creep.pos, controller.pos) > 3) {
+        if (construction !== undefined) {
+            const seat = controllerUpgradePosition(creep, undefined, undefined, true, false, construction)
+            if (seat !== undefined && !creep.pos.isEqualTo(seat)) creep.moveTo(seat, { range: 0, ignoreCreeps: false })
+            else if (seat === undefined && getDistance(creep.pos, construction.pos) > 3) {
+                creep.memory.dontPullMe = false
+                creep.moveTo(construction, { range: 3, ignoreCreeps: false })
+            }
+            if (getDistance(creep.pos, construction.pos) <= 3 && developmentWorkAllowed(creep)) creep.build(construction)
+        } else if (getDistance(creep.pos, controller.pos) > 3) {
             creep.memory.dontPullMe = false
             creep.moveTo(controller, { range: 3, ignoreCreeps: false })
         } else {
