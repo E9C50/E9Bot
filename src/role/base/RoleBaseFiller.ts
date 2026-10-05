@@ -4,6 +4,35 @@ import { developmentPolicy } from 'settings/development'
 import { isDevelopingRoom } from 'creep/development'
 import { controllerEnergyBuffer } from 'creep/developmentLogistics'
 import { loadDevelopmentHauler } from 'creep/developmentHauling'
+import { deliverHaulerEnergy } from 'creep/haulerDelivery'
+import { controllerLayoutPolicy } from 'settings/controllerLayout'
+
+/** Controller Links receive energy from other Links, never from a local hauler. */
+function controllerDeliveryContainer(room: Room): StructureContainer | undefined {
+    const buffer = controllerEnergyBuffer(room)
+    if (buffer?.structureType === STRUCTURE_CONTAINER) return buffer as StructureContainer
+    const controller = room.controller
+    if (controller === undefined) return undefined
+    let selected: StructureContainer | undefined
+    for (const container of room.containers) {
+        const distance = getDistance(container.pos, controller.pos)
+        if (distance > controllerLayoutPolicy.containerRange) continue
+        const preferred = distance === controllerLayoutPolicy.containerRange
+        const selectedDistance = selected === undefined ? Infinity : getDistance(selected.pos, controller.pos)
+        if (selected === undefined || preferred && selectedDistance !== controllerLayoutPolicy.containerRange ||
+            preferred === (selectedDistance === controllerLayoutPolicy.containerRange) && distance < selectedDistance) selected = container
+    }
+    return selected
+}
+
+function usableEnergySource(target: AnyStoreStructure | Source | null | undefined, excludedId?: string): target is AnyStoreStructure {
+    return target != undefined && 'store' in target && target.id !== excludedId && target.store[RESOURCE_ENERGY] > 0
+}
+
+function isControllerLink(target: AnyStoreStructure | Source | null | undefined, room: Room): boolean {
+    return target != undefined && 'structureType' in target && target.structureType === STRUCTURE_LINK &&
+        room.controller != undefined && getDistance(target.pos, room.controller.pos) <= controllerLayoutPolicy.containerRange
+}
 
 /** Resolve each job id once and remove stale/full entries without allocating filtered arrays. */
 function closestFillJob(creep: Creep, jobs: string[]): AnyStoreStructure | undefined {
@@ -12,7 +41,8 @@ function closestFillJob(creep: Creep, jobs: string[]): AnyStoreStructure | undef
     for (let read = 0; read < jobs.length; read++) {
         const id = jobs[read]
         const target = Game.getObjectById<AnyStoreStructure>(id)
-        if (target == undefined || target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) continue
+        if (target == undefined || target.structureType === STRUCTURE_LINK || 'my' in target && target.my === false ||
+            target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) continue
         jobs[write++] = id
         const distance = getDistance(creep.pos, target.pos)
         if (distance < minimumDistance) { closest = target; minimumDistance = distance }
@@ -24,7 +54,7 @@ function closestFillJob(creep: Creep, jobs: string[]): AnyStoreStructure | undef
 function closestEnergySource(creep: Creep, excludedId?: string): AnyStoreStructure | undefined {
     let closest: AnyStoreStructure | undefined, minimumDistance = Infinity
     const consider = (target: AnyStoreStructure | undefined): void => {
-        if (target == undefined || target.id == excludedId || target.store[RESOURCE_ENERGY] <= 0) return
+        if (!usableEnergySource(target, excludedId) || isControllerLink(target, creep.room)) return
         const distance = getDistance(creep.pos, target.pos)
         if (distance < minimumDistance) { closest = target; minimumDistance = distance }
     }
@@ -36,11 +66,12 @@ function closestEnergySource(creep: Creep, excludedId?: string): AnyStoreStructu
 }
 
 function developingTransfer(creep: Creep, target: AnyStoreStructure | Creep): boolean {
+    if ('structureType' in target && target.structureType === STRUCTURE_LINK) return false
     if (creep.transfer(target, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) creep.moveTo(target, { range: 1 })
     return true
 }
 
-function developingFillTarget(creep: Creep, buffer: StructureLink | StructureContainer | undefined): AnyStoreStructure | Creep | undefined {
+function developingFillTarget(creep: Creep, buffer: StructureContainer | undefined): AnyStoreStructure | Creep | undefined {
     const production = closestExtension(creep)
     if (production != undefined) return production
     let tower: StructureTower | undefined
@@ -68,9 +99,9 @@ function developingFillTarget(creep: Creep, buffer: StructureLink | StructureCon
     return undefined
 }
 
-/** Complete a mine-bound load, then serve production, defense and controller supply. */
+/** Mine carriers bring energy home; stock carriers distribute it to local consumers. */
 function runDevelopingFiller(creep: Creep, data: FillerData): boolean {
-    const buffer = controllerEnergyBuffer(creep.room)
+    const buffer = controllerDeliveryContainer(creep.room)
     const storage = creep.room.storage
     if (storage != undefined && creep.store.getUsedCapacity() > creep.store[RESOURCE_ENERGY]) {
         for (const resource in creep.store) if (resource != RESOURCE_ENERGY && creep.store[resource] > 0) {
@@ -80,6 +111,7 @@ function runDevelopingFiller(creep: Creep, data: FillerData): boolean {
     }
     const collecting = loadDevelopmentHauler(creep, data, buffer?.id)
     if (creep.memory.working) {
+        if (storage !== undefined && (creep.memory.developmentHauler?.mineId || data.mineId)) return deliverHaulerEnergy(creep)
         const target = developingFillTarget(creep, buffer)
         if (target != undefined) return developingTransfer(creep, target)
         if (storage != undefined && storage.id != data.sourceId && storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return developingTransfer(creep, storage)
@@ -92,7 +124,7 @@ function runDevelopingFiller(creep: Creep, data: FillerData): boolean {
 function closestExtension(creep: Creep): StructureExtension | StructureSpawn | undefined {
     let closest: StructureExtension | StructureSpawn | undefined, minimumDistance = Infinity
     const consider = (target: StructureExtension | StructureSpawn): void => {
-        if (target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) return
+        if (target.my === false || target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) return
         const distance = getDistance(creep.pos, target.pos)
         if (distance < minimumDistance) { closest = target; minimumDistance = distance }
     }
@@ -116,16 +148,26 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
+        const creepData: FillerData = data as FillerData
+        const storage = creep.room.storage
+        // Mine-bound carriers retain their collection lane. Distribution carriers
+        // prefer any usable home stock even when a closer drop/container is larger.
+        if (!creepData.mineId && usableEnergySource(storage)) {
+            creepData.sourceId = storage.id
+            creep.takeFromTarget(storage, RESOURCE_ENERGY)
+            return true
+        }
+
         // 检查有没有掉落的资源需要捡
         if (creep.pickupDroppedResource(true, rolePolicy.filler.droppedResourceSearchRange)) return true
 
-        const creepData: FillerData = data as FillerData
-        let sourceTarget = creepData.sourceId ? Game.getObjectById<AnyStoreStructure>(creepData.sourceId) : null
-        if (sourceTarget != undefined && sourceTarget.store[RESOURCE_ENERGY] == 0) sourceTarget = null
+        const buffer = controllerDeliveryContainer(creep.room)
+        let sourceTarget = creepData.sourceId ? Game.getObjectById<AnyStoreStructure | Source>(creepData.sourceId) : null
+        if (!usableEnergySource(sourceTarget, buffer?.id) || isControllerLink(sourceTarget, creep.room)) sourceTarget = null
 
         // 如果没有指定目标容器，就随便找一个
         if (sourceTarget == undefined) {
-            sourceTarget = closestEnergySource(creep) || null
+            sourceTarget = closestEnergySource(creep, buffer?.id) || null
             if (sourceTarget == undefined) {
                 creep.say('❓')
                 return false
@@ -134,7 +176,7 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 有可用目标就去拿
-        if (sourceTarget != undefined) {
+        if (usableEnergySource(sourceTarget, buffer?.id)) {
             creep.takeFromTarget(sourceTarget, RESOURCE_ENERGY)
             return true
         }
@@ -163,6 +205,8 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
+        if (storage !== undefined && (creepData.mineId || creep.memory.developmentHauler?.mineId)) return deliverHaulerEnergy(creep)
+
         // 如果有lab需要填充，那就去
         if (fillJobs.labInEnergy != undefined && fillJobs.labInEnergy.length > 0) {
             const target = closestFillJob(creep, fillJobs.labInEnergy)
@@ -175,7 +219,8 @@ export default (data: CreepData): ICreepConfig => ({
         // 如果有extension需要填充，那就去
         if (fillJobs.extension) {
             let target = creepData.targetId ? Game.getObjectById<StructureExtension | StructureSpawn>(creepData.targetId) : null
-            if (target == undefined || target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
+            if (target == undefined || (target as AnyStoreStructure).structureType === STRUCTURE_LINK ||
+                target.my === false || target.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) {
                 target = closestExtension(creep) || null
                 creepData.targetId = target?.id
             }

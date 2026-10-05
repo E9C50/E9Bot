@@ -49,11 +49,11 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
             path: path.map(position => new Position(position.x, position.y, position.roomName === target.name ? goal.pos.roomName : position.roomName)) }; } },
         FIND_SOURCES: 'sources', FIND_MINERALS: 'minerals', FIND_STRUCTURES: 'structures', FIND_HOSTILE_STRUCTURES: 'hostile-structures', FIND_HOSTILE_CREEPS: 'hostiles',
         FIND_DROPPED_RESOURCES: 'dropped', LOOK_STRUCTURES: 'look-structures', LOOK_CREEPS: 'look-creeps',
-        STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower', STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container',
+        STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower', STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link',
         OBSTACLE_OBJECT_TYPES: ['spawn', 'tower', 'constructedWall'], ATTACK: 'attack', RANGED_ATTACK: 'ranged_attack', WORK: 'work', HEAL: 'heal',
         CARRY: 'carry', MOVE: 'move', BODYPART_COST: { carry: 50, move: 50 }, TERRAIN_MASK_WALL: 1, TERRAIN_MASK_SWAMP: 2,
         SOURCE_ENERGY_CAPACITY: 3000, SOURCE_ENERGY_NEUTRAL_CAPACITY: 1500, ENERGY_REGEN_TIME: 300, CONTAINER_DECAY: 5000, CONTROLLER_RESERVE_MAX: 5000,
-        RESOURCE_ENERGY: 'energy', HARVEST_POWER: 2, CARRY_CAPACITY: 50, TOWER_ENERGY_COST: 10, ERR_NO_PATH: -2, ERR_NOT_IN_RANGE: -9,
+        RESOURCE_ENERGY: 'energy', HARVEST_POWER: 2, CARRY_CAPACITY: 50, TOWER_ENERGY_COST: 10, ERR_NO_PATH: -2, ERR_NOT_IN_RANGE: -9, OK: 0, FIND_MY_CREEPS: 'my-creeps',
     }, modules: { 'settings/runtime': { runtimePolicy: { warModeScope: 'empire' } } } });
     const api = loader.load('creep/developmentRemotes');
     const policy = loader.load('settings/developmentRemotes').developmentRemotePolicy;
@@ -172,14 +172,14 @@ test('automatic carriers take only their source energy, retain valid container I
     w.calls.actions.length = 0; behavior.source(creep); assert.equal(w.calls.actions[0].type, 'pickup');
 });
 
-test('returning automatic carriers refill production before the controller buffer and storage', () => {
+test('returning automatic carriers finish at adjacent Storage and keep controller delivery with local distributors', () => {
     const w = world(); w.release(); const data = w.task('hauler'), creep = w.unit(data, w.home, { working: true, energy: 200 });
     const controllerBuffer = { id: 'controller-buffer', structureType: 'container', pos: new w.Position(19, 20, w.home.name), store: w.store(0) };
     w.home.containers.push(controllerBuffer); w.home.storage = { id: 'storage', store: w.store(0), pos: creep.pos };
     const behavior = w.api.withDevelopmentRemoteRole(data, w.behavior); assert.equal(behavior.prepare(creep), true); behavior.target(creep);
-    assert.equal(w.calls.actions[0].target, w.home.spawns[0]);
+    assert.equal(w.calls.actions[0].target, w.home.storage);
     w.home.spawns[0].store = w.store(1000); w.calls.actions.length = 0; behavior.target(creep);
-    assert.equal(w.calls.actions[0].target, controllerBuffer);
+    assert.equal(w.calls.actions[0].target, w.home.storage);
     controllerBuffer.store = w.store(1000); w.calls.actions.length = 0; behavior.target(creep);
     assert.equal(w.calls.actions[0].target, w.home.storage); assert.equal(w.calls.delegated, 0);
 });

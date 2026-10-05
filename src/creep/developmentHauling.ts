@@ -1,4 +1,5 @@
 import { developmentPolicy } from 'settings/development'
+import { haulerDeliveryPolicy } from 'settings/haulerDelivery'
 
 export interface DevelopmentHaulerState {
     shard: string
@@ -58,6 +59,10 @@ function energyBatch(creep: Creep, data: FillerData, mine: Source | undefined, e
     const consider = (target: Resource | AnyStoreStructure, pickup: boolean): void => {
         if (target.id === excludedId || target.pos.roomName !== creep.room.name || mine &&
             !target.pos.inRangeTo(mine.pos, developmentPolicy.hauling.mineResourceRange)) return
+        // Distribution must not withdraw the controller's own supply and deliver it back.
+        if (!mine && !pickup && creep.room.controller &&
+            ((target as AnyStoreStructure).structureType === STRUCTURE_CONTAINER || (target as AnyStoreStructure).structureType === STRUCTURE_LINK) &&
+            target.pos.inRangeTo(creep.room.controller.pos, haulerDeliveryPolicy.controllerRange)) return
         const available = (pickup ? (target as Resource).amount : (target as AnyStoreStructure).store[RESOURCE_ENERGY]) - (ledger.get(target.id) || 0)
         const amount = Math.min(free, available)
         if (amount <= 0) return
@@ -70,6 +75,10 @@ function energyBatch(creep: Creep, data: FillerData, mine: Source | undefined, e
         if (best === undefined || amount > best.amount || amount === best.amount && betterTie) {
             best = { target, pickup, amount, distance: range }
         }
+    }
+    if (!mine && creep.room.storage) {
+        consider(creep.room.storage, false)
+        if (best) return best
     }
     for (const drop of creep.room.droppedResource) if (drop.resourceType === RESOURCE_ENERGY) consider(drop, true)
     if (mine) {

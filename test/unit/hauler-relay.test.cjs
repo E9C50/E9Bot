@@ -101,6 +101,57 @@ test('a same-lane automatic external hauler relays without modifying mission/sou
     assert.equal(w.receiver.memory.developmentHauler, undefined);
 });
 
+for (const remote of [false, true]) test(`${remote ? 'remote' : 'local'} mine relay accepts a Storage trip while rejecting old controller or Link destinations`, () => {
+    for (const destination of ['storage', 'controller', 'link', 'full-storage']) {
+        const w = world({ remote });
+        const free = destination === 'full-storage' ? 0 : 1000;
+        w.home.storage = { id: 'storage', structureType: 'storage', pos: w.p(destination === 'storage' || destination === 'full-storage' ? 45 : 40),
+            store: { getFreeCapacity: () => free } };
+        w.home.controller.pos = w.p(47);
+        if (destination === 'link') w.home.links.push({ id: 'old-controller-link', structureType: 'link', pos: w.p(45) });
+        const caches = [w.cache.donor, w.cache.receiver], identity = [w.donor.memory.name, w.receiver.memory.name];
+        w.loader.load('creep/execution').creepWorkController();
+        if (destination === 'storage') {
+            assert.equal(w.calls.filter(call => call.type === 'transfer').length, 1);
+            assert.equal(w.calls.filter(call => call.type.startsWith('ordinary-')).length, 0);
+        } else {
+            assert.equal(w.calls.filter(call => call.type === 'transfer' || call.type === 'move').length, 0);
+            assert.ok(w.calls.some(call => call.type === 'ordinary-target' && call.name === w.donor.name),
+                'the ordinary role can immediately replace the old delivery destination');
+            assert.equal(w.cache.donor, caches[0]); assert.equal(w.cache.receiver, caches[1]);
+            assert.equal(w.donor.memory.working, true); assert.equal(w.receiver.memory.working, false);
+        }
+        assert.deepEqual([w.donor.memory.name, w.receiver.memory.name], identity);
+    }
+});
+
+test('no-Storage controller worker destinations are indexed in the same pass regardless of iteration order', () => {
+    for (const reverse of [false, true]) {
+        const w = world({ reverse });
+        w.home.containers = []; w.home.spawns = [];
+        w.game.creeps.worker = { name: 'worker', pos: w.p(44), room: w.home, spawning: false,
+            memory: { role: 'upgrader' }, store: { getFreeCapacity: () => 100 } };
+        w.loader.globals.PathFinder = { search() { throw Error('relay must only inspect cached movement'); } };
+        w.relay.runHaulerRelays();
+        assert.equal(w.calls.filter(call => call.type === 'transfer').length, 1);
+    }
+});
+
+test('no-Storage relay rejects an arbitrary controller area and an exact Link destination beside a real worker', () => {
+    for (const destination of ['empty-region', 'link']) {
+        const w = world();
+        w.home.containers = []; w.home.spawns = [];
+        if (destination === 'link') {
+            w.home.links.push({ id: 'controller-link', pos: w.p(45), structureType: 'link' });
+            w.game.creeps.worker = { name: 'worker', pos: w.p(44), room: w.home, spawning: false,
+                memory: { role: 'upgrader' }, store: { getFreeCapacity: () => 100 } };
+        }
+        w.relay.runHaulerRelays();
+        assert.equal(w.calls.length, 0);
+        assert.equal(w.relay.haulerRelayHandled(w.donor), false);
+    }
+});
+
 test('the real execution pass skips both old trip phases only after a successful native handoff', () => {
     for (const failed of [false, true]) {
         const w = world({ reverse: true });

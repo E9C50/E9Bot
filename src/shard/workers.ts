@@ -182,7 +182,7 @@ function loadHauler(creep: Creep, data: ShardUnitData): boolean {
 
 function receiver(creep: Creep, data: ShardUnitData): AnyStoreStructure | Creep | undefined {
     const configured = data.task.targetEnergyId ? Game.getObjectById<AnyStoreStructure>(data.task.targetEnergyId) : undefined
-    if (configured != undefined && configured.pos.roomName == creep.room.name &&
+    if (configured != undefined && configured.structureType !== STRUCTURE_LINK && configured.pos.roomName == creep.room.name &&
         (!('my' in configured) || configured.my) && configured.store?.getFreeCapacity(RESOURCE_ENERGY) > 0) return configured
     const essential = [...creep.room.spawns, ...creep.room.extensions].filter((item) => item.my !== false && item.store.getFreeCapacity(RESOURCE_ENERGY) > 0)
     if (essential.length > 0) return closest(creep, essential)

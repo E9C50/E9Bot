@@ -72,7 +72,7 @@ function makeWorld(home, { creeps = {}, visibleSources = [], automaticHauling = 
             Math.max(Math.abs(creep.pos.x - source.pos.x), Math.abs(creep.pos.y - source.pos.y)) <= 1)) continue;
         const distance = (first, second) => Math.max(Math.abs(first.x - second.x), Math.abs(first.y - second.y));
         const buffer = [...home.links, ...home.containers].find(target => distance(target.pos, home.controller.pos) <= 3);
-        const destination = buffer?.pos || home.storage?.pos || home.spawns[0].pos;
+        const destination = home.storage?.pos || buffer?.pos || home.spawns[0].pos;
         const trip = Math.ceil((Math.max(distance(source.pos, home.spawns[0].pos), distance(source.pos, destination)) * 2 + 2) *
             loader.load('settings/development').developmentPolicy.hauling.travelMargin);
         const capacity = trip * source.energyCapacity / 300;
@@ -467,6 +467,103 @@ test('high-stock Storage transport covers its bonus upgrade rate or stops at the
         assert.ok(carriers.every(config => config.development.carryParts <= bodyLimit));
         if (wanted <= fleetLimit) assert.ok(carry * 50 / trip >= burst);
     }
+});
+
+test('mine trips terminate at Storage and a low-stock distribution fleet covers real imports before bonus WORK', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    home.storage = structure('storage', 'storage', 12, 10, 500);
+    home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+    const state = makeWorld(home, { creeps: { miner: worker(home) } });
+    const configs = state.release();
+    const imports = byRole(configs, 'filler').filter(config => config.data.mineId === home.sources[0].id);
+    const delivery = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
+    assert.ok(imports.length > 0);
+    assert.ok(imports.every(config => config.development.travelTicks === Math.ceil((10 * 2 + 2) * state.policy.hauling.travelMargin)));
+    const wanted = Math.ceil(delivery[0].development.travelTicks * 10 / 50);
+    assert.equal(delivery.reduce((sum, config) => sum + config.development.carryParts, 0), wanted);
+    assert.ok(wanted > state.policy.bodies.defaultHaulerCarryParts);
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 1, 'planned distribution capacity is not yet live throughput');
+});
+
+test('only arrived Storage distributors finance automatic upgrade WORK, never mine, spawning or away bodies', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    home.storage = structure('storage', 'storage', 24, 24, 500);
+    home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+    const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
+    const state = makeWorld(home, { creeps: { miner: worker(home), distributor } });
+    const fleet = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
+    distributor.store = store(0, fleet[0].development.travelTicks * 4);
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(4 * state.policy.upgrading.incomeShare));
+    distributor.spawning = true;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1);
+    distributor.spawning = false; distributor.room = { name: 'W1N2' };
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1);
+    distributor.room = home; distributor.memory.data.mineId = home.sources[0].id;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1, 'a mine importer is not also a Storage distributor');
+    delete distributor.memory.data.mineId;
+    distributor.store = store(0, fleet[0].development.travelTicks * 10);
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare));
+});
+
+test('Storage reserves and source overflow cannot bypass live distribution throughput, while controller stock can be spent locally', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    home.storage = structure('storage', 'storage', 24, 24, 100000);
+    const buffer = structure('controller-container', 'container', 38, 40, 300);
+    home.containers = [buffer];
+    home.droppedResource = [{ id: 'overflow', pos: position(11, 10), amount: 100000, resourceType: 'energy' }];
+    const state = makeWorld(home, { creeps: { miner: worker(home) } });
+    const importer = state.game.creeps['fixture-hauler-source0'];
+    importer.store = store(0, importer.store.getCapacity() * 2);
+    let configs = state.release();
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 1);
+    const trip = byRole(configs, 'filler').find(config => config.data.sourceId === home.storage.id).development.travelTicks;
+    const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
+    distributor.store = store(0, trip * 14); state.game.creeps.distributor = distributor;
+    configs = state.release();
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare) + 4);
+    buffer.store.energy = 2000;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare) + 5);
+});
+
+test('native Source Link input bypasses Storage distributors without counting the same production twice', () => {
+    const home = room({ capacity: 1300, level: 6 });
+    home.storage = structure('storage', 'storage', 24, 24, 500);
+    home.links = [structure('source-link', 'link', 11, 10, 0), structure('controller-link', 'link', 38, 40, 300)];
+    home.controllerLink = home.links[1];
+    const state = makeWorld(home, { creeps: { miner: worker(home) } });
+    let configs = state.release();
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare));
+    const fleet = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
+    assert.equal(fleet.reduce((sum, config) => sum + config.development.carryParts, 0), state.policy.bodies.defaultHaulerCarryParts,
+        'native direct generation is not also planned as an imported Storage stream');
+    const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
+    distributor.store = store(0, fleet[0].development.travelTicks * 30); state.game.creeps.distributor = distributor;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare));
+    home.links[0].isActive = () => false;
+    delete state.game.creeps.distributor;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1, 'an inactive native path needs real Storage distribution');
+});
+
+test('remote imports grow the Storage distribution fleet and remain constrained by its live capacity beside an empty Link', () => {
+    const home = room({ capacity: 1300, level: 6 });
+    home.storage = structure('storage', 'storage', 24, 24, 500);
+    home.controllerLink = structure('controller-link', 'link', 38, 40, 0); home.links = [home.controllerLink];
+    const source = { id: 'remote-source', pos: position(10, 10, 'W1N2'), energyCapacity: 1500 };
+    const metadata = { homeRoom: home.name, targetRoom: 'W1N2', source: { id: source.id, x: 10, y: 10, travelTicks: 100 } };
+    const miner = worker(home, { role: 'rHarvester', data: { developmentRemote: { ...metadata, kind: 'harvester' } } });
+    miner.room = { name: 'W1N2' }; miner.pos = position(11, 10, 'W1N2');
+    const importer = worker(home, { role: 'rFiller', work: 0, data: { developmentRemote: { ...metadata, kind: 'hauler' } } });
+    importer.getActiveBodyparts = part => part === 'carry' ? 10 : 0;
+    const state = makeWorld(home, { creeps: { miner, importer }, visibleSources: [source] });
+    home.memory.developmentRemotes = { selectedRooms: ['W1N2'], intel: { W1N2: { seenAt: 100, status: 'safe', sources: [metadata.source] } } };
+    const configs = state.release();
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 1);
+    const fleet = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
+    const trip = fleet[0].development.travelTicks;
+    assert.equal(fleet.reduce((sum, config) => sum + config.development.carryParts, 0), Math.ceil(trip * 5 / 50));
+    const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
+    distributor.store = store(0, trip * 4); state.game.creeps.distributor = distributor;
+    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(4 * state.policy.upgrading.incomeShare));
 });
 
 test('development Storage hubs publish one legacy-name manager for either a center Link or Terminal', () => {

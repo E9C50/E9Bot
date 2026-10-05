@@ -1,0 +1,145 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+
+function world(level = 6) {
+    const objects = new Map(), calls = [];
+    class Position {
+        constructor(x, y, roomName = 'W1N1') { Object.assign(this, { x, y, roomName }); }
+        getRangeTo(value) { const pos = value.pos || value; return pos.roomName === this.roomName ? Math.max(Math.abs(pos.x - this.x), Math.abs(pos.y - this.y)) : Infinity; }
+        inRangeTo(value, range) { return this.getRangeTo(value) <= range; }
+        isNearTo(value) { return this.inRangeTo(value, 1); }
+    }
+    const p = (x, y) => new Position(x, y);
+    function store(energy, capacity) {
+        const result = { energy };
+        Object.defineProperties(result, {
+            getUsedCapacity: { value: () => result.energy },
+            getCapacity: { value: () => capacity },
+            getFreeCapacity: { value: () => Math.max(0, capacity - result.energy) },
+        });
+        return result;
+    }
+    const game = { time: 100, shard: { name: 'shard3' }, getObjectById: id => objects.get(id) || null };
+    const room = { name: 'W1N1', memory: { roomFillJob: {}, creepConfig: {} }, controller: { my: true, level, pos: p(25, 25) },
+        sources: [], containers: [], links: [], extensions: [], spawns: [], towers: [], labs: [], units: [], droppedResource: [], energyAvailable: 300,
+        find: () => room.units };
+    function structure(id, type, x, y, energy = 0, capacity = 2000) {
+        const value = { id, pos: p(x, y), structureType: type, my: true, store: store(energy, capacity), isActive: () => true };
+        objects.set(id, value);
+        const group = { container: 'containers', link: 'links', spawn: 'spawns', extension: 'extensions', tower: 'towers', lab: 'labs' }[type];
+        if (group) room[group].push(value); else room[type] = value;
+        return value;
+    }
+    function source(id = 'mine', x = 10, y = 10) {
+        const value = { id, pos: p(x, y), energy: 3000 }; objects.set(id, value); room.sources.push(value); return value;
+    }
+    function drop(id, x, y, amount) {
+        const value = { id, pos: p(x, y), amount, resourceType: 'energy' }; objects.set(id, value); room.droppedResource.push(value); return value;
+    }
+    function creep(energy = 0, capacity = 100, x = 20, y = 20) {
+        const value = { id: 'carrier', name: 'carrier', room, pos: p(x, y), memory: { role: 'filler' }, store: store(energy, capacity), spawning: false };
+        value.moveTo = (target, options) => { calls.push({ method: 'moveTo', target: target.id, range: options?.range }); return 0; };
+        for (const method of ['withdraw', 'transfer', 'pickup']) value[method] = (target, resource, amount) => {
+            calls.push({ method, target: target.id, resource, amount }); return value.pos.isNearTo(target) ? 0 : -9;
+        };
+        for (const method of ['takeFromTarget', 'transferToTarget']) value[method] = (target, resource) => {
+            calls.push({ method, target: target.id, resource }); return true;
+        };
+        value.pickupDroppedResource = () => {
+            if (!room.droppedResource.length) return false;
+            const target = room.droppedResource[0]; calls.push({ method: 'pickupDroppedResource', target: target.id }); return true;
+        };
+        value.say = () => {};
+        room.units.push(value); return value;
+    }
+    const loader = createSourceLoader({ globals: { Game: game, RoomPosition: Position, RESOURCE_ENERGY: 'energy', OK: 0, ERR_NOT_IN_RANGE: -9,
+        FIND_MY_CREEPS: 'my-creeps', STRUCTURE_LINK: 'link', STRUCTURE_CONTAINER: 'container', STRUCTURE_STORAGE: 'storage',
+        STRUCTURE_EXTENSION: 'extension', STRUCTURE_SPAWN: 'spawn', STRUCTURE_TOWER: 'tower', STRUCTURE_LAB: 'lab',
+        STRUCTURE_NUKER: 'nuker', STRUCTURE_POWER_SPAWN: 'powerSpawn' }, modules: {
+        utils: { getDistance: (first, second) => first.getRangeTo(second) },
+        'creep/developmentLogistics': { controllerEnergyBuffer: value => value.controller.level < 8 ? value.controllerLink ||
+            value.containers.find(container => container.pos.inRangeTo(value.controller.pos, 3)) : undefined },
+    } });
+    return { game, room, calls, p, structure, source, drop, creep, behavior: data => loader.load('role/base/RoleBaseFiller').default(data) };
+}
+
+for (const level of [6, 8]) test(`RCL${level} distribution uses partial Storage stock before a larger mine batch or drop`, () => {
+    const w = world(level), storage = w.structure('stock', 'storage', 30, 30, 40, 100000);
+    w.structure('mine-stock', 'container', 20, 20, 2000); w.drop('large-drop', 20, 20, 2000);
+    const data = { sourceId: 'mine-stock' }, unit = w.creep();
+    w.behavior(data).source(unit);
+    assert.equal(w.calls.find(call => ['withdraw', 'takeFromTarget', 'pickup', 'pickupDroppedResource'].includes(call.method)).target, storage.id);
+    assert.equal(unit.store.energy, 0, 'native intent must not be assumed to mutate this tick Store');
+});
+
+for (const level of [6, 8]) test(`RCL${level} dry Storage recovers from a mine Container without draining the controller Container`, () => {
+    const w = world(level); w.structure('stock', 'storage', 30, 30, 0, 100000);
+    const buffer = w.structure('controller-buffer', 'container', 25, 28, 2000);
+    const mine = w.structure('mine-stock', 'container', 10, 11, 100);
+    w.source();
+    w.behavior({ sourceId: buffer.id }).source(w.creep());
+    assert.equal(w.calls.find(call => ['withdraw', 'takeFromTarget'].includes(call.method)).target, mine.id);
+});
+
+test('RCL8 no-stock fallback still collects loose energy and central Link stock', () => {
+    const w = world(8), unit = w.creep();
+    w.drop('overflow', 20, 20, 40); w.behavior({}).source(unit);
+    assert.equal(w.calls[0].method, 'pickupDroppedResource');
+    w.calls.length = 0; w.room.droppedResource.length = 0;
+    const link = w.structure('central-link', 'link', 19, 20, 800, 800);
+    w.behavior({}).source(unit);
+    assert.equal(w.calls.find(call => call.method === 'takeFromTarget').target, link.id);
+});
+
+test('development sends energy to the controller Container when a controller Link also exists', () => {
+    const w = world(), buffer = w.structure('controller-buffer', 'container', 25, 28, 0);
+    w.room.controllerLink = w.structure('controller-link', 'link', 24, 25, 0, 800);
+    w.behavior({}).target(w.creep(100));
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, buffer.id);
+    assert.equal(w.calls.some(call => call.target === 'controller-link'), false);
+});
+
+test('a Link-only controller does not block direct delivery to a hungry upgrader', () => {
+    const w = world(); w.room.controllerLink = w.structure('controller-link', 'link', 24, 25, 0, 800);
+    const upgrader = w.creep(0, 100, 24, 26); upgrader.id = 'upgrader'; upgrader.name = 'upgrader'; upgrader.memory.role = 'upgrader';
+    w.behavior({}).target(w.creep(100));
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, upgrader.id);
+});
+
+for (const level of [6, 8]) test(`RCL${level} discards stale Link fill jobs and chooses the real Lab`, () => {
+    const w = world(level), link = w.structure('link', 'link', 20, 20, 0, 800), lab = w.structure('lab', 'lab', 21, 20, 0);
+    w.room.memory.roomFillJob.labInEnergy = [link.id, lab.id];
+    w.behavior({}).target(w.creep(100));
+    assert.equal(w.calls.find(call => ['transfer', 'transferToTarget'].includes(call.method)).target, lab.id);
+    assert.equal(w.room.memory.roomFillJob.labInEnergy.includes(link.id), false);
+});
+
+test('RCL8 cached production target cannot make the filler send energy to a Link', () => {
+    const w = world(8), link = w.structure('link', 'link', 20, 20, 0, 800), spawn = w.structure('spawn', 'spawn', 21, 20, 0, 300);
+    w.room.memory.roomFillJob.extension = true;
+    w.behavior({ targetId: link.id }).target(w.creep(100));
+    assert.equal(w.calls.find(call => call.method === 'transferToTarget').target, spawn.id);
+});
+
+test('development mine lane collects its own mine and returns to Storage instead of the controller', () => {
+    const w = world(), mine = w.source(), stock = w.structure('mine-stock', 'container', 10, 11, 2000);
+    const storage = w.structure('stock', 'storage', 30, 30, 100000, 1000000);
+    const buffer = w.structure('controller-buffer', 'container', 25, 28, 0), data = { sourceId: stock.id, mineId: mine.id }, unit = w.creep(0, 100, 11, 11);
+    const behavior = w.behavior(data); behavior.source(unit);
+    assert.equal(w.calls.find(call => call.method === 'withdraw').target, stock.id);
+    unit.store.energy = 100; w.calls.length = 0; w.game.time++;
+    behavior.target(unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer' || call.method === 'moveTo').target, storage.id);
+    assert.equal(w.calls.some(call => call.target === buffer.id), false);
+    assert.equal(data.mineId, mine.id);
+});
+
+test('a surviving RCL8 mine carrier keeps its collection lane while Storage distributors use stock', () => {
+    const w = world(8), mine = w.source(), stock = w.structure('mine-stock', 'container', 10, 11, 2000);
+    const storage = w.structure('stock', 'storage', 30, 30, 100000, 1000000);
+    const data = { sourceId: stock.id, mineId: mine.id }, unit = w.creep(), behavior = w.behavior(data);
+    behavior.source(unit); assert.equal(w.calls.find(call => call.method === 'takeFromTarget').target, stock.id);
+    w.calls.length = 0; unit.store.energy = 100; behavior.target(unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer' || call.method === 'moveTo').target, storage.id);
+});

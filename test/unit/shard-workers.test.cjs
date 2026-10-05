@@ -65,7 +65,7 @@ function world(kind, options = {}) {
             FIND_STRUCTURES: 'structures', FIND_MY_STRUCTURES: 'my-structures', FIND_MY_SPAWNS: 'my-spawns',
             FIND_CREEPS: 'creeps', FIND_MY_CREEPS: 'my-creeps', FIND_POWER_CREEPS: 'power-creeps',
             TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'look-structures', LOOK_CREEPS: 'look-creeps', LOOK_POWER_CREEPS: 'look-power',
-            STRUCTURE_SPAWN: 'spawn', STRUCTURE_EXTENSION: 'extension', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container', STRUCTURE_TERMINAL: 'terminal', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall', STRUCTURE_OBSERVER: 'observer', STRUCTURE_PORTAL: 'portal',
+            STRUCTURE_SPAWN: 'spawn', STRUCTURE_EXTENSION: 'extension', STRUCTURE_LINK: 'link', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container', STRUCTURE_TERMINAL: 'terminal', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall', STRUCTURE_OBSERVER: 'observer', STRUCTURE_PORTAL: 'portal',
             OBSERVER_RANGE: 10, OK: 0, ERR_NO_PATH: -2, ERR_NOT_ENOUGH_RESOURCES: -6, ERR_INVALID_TARGET: -7,
             ERR_NOT_IN_RANGE: -9, ERR_GCL_NOT_ENOUGH: -15, RoomPosition: class { constructor(x, y, roomName) { Object.assign(this, position(x, y, roomName)); } },
         },
@@ -174,6 +174,19 @@ test('haulers retain cargo when a target has no receiver and never drop energy',
     assert.equal(w.calls.some(call => call.type === 'drop' || call.type === 'transfer'), false);
     assert.equal(w.creep.store.energy, 100);
     assert.notEqual(w.data.done, true);
+});
+
+test('haulers bypass a configured Link receiver and deliver to Storage instead', () => {
+    const w = world('hauler', { energy: 100, task: { claim: false, builders: 0, haulers: 1, targetEnergyId: 'controller-link' } });
+    const link = { id: 'controller-link', my: true, structureType: 'link', pos: position(10, 11, w.room.name), store: { energy: 0, getFreeCapacity: () => 800 } };
+    const storage = { id: 'target-storage', my: true, structureType: 'storage', pos: position(10, 12, w.room.name), store: { energy: 0, getFreeCapacity: () => 10000 } };
+    w.room.storage = storage;
+    w.objects[link.id] = link;
+    w.objects[storage.id] = storage;
+    w.behavior.target(w.creep);
+    assert.equal(w.calls.find(call => call.type === 'transfer')?.target.id, storage.id);
+    assert.equal(w.calls.some(call => call.type === 'transfer' && call.target.id === link.id), false);
+    assert.ok(w.data.pendingDelivery, 'normal mission delivery confirmation remains enabled');
 });
 
 test('energy delivery is counted only after a later tick confirms cargo loss and return travel resets its route origin', () => {
@@ -625,7 +638,7 @@ function integratedWorld() {
             RESOURCE_ENERGY: 'energy', WORK: 'work', CARRY: 'carry', MOVE: 'move', CLAIM: 'claim', ATTACK: 'attack', HEAL: 'heal', TOUGH: 'tough', RANGED_ATTACK: 'ranged_attack',
             BODYPART_COST: { work: 100, carry: 50, move: 50, claim: 600, attack: 80, heal: 250, tough: 10, ranged_attack: 150 },
             FIND_MY_SPAWNS: 'my-spawns', FIND_SOURCES: 'sources', FIND_DROPPED_RESOURCES: 'dropped', FIND_MY_CONSTRUCTION_SITES: 'my-sites', FIND_STRUCTURES: 'structures', STRUCTURE_OBSERVER: 'observer',
-            LOOK_STRUCTURES: 'structures', STRUCTURE_PORTAL: 'portal', STRUCTURE_SPAWN: 'spawn', STRUCTURE_EXTENSION: 'extension', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container', STRUCTURE_TERMINAL: 'terminal', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall',
+            LOOK_STRUCTURES: 'structures', STRUCTURE_PORTAL: 'portal', STRUCTURE_SPAWN: 'spawn', STRUCTURE_EXTENSION: 'extension', STRUCTURE_LINK: 'link', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container', STRUCTURE_TERMINAL: 'terminal', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall',
             OBSERVER_RANGE: 10, OK: 0, ERR_NOT_IN_RANGE: -9, ERR_GCL_NOT_ENOUGH: -15, ERR_NO_PATH: -2, ERR_TIRED: -11,
         },
         modules: {

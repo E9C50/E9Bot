@@ -3,7 +3,7 @@ import { developmentRemotePolicy as policy } from 'settings/developmentRemotes'
 import { scoutMovementOptions } from 'shard/scoutMovement'
 import { runtimePolicy } from 'settings/runtime'
 import { isDevelopingRoom } from './development'
-import { controllerEnergyBuffer } from './developmentLogistics'
+import { deliverHaulerEnergy } from './haulerDelivery'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -385,27 +385,7 @@ function runHaulerSource(creep: Creep, data: DevelopmentRemoteData): boolean {
 }
 function runHaulerTarget(creep: Creep, data: DevelopmentRemoteData): boolean {
     if (creep.store[RESOURCE_ENERGY] <= 0) { creep.memory.working = false; return false }
-    const home = creep.room
-    let receiver: StructureSpawn | StructureExtension | StructureStorage | StructureLink | StructureContainer | Creep | undefined
-    let nearest = Infinity
-    for (const item of [...home.spawns, ...home.extensions]) {
-        if (item.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) continue
-        const range = distance(creep.pos, item.pos)
-        if (range < nearest) { receiver = item; nearest = range }
-    }
-    if (!receiver) {
-        const buffer = controllerEnergyBuffer(home)
-        if (buffer && buffer.store.getFreeCapacity(RESOURCE_ENERGY) > 0) receiver = buffer
-        else if (home.storage && home.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0) receiver = home.storage
-    }
-    if (!receiver) for (const name in Game.creeps) {
-        const worker = Game.creeps[name]
-        if (worker.room.name !== home.name || worker.spawning || !['upgrader', 'builder', 'rBuilder'].includes(worker.memory.role) ||
-            worker.store.getFreeCapacity(RESOURCE_ENERGY) <= 0) continue
-        const range = distance(creep.pos, worker.pos)
-        if (range < nearest) { receiver = worker; nearest = range }
-    }
-    if (receiver && creep.transfer(receiver, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) creep.moveTo(receiver, { range: 1 })
+    deliverHaulerEnergy(creep)
     return true
 }
 function runReserver(creep: Creep): boolean {

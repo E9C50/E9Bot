@@ -31,7 +31,7 @@ function world(roleName, data = {}) {
     for (const action of ['repair', 'build', 'transfer', 'withdraw', 'harvest']) creep[action] = (target, resource) => {
         actions.push({ type: action, id: target.id, ...(resource ? { resource } : {}) }); return 0;
     };
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container', ERR_NOT_IN_RANGE: -9 }, modules: {
+    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', ERR_NOT_IN_RANGE: -9 }, modules: {
         utils: { getDistance: distance, getClosestTarget() { throw new Error('Candidate filtering and closest selection must be one pass'); } },
         './RoleBaseUpgrader': () => ({ target() { actions.push({ type: 'upgrade' }); return true; } }),
     } });
@@ -164,20 +164,37 @@ test('harvester creates a missing local container below RCL8 and never creates o
     assert.deepEqual(w.actions, []);
 });
 
-test('filler source selection scans each source once in container-link-storage-terminal order with stable closest ties', () => {
+test('filler chooses available Storage before resolving a cached source, loose energy or scanning closer mine stock', () => {
+    const w = world('filler', { sourceId: 'container' });
+    w.list('containers', [w.structure('empty', { energy: 0 }), w.structure('container', { energy: 50, x: 12 })]);
+    w.list('links', [w.structure('link', { type: 'link', energy: 50, x: 8 })]);
+    w.room.storage = w.structure('storage', { type: 'storage', energy: 1, x: 30, y: 30 });
+    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50, x: 10, y: 8 });
+    w.creep.pickupDroppedResource = () => { throw new Error('Usable Storage must precede loose-energy collection'); };
+    assert.equal(w.role.source(w.creep), true); assert.equal(w.data.sourceId, 'storage');
+    assert.deepEqual(w.actions, [{ type: 'take', id: 'storage', resource: 'energy' }]);
+    assert.deepEqual(w.reads.lookups, []);
+    assert.equal(w.reads.lists.containers || 0, 0); assert.equal(w.reads.lists.links || 0, 0);
+    assert.deepEqual(w.reads.energy, { storage: 1 });
+    assert.equal(w.reads.distances, 0); assert.equal(w.reads.methods, 0);
+});
+
+test('without Storage filler source selection scans each fallback list once and retains container-link-terminal closest ties', () => {
     const w = world('filler', { sourceId: 'gone' });
     w.list('containers', [w.structure('empty', { energy: 0 }), w.structure('container', { energy: 50, x: 12 })]);
-    w.list('links', [w.structure('link', { energy: 50, x: 8 })]);
-    w.room.storage = w.structure('storage', { energy: 50, x: 10, y: 12 });
-    w.room.terminal = w.structure('terminal', { energy: 50, x: 10, y: 8 });
+    w.list('links', [w.structure('link', { type: 'link', energy: 50, x: 8 })]);
+    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50, x: 10, y: 8 });
     assert.equal(w.role.source(w.creep), true); assert.equal(w.data.sourceId, 'container');
     assert.deepEqual(w.actions, [{ type: 'take', id: 'container', resource: 'energy' }]);
+    assert.equal(w.reads.lists.containers, 1); assert.equal(w.reads.lists.links, 1);
     assert.equal(w.reads.entries.containers, 2); assert.equal(w.reads.entries.links, 1);
-    assert.equal(w.reads.energy.container, 1); assert.equal(w.reads.energy.link, 1); assert.equal(w.reads.energy.empty, 1);
+    assert.equal(w.reads.energy.container, 2, 'one candidate read plus the final selected-source validity check');
+    assert.equal(w.reads.energy.link, 1); assert.equal(w.reads.energy.empty, 1); assert.equal(w.reads.energy.terminal, 1);
+    assert.equal(w.reads.distances, 3);
     assert.equal(w.reads.methods, 0);
 });
 
-test('filler reuses a nonempty cached source and short-circuits full capacity or dropped-resource pickup before resolving it', () => {
+test('without Storage filler reuses a nonempty cached source and short-circuits full capacity or dropped-resource pickup before resolving it', () => {
     const w = world('filler', { sourceId: 'cached' }); const source = w.structure('cached', { energy: 50 });
     w.role.source(w.creep); assert.deepEqual(w.reads.lookups, ['cached']); assert.equal(w.reads.lists.containers || 0, 0);
     source.state.energy = 0; w.list('links', [w.structure('replacement', { energy: 20 })]);

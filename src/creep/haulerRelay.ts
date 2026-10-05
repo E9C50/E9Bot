@@ -1,5 +1,4 @@
 import { isDevelopingRoom } from './development'
-import { controllerEnergyBuffer } from './developmentLogistics'
 import { isDevelopmentRemoteData, canRelayDevelopmentHauler } from './developmentRemotes'
 import { haulerRelayPolicy as policy } from 'settings/haulerRelay'
 import { runtimePolicy } from 'settings/runtime'
@@ -65,11 +64,17 @@ function laneFor(creep: Creep): Lane | undefined {
     return { key: `${home!.name}/local/${source.id}`, home: home!, local: true, source: source.pos }
 }
 
-function homeEndpoint(home: Room, position: Lane['source']): boolean {
+function homeEndpoint(home: Room, position: Lane['source'], workers: Map<string, RoomPosition[]>): boolean {
     if (position.roomName !== home.name) return false
-    const buffer = controllerEnergyBuffer(home)
-    return [home.storage, home.terminal, buffer, ...home.spawns, ...home.extensions, ...home.towers, ...home.labs]
-        .some(target => target && range(position, target.pos) <= 1) || range(position, home.controller!.pos) <= 3
+    // A route retained from the old policy must not carry a relayed load to a Link.
+    if (home.links.some(link => range(position, link.pos) === 0)) return false
+    // Opportunistic refills happen only beside a carrier's current tile. They do
+    // not justify retaining an old trip toward a distant controller or building.
+    if (home.storage) return home.storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0 && range(position, home.storage.pos) === 0
+    return [home.terminal, ...home.spawns, ...home.extensions, ...home.towers, ...home.labs,
+        ...home.containers.filter(container => range(container.pos, home.controller!.pos) <= 3)]
+        .some(target => target && range(position, target.pos) <= 1) ||
+        (workers.get(home.name) || []).some(target => range(position, target) <= 1)
 }
 
 function setPhase(carrier: Carrier, phase: 'load' | 'deliver'): void {
@@ -92,12 +97,21 @@ export function runHaulerRelays(): void {
         !Object.values(Game.rooms).some(isDevelopingRoom)) return
     const started = Game.cpu.getUsed()
     const donors: Carrier[] = [], fetchers = new Map<string, Carrier>()
+    const workers = new Map<string, RoomPosition[]>()
     for (const name in Game.creeps) {
+        if (Game.cpu.getUsed() - started >= policy.maximumCpu || Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) break
         const creep = Game.creeps[name]
+        const role = creep.memory.role
+        if (!creep.spawning && (role === 'upgrader' || role === 'builder' || role === 'rBuilder' || role === 'sBuilder') &&
+            isDevelopingRoom(creep.room) && !creep.room.storage && range(creep.pos, creep.room.controller!.pos) <= 3 &&
+            creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+            let targets = workers.get(creep.room.name)
+            if (!targets) { targets = []; workers.set(creep.room.name, targets) }
+            targets.push(creep.pos)
+        }
         if ((creep.memory.role !== 'filler' && creep.memory.role !== 'rFiller') || creep.spawning || creep.fatigue > 0 || creep.memory.isTeam || creep.memory.combatTaskId ||
             (creep.ticksToLive ?? 0) <= policy.minimumTicksToLive || creep.store.getUsedCapacity() !== creep.store[RESOURCE_ENERGY] ||
             (creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed)) continue
-        if (Game.cpu.getUsed() - started >= policy.maximumCpu || Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) break
         const lane = laneFor(creep), cache = movement.creepPathCache[name]
         if (!lane || !cache?.path || !cache.dst || range(creep.pos, lane.source) <= policy.endpointRange) continue
         const next = movement.getNextCachedStep(creep)
@@ -105,7 +119,7 @@ export function runHaulerRelays(): void {
         const carrier = { creep, lane, cache, next }
         const energy = creep.store[RESOURCE_ENERGY]
         if (energy > 0 && (creep.memory.working || creep.memory.developmentHauler?.phase === 'deliver' || creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) &&
-            homeEndpoint(lane.home, cache.dst) && range(creep.pos, cache.dst) > policy.endpointRange) donors.push(carrier)
+            range(creep.pos, cache.dst) > policy.endpointRange) donors.push(carrier)
         else if (energy === 0 && range(cache.dst, lane.source) <= policy.sourceGoalRange && creep.fatigue === 0) fetchers.set(key(creep.pos), carrier)
         else continue
         current.candidates++
@@ -113,7 +127,7 @@ export function runHaulerRelays(): void {
     for (const donor of donors) {
         if (current.pairs >= policy.maximumPairsPerTick || Game.cpu.getUsed() - started >= policy.maximumCpu ||
             Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) break
-        if (handled.has(donor.creep.name)) continue
+        if (handled.has(donor.creep.name) || !homeEndpoint(donor.lane.home, donor.cache.dst, workers)) continue
         current.checks++
         const receiver = fetchers.get(key(donor.next))
         if (!receiver || handled.has(receiver.creep.name) || receiver.lane.key !== donor.lane.key ||

@@ -1,7 +1,7 @@
-import { roleAdvEnum, roleBaseEnum } from "settings/creep"
-import { getClosestLineTarget, getClosestTarget, getDistance } from "utils"
+import { getClosestTarget, getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
 import { supportWithTowers } from 'role/support/towers'
+import { deliverHaulerEnergy } from 'creep/haulerDelivery'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -51,7 +51,10 @@ export default (data: CreepData): ICreepConfig => ({
         // 如果有缓存建筑，就去拿缓存
         if (creepData.withdrawTarget != undefined) {
             withdrawTarget = Game.getObjectById(creepData.withdrawTarget) as Structure
-            withdrawResource = Object.keys(withdrawTarget['store'])[0] as ResourceConstant
+            if (withdrawTarget && 'store' in withdrawTarget) {
+                const cached = withdrawTarget as AnyStoreStructure
+                withdrawResource = Object.keys(cached.store).find(key => cached.store[key] > 0) as ResourceConstant
+            } else { withdrawTarget = undefined; delete creepData.withdrawTarget }
         }
 
         if (creep.room.my && creep.room.level == rolePolicy.remoteFiller.preferStorageAtLevel) {
@@ -172,45 +175,16 @@ export default (data: CreepData): ICreepConfig => ({
         if (creep.room.my && creep.hits < creep.hitsMax) supportWithTowers(creep, { healFriendly: true })
 
         // 如果身上不止有能量，则搬运到Storage
-        if (creep.room.storage != undefined && Object.keys(creep.store).filter(key => key != RESOURCE_ENERGY).length > 0) {
+        const carriedMineral = Object.keys(creep.store).find(key => key !== RESOURCE_ENERGY && creep.store[key] > 0) as ResourceConstant | undefined
+        if (creep.room.storage != undefined && carriedMineral != undefined) {
             if (getDistance(creep.pos, creep.room.storage.pos) > 1) {
                 creep.moveTo(creep.room.storage)
                 return true
             }
-            creep.transfer(creep.room.storage, Object.keys(creep.store)[0] as ResourceConstant)
+            creep.transfer(creep.room.storage, carriedMineral)
             return true
         }
-
-        // 搬运到最近的storage、link、container
-        var targetStructure: Structure | Creep = creep.room.storage as Structure;
-        const structureList: Structure[] = [
-            creep.room.storage, ...creep.room.links, ...creep.room.containers,
-            ...creep.room.towers, ...creep.room.spawns, ...creep.room.extensions
-        ].filter(item => item != undefined && item.store.getFreeCapacity(RESOURCE_ENERGY) > 0) as Structure[]
-        if (structureList.length > 0) {
-            targetStructure = getClosestLineTarget(creep.pos, structureList)
-        }
-
-        if (targetStructure == undefined) {
-            targetStructure = Object.values(Game.creeps).filter(
-                item => creep.room == item.room && item.memory.role == roleAdvEnum.RBUILDER ||
-                    item.memory.role == roleBaseEnum.BUILDER || item.memory.role == roleBaseEnum.UPGRADER
-            ).sort((a, b) => a.store.getFreeCapacity() - b.store.getFreeCapacity())[0]
-        }
-
-        if (targetStructure == undefined && creep.room.sources.length > 0) {
-            creep.moveTo(creep.room.sources[0])
-            return true
-        }
-
-        if (targetStructure && getDistance(creep.pos, targetStructure.pos) > 1) {
-            creep.moveTo(targetStructure)
-            return true
-        }
-
-        if (targetStructure) {
-            creep.transfer(targetStructure, RESOURCE_ENERGY)
-        }
+        deliverHaulerEnergy(creep)
         return true
     },
 })
