@@ -1,6 +1,7 @@
 import { getClosestTarget, getDistance } from "utils"
 import { developmentWorkAllowed, isDevelopingRoom } from 'creep/development'
-import { controllerEnergyBuffer, controllerUpgradePosition } from 'creep/developmentLogistics'
+import { controllerUpgradePosition } from 'creep/developmentLogistics'
+import { controllerSupplyPosition } from 'creep/controllerSupplyPositions'
 import { runStationaryUpgrading } from 'creep/stationaryUpgrading'
 import { controllerEnergyRelayCanSupply, runControllerEnergyRelay } from 'creep/controllerEnergyRelay'
 
@@ -18,12 +19,12 @@ function energyStores(room: Room): AnyStoreStructure[] {
 function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
     const controller = creep.room.controller!
     const energy = creep.store[RESOURCE_ENERGY]
-    const buffer = controllerEnergyBuffer(creep.room)
+    const supply = controllerSupplyPosition(creep), buffer = supply.buffer
     creep.memory.working = energy > 0
     if (buffer != undefined) {
         const supplied = controllerEnergyRelayCanSupply(creep, buffer)
-        const retainCurrent = energy > 0 || creep.pos.isNearTo(buffer) || supplied
-        const seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent)
+        const retainCurrent = !supply.requireAdjacent && (energy > 0 || creep.pos.isNearTo(buffer) || supplied)
+        const seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent, supply.requireAdjacent)
         if (seat != undefined && !creep.pos.isEqualTo(seat)) creep.moveTo(seat, { range: 0, ignoreCreeps: false })
         if (getDistance(creep.pos, controller.pos) <= 3 && energy > 0 && developmentWorkAllowed(creep)) creep.upgradeController(controller)
         runControllerEnergyRelay(creep, buffer)

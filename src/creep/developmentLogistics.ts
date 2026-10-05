@@ -165,7 +165,7 @@ function occupancy(room: Room): Map<string, string> {
 }
 
 /** Keep productive current positions; approaching workers prefer the buffer side without swapping occupants. */
-export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink | StructureContainer, preferred?: { x: number; y: number }, retainCurrent = true): RoomPosition | undefined {
+export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink | StructureContainer, preferred?: { x: number; y: number }, retainCurrent = true, requireAdjacent = false): RoomPosition | undefined {
     if (!isDevelopingRoom(creep.room)) return undefined
     const area = controllerUpgradeSeats(creep.room, buffer), occupied = occupancy(creep.room)
     const previous = controllerDestinations.get(creep.name)
@@ -178,6 +178,7 @@ export function controllerUpgradePosition(creep: Creep, buffer?: StructureLink |
         return creep.pos
     }
     const available = area.filter(seat => {
+        if (requireAdjacent && buffer !== undefined && range(seat, buffer.pos) > 1) return false
         if (!retainCurrent && seat.x === creep.pos.x && seat.y === creep.pos.y) return false
         const owner = reservedSeats.get(`${creep.room.name}/${seat.x}/${seat.y}`)
         const occupant = occupied.get(`${seat.x}/${seat.y}`)

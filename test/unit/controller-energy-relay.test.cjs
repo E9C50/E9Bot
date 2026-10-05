@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function world() {
-    const calls = [], intents = new Map(), walls = new Set(), units = [], objects = new Map();
+    const calls = [], intents = new Map(), walls = new Set(), units = [], objects = new Map(), spentByName = new Map();
     const counters = { terrain: 0, find: {}, look: 0, work: 0 };
     const game = { time: 100, shard: { name: 'shard1' }, creeps: {}, rooms: {}, flags: {}, getObjectById: id => objects.get(id) || null };
     const range = (a, b) => { a = a.pos || a; b = b.pos || b; return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)); };
@@ -28,7 +28,7 @@ function world() {
     const loader = createSourceLoader({ globals: { Game: game, RoomPosition, RESOURCE_ENERGY: 'energy', WORK: 'work',
         TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', LOOK_POWER_CREEPS: 'power',
         FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_MY_CREEPS: 'my', FIND_STRUCTURES: 'structures',
-        STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', OK: 0, ERR_NOT_IN_RANGE: -9 },
+        STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_RAMPART: 'rampart', OK: 0, ERR_NOT_IN_RANGE: -9 },
         modules: { utils: { getDistance: range, getClosestTarget: (pos, list) => [...list].sort((a, b) => range(pos, a) - range(pos, b))[0] },
             'settings/rolePolicy': { rolePolicy: { remoteBuilder: { stopUpgradingAtLevel: 8 } } },
             'settings/interShard': { interShardPolicy: { downgradeWarningTicks: 100 } } } });
@@ -52,11 +52,15 @@ function world() {
             if (!intent) continue;
             if (intent.transfer) { const amount = Math.min(intent.transfer.amount, unit.store.energy, intent.transfer.target.store.getFreeCapacity()); unit.store.energy -= amount; intent.transfer.target.store.energy += amount; }
             if (intent.withdraw) { const amount = Math.min(intent.withdraw.amount, unit.store.getFreeCapacity(), intent.withdraw.target.store.energy); unit.store.energy += amount; intent.withdraw.target.store.energy -= amount; }
-            if (intent.upgrade) { const amount = Math.min(unit.store.energy, intent.upgrade); unit.store.energy -= amount; spent += amount; }
+            if (intent.upgrade) { const amount = Math.min(unit.store.energy, intent.upgrade); unit.store.energy -= amount; spent += amount; spentByName.set(unit.name, (spentByName.get(unit.name) || 0) + amount); }
         }
         intents.clear(); game.time++;
     }
-    return { game, room, buffer, calls, counters, units, walls, p, creep, nextTick, spent: () => spent,
+    function link(x, y, energy = 0, id = 'controller-link') {
+        const item = { id, pos: p(x, y), structureType: 'link', my: true, isActive: () => true, store: store(energy, 800) };
+        room.links.push(item); room.structures.push(item); objects.set(id, item); return item;
+    }
+    return { game, room, buffer, calls, counters, units, walls, p, creep, link, nextTick, spentByName, spent: () => spent,
         logistics: loader.load('creep/developmentLogistics'), relay: loader.load('creep/controllerEnergyRelay'),
         role: loader.load('role/base/RoleBaseUpgrader').default, aid: loader.load('role/support/builderWorkPosition') };
 }
@@ -126,17 +130,129 @@ test('an empty bridge never forwards its planned refill; native incoming capacit
     w.nextTick(); assert.equal(far.store.energy, 0, 'second hop cannot consume hypothetical first-hop arrival');
 });
 
+test('the reported four-worker Container/empty-Link layout sustains all 22 WORK through real role intents and initial one-CARRY stores', () => {
+    const w = world(); w.buffer.pos = w.p(25, 28); w.buffer.store.energy = 1554;
+    const link = w.link(23, 25); w.room.controllerLink = link;
+    const a = w.creep('A', 22, 26, 0, 6, 50), b = w.creep('B', 23, 26, 11, 3, 50),
+        c = w.creep('C', 24, 27, 44, 6, 50), d = w.creep('D', 24, 25, 0, 7, 50);
+    const initial = w.buffer.store.energy + 55;
+    let warmSpent = 0;
+    for (let tick = 0; tick < 50; tick++) {
+        w.calls.length = 0;
+        // An aid worker may initialize the room cache with the Link before the
+        // upgrader chooses Container stock. The cached graph must retain both.
+        const cached = w.relay.prepareControllerEnergyRelay(w.room, link);
+        assert.equal(w.relay.prepareControllerEnergyRelay(w.room, w.buffer), cached);
+        assert.equal(cached.nodes.get(c.name).buffer, w.buffer);
+        for (const unit of tick % 2 ? [d, c, b, a] : [a, b, c, d]) w.role({ sourceId: link.id }).target(unit);
+        assert.equal(w.calls.some(call => call.type === 'move'), false, 'the existing supply chain stays in place');
+        const transfers = w.calls.filter(call => call.type === 'transfer');
+        assert.equal(new Set(transfers.map(call => call.name)).size, transfers.length, 'one transfer intent per actual donor');
+        for (const unit of w.units) {
+            const incoming = transfers.filter(call => call.target === unit.name).reduce((sum, call) => sum + call.amount, 0);
+            const withdrawn = w.calls.filter(call => call.type === 'withdraw' && call.name === unit.name).reduce((sum, call) => sum + call.amount, 0);
+            assert.ok(incoming + withdrawn <= unit.store.getFreeCapacity(), 'passive receipt and own withdraw share native free capacity');
+            const sent = transfers.find(call => call.name === unit.name)?.amount || 0;
+            assert.ok(sent <= Math.max(0, unit.store.energy - unit.getActiveBodyparts()), 'a donor reserves its own native WORK consumption');
+        }
+        w.nextTick(tick % 2 !== 0);
+        if (tick === 9) warmSpent = w.spent();
+        assert.equal(w.buffer.store.energy + link.store.energy + w.units.reduce((sum, unit) => sum + unit.store.energy, 0) + w.spent(), initial);
+    }
+    assert.ok(w.spentByName.get(a.name) >= 250, `A must upgrade through the real B bridge: ${w.spentByName.get(a.name)}`);
+    assert.ok(w.spentByName.get(d.name) >= 290, `D must upgrade through the real B bridge: ${w.spentByName.get(d.name)}`);
+    assert.equal(w.spent() - warmSpent, 40 * 22, 'after native initial-cargo warmup every real WORK part upgrades every tick');
+    assert.ok(w.buffer.store.energy < 600, 'the stocked Container supplies the empty-Link component');
+    assert.equal(link.store.energy, 0, 'no hypothetical Link pulse is needed');
+});
+
 test('shared buffer withdrawals and multiple donors cannot overbook one initial native Store batch', () => {
     const w = world(); w.buffer.store.energy = 10;
     w.creep('root-a', 23, 24, 0); w.creep('root-b', 23, 25, 0);
     const target = w.creep('target', 24, 25, 99, 2, 100);
     w.relay.runControllerEnergyRelay(target, w.buffer);
     assert.equal(w.calls.filter(call => call.type === 'withdraw').reduce((sum, call) => sum + call.amount, 0), 10);
-    assert.equal(w.calls.some(call => call.type === 'transfer'), false, 'zero native cargo cannot lend a planned withdrawal');
+    assert.ok(w.calls.filter(call => call.type === 'transfer').every(call => call.name === target.name),
+        'empty roots cannot lend a planned withdrawal; the already-loaded neighbor may donate its real cargo back to them');
     w.nextTick(); w.calls.length = 0;
     w.units[0].store.energy = 100; w.units[1].store.energy = 100; target.store.energy = 0;
     w.relay.runControllerEnergyRelay(target, w.buffer);
-    assert.equal(w.calls.filter(call => call.type === 'transfer').reduce((sum, call) => sum + call.amount, 0), 4, 'recipient demand is not promised independently to each donor');
+    assert.equal(w.calls.filter(call => call.type === 'transfer').reduce((sum, call) => sum + call.amount, 0), 6, 'recipient demand and its current WORK reserve are not promised independently to each donor');
+});
+
+test('stocked Container selection is independent of the first cached preferred Link and depleted shared stock falls through to another adjacent store', () => {
+    const w = world(), link = w.link(22, 26, 100);
+    w.buffer.store.energy = 6; w.room.controllerLink = link;
+    const a = w.creep('root-a', 23, 25, 0), b = w.creep('root-b', 23, 26, 0);
+    const cached = w.relay.prepareControllerEnergyRelay(w.room, link);
+    assert.equal(cached.nodes.get(a.name).buffer, w.buffer);
+    assert.equal(w.relay.prepareControllerEnergyRelay(w.room, w.buffer), cached);
+    w.relay.runControllerEnergyRelay(a, link);
+    assert.deepEqual(w.calls.filter(call => call.type === 'withdraw').map(call => [call.name, call.target, call.amount]),
+        [[a.name, w.buffer.id, 6], [b.name, link.id, 100]]);
+    assert.equal(w.calls.some(call => call.type === 'transfer'), false, 'initially empty roots never lend their planned refill');
+    assert.equal(w.counters.find.my, 1, 'alternate buffer calls share one worker graph');
+    w.nextTick(); assert.equal(a.store.energy, 6); assert.equal(b.store.energy, 100);
+});
+
+test('adjacent buffer roots and sibling roots share real cargo while each retains its own WORK and native capacity', () => {
+    const w = world(), a = w.creep('root-a', 23, 24, 0), b = w.creep('root-b', 23, 25, 20);
+    const cached = w.relay.prepareControllerEnergyRelay(w.room, w.buffer);
+    assert.equal(cached.nodes.get(a.name).depth, 0); assert.equal(cached.nodes.get(b.name).depth, 0);
+    w.relay.runControllerEnergyRelay(a, w.buffer);
+    const transfer = w.calls.find(call => call.type === 'transfer');
+    assert.deepEqual([transfer.name, transfer.target, transfer.amount], [b.name, a.name, 6]);
+    const refill = w.calls.find(call => call.type === 'withdraw' && call.name === a.name);
+    assert.equal(refill.amount + transfer.amount, a.store.getFreeCapacity(), 'withdraw cannot reuse future WORK or outgoing capacity');
+    w.nextTick(); assert.equal(a.store.energy, 100); assert.equal(b.store.energy, 94);
+});
+
+test('scarce shared buffer stock covers multiple native root demands before the first root fills spare CARRY', () => {
+    const w = world(); w.buffer.store.energy = 10;
+    const a = w.creep('root-a', 23, 24, 0), b = w.creep('root-b', 23, 25, 0);
+    w.relay.runControllerEnergyRelay(a, w.buffer);
+    assert.deepEqual(w.calls.filter(call => call.type === 'withdraw').map(call => [call.name, call.amount]), [[a.name, 6], [b.name, 4]]);
+    w.nextTick(); assert.equal(a.store.energy + b.store.energy + w.buffer.store.energy, 10);
+});
+
+test('a no-CARRY worker cannot create a stocked root or physical bridge, and a loaded worker reserving all cargo for WORK does not promise supply to neighbors', () => {
+    const w = world(), root = w.creep('root-without-carry', 23, 25, 0, 2, 0), bridge = w.creep('bridge-without-carry', 24, 24, 0, 2, 0),
+        far = w.creep('far', 25, 23, 0);
+    const cached = w.relay.prepareControllerEnergyRelay(w.room, w.buffer);
+    assert.equal(cached.nodes.has(root.name), false); assert.equal(cached.nodes.has(bridge.name), false);
+    assert.equal(w.relay.runControllerEnergyRelay(far, w.buffer), false);
+    assert.deepEqual(w.calls, []);
+    w.nextTick(); w.buffer.store.energy = 0;
+    const loaded = w.creep('own-work-only', 24, 24, 2);
+    assert.equal(w.relay.controllerEnergyRelayCanSupply(far, w.buffer), false);
+    assert.equal(w.relay.runControllerEnergyRelay(loaded, w.buffer), false);
+    assert.equal(w.calls.some(call => call.type === 'transfer'), false);
+    w.nextTick(); loaded.store.energy = 10;
+    assert.equal(w.relay.runControllerEnergyRelay(far, w.buffer), true, 'existing surplus is a real component supplier even without buffer stock');
+    assert.deepEqual(w.calls.filter(call => call.type === 'transfer').map(call => [call.name, call.target, call.amount]), [[loaded.name, far.name, 6]]);
+});
+
+test('external carry reservations remain separate from WORK and repeated room execution never overwrites an intent', () => {
+    const w = world(), root = w.creep('root', 23, 25, 20), receiver = w.creep('receiver', 24, 24, 0);
+    assert.equal(w.relay.reserveControllerCarryIntent(root, 'transfer'), true);
+    assert.equal(w.relay.reserveControllerCarryIntent(root, 'transfer'), false);
+    w.relay.runControllerEnergyRelay(receiver, w.buffer);
+    assert.equal(w.calls.some(call => call.name === root.name && call.type === 'transfer'), false);
+    assert.equal(w.calls.some(call => call.name === root.name && call.type === 'withdraw'), true, 'reserving transfer does not forbid a separate native withdraw');
+    const count = w.calls.length;
+    w.relay.runControllerEnergyRelay(root, w.buffer); assert.equal(w.calls.length, count);
+});
+
+test('a mineral-only buffer without an energy key creates neither a NaN withdrawal nor fictional connected supply', () => {
+    const w = world(), root = w.creep('root', 23, 25, 0), receiver = w.creep('receiver', 24, 24, 0);
+    w.buffer.store = { H: 1000 };
+    assert.equal(w.relay.runControllerEnergyRelay(root, w.buffer), false);
+    assert.equal(w.relay.controllerEnergyRelayCanSupply(receiver, w.buffer), false);
+    assert.deepEqual(w.calls, []);
+    w.nextTick(); root.store.energy = 20;
+    assert.equal(w.relay.runControllerEnergyRelay(receiver, w.buffer), true, 'real carried surplus can still supply a neighbor');
+    assert.equal(w.calls.some(call => call.type === 'withdraw'), false, 'existing cargo does not make a mineral-only buffer withdrawable');
+    assert.ok(w.calls.every(call => Number.isFinite(call.amount)), 'all planned carry quantities are finite');
 });
 
 test('geometry/native occupant and relay indexes are shared by all workers and only static changes rebuild terrain geometry', () => {
