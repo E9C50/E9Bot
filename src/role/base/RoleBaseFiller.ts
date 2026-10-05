@@ -4,7 +4,7 @@ import { developmentPolicy } from 'settings/development'
 import { isDevelopingRoom } from 'creep/development'
 import { controllerEnergyBuffer } from 'creep/developmentLogistics'
 import { loadDevelopmentHauler } from 'creep/developmentHauling'
-import { deliverHaulerEnergy } from 'creep/haulerDelivery'
+import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
 
 /** Controller Links receive energy from other Links, never from a local hauler. */
@@ -133,7 +133,7 @@ function closestExtension(creep: Creep): StructureExtension | StructureSpawn | u
     return closest
 }
 
-export default (data: CreepData): ICreepConfig => ({
+export default (data: CreepData): ICreepConfig => withHaulerTraffic({
     isNeed: (room: Room, creepName: string) => {
         return true
     },

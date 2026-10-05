@@ -143,3 +143,25 @@ test('a surviving RCL8 mine carrier keeps its collection lane while Storage dist
     w.calls.length = 0; unit.store.energy = 100; behavior.target(unit);
     assert.equal(w.calls.find(call => call.method === 'transfer' || call.method === 'moveTo').target, storage.id);
 });
+
+test('local stock distribution releases a traffic lock set by the movement wrapper', () => {
+    for (const phase of ['source', 'target']) {
+        const w = world(), storage = w.structure('stock', 'storage', 20, 21, 100000, 1000000);
+        const spawn = w.structure('spawn', 'spawn', 30, 30, 0, 300), unit = w.creep(100), originalMove = unit.moveTo;
+        unit.moveTo = function (...args) { originalMove.apply(this, args); this.memory.dontPullMe = true; return 0; };
+        w.behavior({ sourceId: storage.id })[phase](unit);
+        assert.equal(w.calls.find(call => call.method === 'transfer').target, spawn.id);
+        assert.equal(w.calls.find(call => call.method === 'moveTo').target, spawn.id);
+        assert.equal(unit.memory.dontPullMe, false);
+    }
+});
+
+test('a loaded local filler with no task releases its old traffic lock while idling', () => {
+    for (const level of [6, 8]) {
+        const w = world(level), unit = w.creep(100); unit.memory.dontPullMe = true;
+        w.behavior({}).target(unit);
+        assert.equal(unit.memory.dontPullMe, false);
+        assert.equal(w.calls.some(call => ['transfer', 'transferToTarget', 'moveTo'].includes(call.method)), false);
+        assert.equal(unit.store.energy, 100);
+    }
+});

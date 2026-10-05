@@ -6,6 +6,16 @@ let tick = -1, shard = ''
 const rooms = new Map<string, RoomDelivery>()
 const committed = new Map<string, number>()
 
+/** Haulers have no fixed work tile; every action, including idle and mineral work, must yield. */
+export function withHaulerTraffic(behavior: ICreepConfig): ICreepConfig {
+    const action = (run: (creep: Creep) => boolean) => function (this: ICreepConfig, creep: Creep): boolean {
+        creep.memory.dontPullMe = false
+        try { return run.call(this, creep) }
+        finally { creep.memory.dontPullMe = false }
+    }
+    return { ...behavior, prepare: action(behavior.prepare), source: action(behavior.source), target: action(behavior.target) }
+}
+
 function sync(): void {
     if (tick === Game.time && shard === Game.shard.name) return
     tick = Game.time; shard = Game.shard.name; rooms.clear(); committed.clear()

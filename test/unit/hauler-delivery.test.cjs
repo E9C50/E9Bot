@@ -90,6 +90,12 @@ test('manual remote filler uses the same import rules and unloads its real miner
     behavior.target(creep);assert.equal(w.calls[0].target,storage.id);
     w.calls.length=0;creep.store.H=10;creep.store.getUsedCapacity=()=>110;
     behavior.target(creep);assert.equal(w.calls[0].resource,'H');
+    w.calls.length=0;creep.pos=new w.Position(5,5);creep.memory.dontPullMe=true;
+    const move=creep.moveTo;
+    creep.moveTo=function(...args){this.memory.dontPullMe=true;return move.apply(this,args);};
+    behavior.target(creep);
+    assert.equal(w.calls[0].target,storage.id);
+    assert.equal(creep.memory.dontPullMe,false,'mineral imports also yield at depot entrances');
 });
 
 test('worker fallback is limited to the delivery room and uses no path search or global creep scan', () => {

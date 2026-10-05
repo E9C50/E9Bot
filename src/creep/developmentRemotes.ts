@@ -294,6 +294,12 @@ function goHome(creep: Creep, data: DevelopmentRemoteData): void {
     creep.memory.dontPullMe = false
     if (code === ERR_NO_PATH) creep.say('撤离无路')
 }
+/** A paused unit already inside its home room yields instead of competing for the Spawn approach. */
+function waitForSafeRemote(creep: Creep, data: DevelopmentRemoteData): void {
+    if (creep.room.name === data.developmentRemote.homeRoom && creep.pos.x > 0 && creep.pos.x < 49 &&
+        creep.pos.y > 0 && creep.pos.y < 49) { creep.memory.dontPullMe = false; return }
+    goHome(creep, data)
+}
 function retire(creep: Creep, data: DevelopmentRemoteData): void {
     const target = data.developmentRemote; target.retiring = true
     if (creep.room.name !== target.homeRoom) { goHome(creep, data); return }
@@ -444,7 +450,7 @@ export function withDevelopmentRemoteRole(data: CreepData, behavior: ICreepConfi
         }
         if (!activeTarget(state, task)) {
             if (task.kind === 'hauler' && creep.room.name === task.homeRoom && creep.store[RESOURCE_ENERGY] > 0) runHaulerTarget(creep, data)
-            else goHome(creep, data)
+            else waitForSafeRemote(creep, data)
             return false
         }
         if (task.kind === 'hauler') {

@@ -1,9 +1,9 @@
 import { getClosestTarget, getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
 import { supportWithTowers } from 'role/support/towers'
-import { deliverHaulerEnergy } from 'creep/haulerDelivery'
+import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
 
-export default (data: CreepData): ICreepConfig => ({
+export default (data: CreepData): ICreepConfig => withHaulerTraffic({
     isNeed: (room: Room, creepName: string) => {
         return true
     },

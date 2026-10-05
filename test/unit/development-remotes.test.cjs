@@ -233,6 +233,48 @@ test('an inactive empty hauler already near home releases its old position lock 
     assert.equal(data.developmentRemote.retiring, undefined, 'a temporary safety pause must not retire the carrier');
 });
 
+test('paused empty carriers already in home interior yield far from the Spawn without competing movement intents', () => {
+    const w = world(); w.release(); const data = w.task('hauler');
+    w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };
+    const creep = w.unit(data, w.home, { x: 17, y: 29 }); creep.memory.dontPullMe = true;
+    w.home.storage = { id: 'storage', pos: new w.Position(18, 30, w.home.name), store: w.store(0, 10000) };
+    creep.moveTo = () => { throw Error('A paused empty carrier inside home must not reserve a BetterMove movement intent'); };
+    const behavior = w.api.withDevelopmentRemoteRole(data, w.behavior);
+    for (let tick = 0; tick < 20; tick++) {
+        w.game.time++;
+        assert.equal(behavior.prepare(creep), false);
+        assert.equal(creep.memory.dontPullMe, false);
+    }
+    assert.equal(w.calls.moves.length, 0); assert.equal(w.calls.actions.length, 0);
+    assert.equal(w.calls.recycling, 0); assert.equal(w.calls.delegated, 0);
+    assert.equal(data.developmentRemote.retiring, undefined);
+    assert.equal(w.home.memory.developmentRemotes.intel[w.target.name].status, 'blocked');
+});
+
+test('paused empty carriers on any home edge continue inward withdrawal and remain swappable', () => {
+    for (const [x, y] of [[0, 25], [49, 25], [25, 0], [25, 49]]) {
+        const w = world(); w.release(); const data = w.task('hauler'); w.game.time++;
+        w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };
+        const creep = w.unit(data, w.home, { x, y }), originalMove = creep.moveTo;
+        creep.moveTo = function (...args) { originalMove.apply(this, args); this.memory.dontPullMe = true; return 0; };
+        assert.equal(w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(creep), false);
+        assert.equal(w.calls.moves.length, 1);
+        assert.deepEqual(w.calls.moves[0].pos, { x: 25, y: 25, roomName: w.home.name });
+        assert.equal(creep.memory.dontPullMe, false);
+        assert.equal(w.calls.delegated, 0);
+    }
+});
+
+test('home war keeps the existing withdrawal movement even for a paused empty interior carrier', () => {
+    const w = world(); w.release(); const data = w.task('hauler'); w.game.time++;
+    w.memory.warMode[w.home.name] = true;
+    const creep = w.unit(data, w.home, { x: 17, y: 29 });
+    assert.equal(w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(creep), false);
+    assert.equal(w.calls.moves.length, 1);
+    assert.deepEqual(w.calls.moves[0].pos, { x: 25, y: 25, roomName: w.home.name });
+    assert.equal(creep.memory.dontPullMe, false);
+});
+
 test('homeward movement clears a lock set inside the BetterMove wrapper and preserves no-path feedback', () => {
     for (const code of [0, -2]) {
         const w = world(); w.release(); const data = w.task('hauler'); w.game.time++;
