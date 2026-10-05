@@ -1,6 +1,7 @@
 import { constructionPolicy } from 'settings/construction'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
 import { BlueprintPosition, isRoomCoordinate, positionKey, RoomBlueprint } from 'planning/types'
+import { redundantSourceContainer } from 'room/sourceLinks'
 
 export interface ConstructionBudget {
     remaining: number
@@ -58,6 +59,7 @@ export function buildMissingStructures(room: Room, blueprint: RoomBlueprint, bud
             if ((counts[type] || 0) >= limit) break
             if (!isRoomCoordinate(position)) continue
             const [x, y] = position
+            if (type === STRUCTURE_CONTAINER && redundantSourceContainer(room, x, y)) continue
             // 等待旧蓝图迁移时，不重新创建贴近控制器的非采集容器。
             if (blueprint.origin == 'planner63' && level < 8 && type == STRUCTURE_CONTAINER &&
                 Math.max(Math.abs(room.controller!.pos.x - x), Math.abs(room.controller!.pos.y - y)) < controllerLayoutPolicy.containerRange &&

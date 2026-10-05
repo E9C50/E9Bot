@@ -1,11 +1,15 @@
 import { getClosestTarget, getDistance } from "utils"
 import { prepareStationaryMining, runStationaryMining } from 'creep/stationaryMining'
+import { retireSourceLinkMiner } from 'creep/sourceLinkMining'
+import { sourceLink } from 'room/sourceLinks'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
         return true
     },
     prepare(creep) {
+        const source = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, source || undefined)) return false
         const creepData: RemoteHarvesterData = data as RemoteHarvesterData
 
         // 不在目标房间就过去
@@ -15,9 +19,9 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 如果不在目标位置则移动
-        const sourceTarget: Source = Game.getObjectById<Source>(creepData.sourceId) as Source
+        const sourceTarget = source
         if (sourceTarget == undefined) { creep.memory.ready = false; return false }
-        if (creep.memory.boostPlan !== undefined) {
+        if (creep.memory.boostPlan !== undefined || sourceLink(creep.room, sourceTarget) !== undefined) {
             const prepared = prepareStationaryMining(creep, sourceTarget)
             if (prepared !== undefined) return prepared
         }
@@ -36,8 +40,9 @@ export default (data: CreepData): ICreepConfig => ({
     },
     source(creep) {
         const sourceTarget = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, sourceTarget || undefined)) return true
         if (sourceTarget == undefined) { creep.memory.ready = false; return false }
-        if (creep.memory.boostPlan !== undefined && runStationaryMining(creep, sourceTarget)) return true
+        if ((creep.memory.boostPlan !== undefined || sourceLink(creep.room, sourceTarget) !== undefined) && runStationaryMining(creep, sourceTarget)) return true
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() <= 0) {
             creep.memory.working = true
@@ -48,10 +53,12 @@ export default (data: CreepData): ICreepConfig => ({
         return true
     },
     target(creep) {
+        const sourceTarget = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, sourceTarget || undefined)) return true
+        if (sourceTarget != undefined && sourceLink(creep.room, sourceTarget) !== undefined) return runStationaryMining(creep, sourceTarget)
         if (creep.memory.boostPlan !== undefined) {
-            const source = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
-            if (source == undefined) { creep.memory.ready = false; return false }
-            if (runStationaryMining(creep, source)) return true
+            if (sourceTarget == undefined) { creep.memory.ready = false; return false }
+            if (runStationaryMining(creep, sourceTarget)) return true
         }
         // 如果没有能量了，就切换为采集状态
         if (creep.store[RESOURCE_ENERGY] == 0) {

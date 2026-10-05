@@ -8,6 +8,7 @@ import { bodyPolicy } from 'settings/bodyPolicy'
 import { rolePolicy } from 'settings/rolePolicy'
 import { interShardPolicy } from 'settings/interShard'
 import type { ShardUnitData } from 'shard/missions'
+import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
 
 function workParts(creep: Creep): number { return creep.getActiveBodyparts(WORK) }
 function range(first: RoomPosition, second: RoomPosition): number {
@@ -107,6 +108,14 @@ function servesSource(creep: Creep, source: Source, containers: StructureContain
     return data.sourceId === source.id || containers.some(container => container.id === data.sourceId)
 }
 
+function sourceStock(room: Room, source: Source): number {
+    let stock = 0
+    for (const container of room.containers) if (range(source.pos, container.pos) <= 1) stock += container.store[RESOURCE_ENERGY]
+    for (const drop of room.droppedResource || []) if (drop.resourceType === RESOURCE_ENERGY &&
+        range(source.pos, drop.pos) <= policy.hauling.mineResourceRange) stock += drop.amount
+    return stock
+}
+
 /** Fund consumers from arrived production and real carrying capacity, never from unspawned fleet templates. */
 function localSupply(room: Room, creeps: Creep[], supplies: MiningSupply[], buffer: StructureLink | StructureContainer | undefined): {
     income: number; directIncome: number; backlogWork: number; controllerBacklogWork: number
@@ -117,15 +126,15 @@ function localSupply(room: Room, creeps: Creep[], supplies: MiningSupply[], buff
     const counted = new Set<string>()
     if (buffer) counted.add(buffer.id)
     for (const { source, production } of supplies) {
+        const linked = room.links.length > 0 && hasSourceLinkTransport(room, source, buffer)
         const containers = room.containers.filter(container => range(source.pos, container.pos) <= 1)
         const capacity = creeps.filter(creep => !creep.spawning && creep.room.name === room.name && creep.memory.role === 'filler' &&
             servesSource(creep, source, containers))
             .reduce((total, creep) => total + energyCarryCapacity(creep), 0)
         const hauling = capacity / sourceHaulingTrip(room, source, buffer)
         const direct = containers.some(container => container.id === buffer?.id) ||
-            buffer?.structureType === STRUCTURE_LINK && room.links.some(link => link.id !== buffer.id &&
-                link.my !== false && range(source.pos, link.pos) <= 2 && (!link.isActive || link.isActive()))
-        const transport = direct ? Math.max(hauling, production) : hauling
+            buffer?.structureType === STRUCTURE_LINK && linked
+        const transport = direct || linked ? Math.max(hauling, production) : hauling
         income += Math.min(production, transport)
         if (direct) directIncome += production
         let stock = 0
@@ -137,7 +146,7 @@ function localSupply(room: Room, creeps: Creep[], supplies: MiningSupply[], buff
                 range(source.pos, drop.pos) <= policy.hauling.mineResourceRange && !counted.has(drop.id)) {
                 stock += drop.amount; counted.add(drop.id)
             }
-            backlog += Math.min(stock / policy.upgrading.backlogEnergyPerWork, Math.max(0, hauling - production))
+            backlog += Math.min(stock / policy.upgrading.backlogEnergyPerWork, Math.max(0, hauling - (linked ? 0 : production)))
         }
     }
     return { income, directIncome, backlogWork: Math.min(policy.upgrading.maximumBacklogWorkParts, Math.floor(backlog)),
@@ -150,16 +159,18 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
     const affordable = affordableWork(room.energyCapacityAvailable, policy.mining.workPartsPerSource, true, true)
     if (affordable == 0) return supplies
     for (const source of room.sources) {
+        const linked = room.links.length > 0 && sourceLink(room, source) !== undefined
         const miners = creeps.filter(creep => creep.memory.role == 'harvester' &&
             (creep.memory.data as HarvesterData).sourceId == source.id && workParts(creep) > 0)
-        const nearbyWork = miners.filter(creep => !creep.spawning && creep.room.name == room.name &&
+        const productive = linked ? miners.filter(creep => creep.getActiveBodyparts(CARRY) > 0) : miners
+        const nearbyWork = productive.filter(creep => !creep.spawning && creep.room.name == room.name &&
             !(creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed) &&
             range(creep.pos, source.pos) <= 1).reduce((total, creep) => total + harvestWorkParts(creep), 0)
         supplies.push({ source, production: Math.min(source.energyCapacity / ENERGY_REGEN_TIME, nearbyWork * HARVEST_POWER) })
         let remaining = getSourceMiningWorkTarget(source)
         let count = 0
         const maximum = Math.min(policy.mining.maximumCreepsPerSource, Math.max(1, source.pos.getFreeSpace().length))
-        const candidates = miners.filter(miner => miner.memory.name && (miner.spawning ||
+        const candidates = productive.filter(miner => miner.memory.name && (miner.spawning ||
             (miner.ticksToLive ?? 0) > replacementLead(room, miner, source.pos)))
             .map(miner => ({ miner, work: futureMiningWork(miner) }))
         let nextIndex = 0
@@ -256,6 +267,10 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const importedBacklog = Math.max(0, local.backlogWork - local.controllerBacklogWork)
     const upgradeBacklog = local.controllerBacklogWork + Math.min(importedBacklog, Math.floor(Math.max(0, headroom - upgradeBurst)))
     for (const source of room.sources) {
+        const linked = room.links.length > 0 && hasSourceLinkTransport(room, source, buffer)
+        const stock = linked ? sourceStock(room, source) : 0
+        // Link production reaches its receiver directly. Only stranded native stock needs a salvage trip.
+        if (linked && stock <= 0) continue
         const container = room.containers.find(candidate => range(candidate.pos, source.pos) <= 1)
         const sourceId = container?.id || source.id
         const trip = sourceHaulingTrip(room, source, buffer)
@@ -264,10 +279,10 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
             range(creep.pos, source.pos) <= 1).reduce((total, creep) => total + harvestWorkParts(creep), 0)
         const startingWork = affordableWork(room.energyCapacityAvailable, policy.mining.workPartsPerSource, true, true)
         const rate = Math.min(source.energyCapacity / ENERGY_REGEN_TIME, Math.max(startingWork, nearbyWork) * HARVEST_POWER)
-        const totalCarry = Math.max(policy.bodies.minimumCarryParts, Math.ceil(trip * rate / CARRY_CAPACITY))
+        const totalCarry = Math.max(policy.bodies.minimumCarryParts, Math.ceil((linked ? stock : trip * rate) / CARRY_CAPACITY))
         const capacityCarry = Math.max(1, Math.min(policy.hauling.maximumCarryPartsPerCreep,
             Math.floor(room.energyCapacityAvailable / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
-        const count = Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(totalCarry / capacityCarry))
+        const count = linked ? 1 : Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(totalCarry / capacityCarry))
         for (let index = 0; index < count; index++) publish(room, 'filler',
             `${room.name}_DEVELOP_FILLER_${source.id}_${index}`, { sourceId, mineId: source.id },
             { carryParts: Math.min(capacityCarry, Math.max(1, totalCarry - index * capacityCarry)), travelTicks: trip })

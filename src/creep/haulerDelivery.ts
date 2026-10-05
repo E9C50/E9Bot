@@ -1,4 +1,5 @@
 import { haulerDeliveryPolicy as policy } from 'settings/haulerDelivery'
+import { continueCachedHaulerRoute, haulerEnergyPickupHandled, pickupAdjacentHaulerEnergy } from './haulerPickup'
 
 type Receiver = AnyStoreStructure | Creep
 interface RoomDelivery { room: Room; structures: AnyStoreStructure[]; workers?: Creep[] }
@@ -8,12 +9,24 @@ const committed = new Map<string, number>()
 
 /** Haulers have no fixed work tile; every action, including idle and mineral work, must yield. */
 export function withHaulerTraffic(behavior: ICreepConfig): ICreepConfig {
-    const action = (run: (creep: Creep) => boolean) => function (this: ICreepConfig, creep: Creep): boolean {
+    const action = (run: (creep: Creep) => boolean, phase: 'prepare' | 'source' | 'target') => function (this: ICreepConfig, creep: Creep): boolean {
         creep.memory.dontPullMe = false
-        try { return run.call(this, creep) }
+        try {
+            if (phase !== 'prepare') {
+                const source = phase === 'source'
+                const delivering = !source && creep.memory.working && creep.memory.developmentHauler?.phase !== 'load'
+                if (haulerEnergyPickupHandled(creep) || (source || delivering) && pickupAdjacentHaulerEnergy(creep, source)) {
+                    continueCachedHaulerRoute(creep, source)
+                    return true
+                }
+            }
+            const result = run.call(this, creep)
+            if (phase === 'source' && !result && !creep.memory.working) pickupAdjacentHaulerEnergy(creep)
+            return result
+        }
         finally { creep.memory.dontPullMe = false }
     }
-    return { ...behavior, prepare: action(behavior.prepare), source: action(behavior.source), target: action(behavior.target) }
+    return { ...behavior, prepare: action(behavior.prepare, 'prepare'), source: action(behavior.source, 'source'), target: action(behavior.target, 'target') }
 }
 
 function sync(): void {

@@ -496,6 +496,7 @@ test('an active Source Link can fund a controller Link without pretending a loca
     const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8);
     origin.isActive = () => false;
+    state.game.time++;
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1);
 });
 
@@ -661,6 +662,7 @@ test('native Source Link input bypasses Storage distributors without counting th
     distributor.store = store(0, fleet[0].development.travelTicks * 30); state.game.creeps.distributor = distributor;
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare));
     home.links[0].isActive = () => false;
+    state.game.time++;
     delete state.game.creeps.distributor;
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1, 'an inactive native path needs real Storage distribution');
 });
@@ -1021,7 +1023,6 @@ function blockDevelopmentReads(state) {
     const forbidden = () => { throw new Error('legacy population must not inspect development state or logistics'); };
     Object.defineProperty(state.home.memory, 'developmentRemotes', { get: forbidden });
     Object.defineProperty(state.home, 'controllerLink', { get: forbidden });
-    Object.defineProperty(state.home, 'links', { get: forbidden });
     Object.defineProperty(state.policy, 'bodies', { get: forbidden });
     Object.defineProperty(state.game, 'creeps', { get: forbidden });
 }
@@ -1061,4 +1062,143 @@ test('fastUpgrade=false preserves the entire RCL7 legacy population and never re
     assert.deepEqual(summary(configs), expectedLegacy(home, 4));
     assert.ok(configs.every(config => !Object.hasOwn(config, 'development')));
     assert.deepEqual(Object.keys(home.memory).sort(), ['creepConfig', 'fastUpgrade']);
+});
+
+function linkNetwork(home, controller = true) {
+    const origin = structure('source-link', 'link', home.sources[0].pos.x + 1, home.sources[0].pos.y, 0);
+    home.links = [origin];
+    if (controller) {
+        home.controllerLink = structure('controller-link', 'link', 38, 40, 0);
+        home.links.push(home.controllerLink);
+    }
+    return origin;
+}
+
+function withoutCarry(creep) {
+    const active = creep.getActiveBodyparts;
+    creep.body = creep.body.filter(part => part.type !== 'carry');
+    creep.getActiveBodyparts = part => part === 'carry' ? 0 : active(part);
+    return creep;
+}
+
+test('a Link miner with no CARRY is neither current nor future production and receives a carry-capable replacement', () => {
+    for (const spawning of [false, true]) {
+        const home = room({ capacity: 1300, level: 6 });
+        linkNetwork(home);
+        const obsolete = withoutCarry(worker(home, { spawning, name: 'obsolete-miner' }));
+        const state = makeWorld(home, { creeps: { obsolete }, automaticHauling: false });
+        const configs = state.release(), miners = byRole(configs, 'harvester');
+        assert.equal(miners.length, 1);
+        assert.notEqual(miners[0].name, obsolete.memory.name);
+        assert.equal(miners[0].development.workParts, 5);
+        assert.equal(requestedWork(byRole(configs, 'upgrader')), 1, 'unusable WORK cannot fund consumers');
+        assert.ok(Array.from(state.loader.load('creep/developmentBodies').getDevelopmentBody(home, miners[0])).includes('carry'));
+    }
+});
+
+test('a zero-CARRY miner without a usable Link retains the existing ground-mining demand and income', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    const miner = withoutCarry(worker(home));
+    const state = makeWorld(home, { creeps: { miner } });
+    const configs = state.release();
+    assert.equal(byRole(configs, 'harvester')[0].name, miner.memory.name);
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 8);
+});
+
+test('a drained Source Link with a controller receiver has no dedicated source-hauler production fleet', () => {
+    const home = room({ capacity: 1300, level: 6 });
+    linkNetwork(home);
+    const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
+    const configs = state.release();
+    assert.equal(byRole(configs, 'filler').filter(config => config.data.mineId === home.sources[0].id).length, 0);
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 8);
+});
+
+test('Storage without a receiving Link cannot suppress source transportation', () => {
+    const home = room({ capacity: 1300, level: 6 });
+    linkNetwork(home, false);
+    home.storage = structure('storage', 'storage', 24, 24, 500);
+    const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
+    assert.ok(byRole(state.release(), 'filler').some(config => config.data.mineId === home.sources[0].id));
+    assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[0]), false);
+    home.centerLink = structure('center-link', 'link', 24, 25, 0);
+    home.links.push(home.centerLink); state.game.time++;
+    assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[0]), true);
+    assert.equal(byRole(state.release(), 'filler').filter(config => config.data.mineId === home.sources[0].id).length, 0);
+});
+
+test('only native source stock funds a single Link salvage hauler instead of a virtual production fleet', () => {
+    const home = room({ capacity: 1300, level: 6 });
+    linkNetwork(home);
+    home.droppedResource = [{ id: 'source-drop', resourceType: 'energy', amount: 120, pos: position(11, 11) }];
+    const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
+    const haulers = () => byRole(state.release(), 'filler').filter(config => config.data.mineId === home.sources[0].id);
+    assert.equal(haulers().length, 1);
+    assert.equal(haulers()[0].development.carryParts, 3);
+    home.droppedResource[0].amount = 5000;
+    assert.equal(haulers().length, 1, 'large backlog still has a single salvage slot');
+    assert.equal(haulers()[0].development.carryParts, 13, 'native stock is capped by affordable capacity');
+    home.droppedResource[0].pos = position(12, 12);
+    assert.equal(haulers().length, 0, 'a different floor pile does not revive this source fleet');
+    home.containers = [structure('old-source-container', 'container', 11, 10, 50)];
+    assert.equal(haulers().length, 1);
+    assert.equal(haulers()[0].data.sourceId, 'old-source-container');
+    home.containers[0].store.energy = 0;
+    assert.equal(haulers().length, 0);
+});
+
+test('mature Link miners bypass a zero-CARRY fixed name and keep one replacement after predecessor retirement', () => {
+    for (const spawning of [false, true]) {
+        const home = legacyRoom(); linkNetwork(home, false);
+        const logicalName = `${home.name}_HARVESTER_source0_0`;
+        const obsolete = withoutCarry(worker(home, { name: logicalName }));
+        obsolete.name = `HARVESTER_${logicalName}`;
+        const state = makeWorld(home, { creeps: { [obsolete.name]: obsolete }, automaticHauling: false });
+        const first = byRole(state.release(), 'harvester').find(config => config.data.sourceId === home.sources[0].id);
+        assert.equal(first.name, `${logicalName}_LINK_CARRY_0`);
+        const replacement = worker(home, { name: first.name, spawning });
+        replacement.name = state.demand.createCreepName('harvester', first.name);
+        state.game.creeps[replacement.name] = replacement;
+        delete state.game.creeps[obsolete.name];
+        const retained = byRole(state.release(), 'harvester').filter(config => config.data.sourceId === home.sources[0].id);
+        assert.equal(retained.length, 1);
+        assert.equal(retained[0].name, first.name, 'do not return to the freed canonical name while its replacement lives');
+        assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'harvester' &&
+            home.memory.creepConfig[name].data.sourceId === home.sources[0].id).length, 0);
+    }
+});
+
+test('mature ground miners retain their existing fixed name when no Source Link exists', () => {
+    const home = legacyRoom(), logicalName = `${home.name}_HARVESTER_source0_0`;
+    const obsolete = withoutCarry(worker(home, { name: logicalName }));
+    obsolete.name = `HARVESTER_${logicalName}`;
+    const state = makeWorld(home, { creeps: { [obsolete.name]: obsolete }, automaticHauling: false });
+    assert.equal(byRole(state.release(), 'harvester').find(config => config.data.sourceId === home.sources[0].id).name, logicalName);
+});
+
+test('mature Link-source container salvage retains at most one hauler and ends at zero stock', () => {
+    const home = legacyRoom(); linkNetwork(home, false); home.links.push(home.centerLink);
+    const state = makeWorld(home, { automaticHauling: false });
+    const haulers = () => byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-a');
+    assert.equal(haulers().length, 1);
+    home.containers[0].store.energy = 0;
+    assert.equal(haulers().length, 0);
+    assert.equal(byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-b').length, 2,
+        'the unlinked source keeps the established transportation fleet');
+});
+
+test('a mature Source Link with no receiver keeps its ordinary source-container fleet', () => {
+    const home = legacyRoom(); linkNetwork(home, false); delete home.centerLink;
+    const state = makeWorld(home, { automaticHauling: false });
+    assert.equal(byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-a').length, 2);
+});
+
+test('a shared container serving an unlinked Source still publishes ordinary transportation', () => {
+    const home = legacyRoom();
+    home.sources[1].pos = position(12, 10);
+    home.links = [structure('source-link', 'link', 9, 10, 0), home.centerLink];
+    const state = makeWorld(home, { automaticHauling: false });
+    assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[0]), true);
+    assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[1]), false);
+    assert.equal(byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-a').length, 2);
 });

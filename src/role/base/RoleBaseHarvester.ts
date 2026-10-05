@@ -4,10 +4,12 @@ import { developmentPolicy } from 'settings/development'
 import { isDevelopingRoom } from 'creep/development'
 import { sourceHarvestPosition } from 'creep/developmentLogistics'
 import { prepareStationaryMining, runStationaryMining } from 'creep/stationaryMining'
+import { retireSourceLinkMiner } from 'creep/sourceLinkMining'
+import { sourceLink } from 'room/sourceLinks'
 
 function sourceBuffers(creep: Creep, source: Source): { link?: StructureLink; container?: StructureContainer } {
     return {
-        link: creep.store.getCapacity(RESOURCE_ENERGY) === 0 ? undefined : creep.room.links.find(link => link.my !== false && source.pos.inRangeTo(link, 2) && sourceHarvestPosition(creep, source, link) != undefined),
+        link: creep.store.getCapacity(RESOURCE_ENERGY) === 0 ? undefined : sourceLink(creep.room, source),
         container: creep.room.containers.find(container => source.pos.isNearTo(container)),
     }
 }
@@ -37,7 +39,7 @@ function emergencyLoadReady(creep: Creep, source: Source): boolean {
 
 /** Use the mine's own harvest to build its container without leaving the Source workstation. */
 function buildSourceContainer(creep: Creep, source: Source): boolean {
-    if (!creep.pos.isNearTo(source) || !(creep.store[RESOURCE_ENERGY] > 0)) return false
+    if (!creep.pos.isNearTo(source) || !(creep.store[RESOURCE_ENERGY] > 0) || sourceLink(creep.room, source) !== undefined) return false
     const site = creep.room.constructionSites.find(site => site.my && site.structureType === STRUCTURE_CONTAINER && source.pos.isNearTo(site))
     if (site === undefined) return false
     // build and harvest share one native WORK intent; refill on the next empty tick.
@@ -46,9 +48,7 @@ function buildSourceContainer(creep: Creep, source: Source): boolean {
     return true
 }
 
-function prepareDevelopingHarvester(creep: Creep, data: HarvesterData): boolean {
-    const source = Game.getObjectById<Source>(data.sourceId)
-    if (source == undefined) return false
+function prepareDevelopingHarvester(creep: Creep, source: Source): boolean {
     if (emergencyProductionTarget(creep) != undefined && emergencyLoadReady(creep, source)) return true
     const buffers = sourceBuffers(creep, source), target = buffers.link || buffers.container
     const seat = target == undefined ? undefined : sourceHarvestPosition(creep, source, target)
@@ -61,9 +61,7 @@ function prepareDevelopingHarvester(creep: Creep, data: HarvesterData): boolean 
 }
 
 /** Unload the previous tick's harvest while producing the next batch. */
-function runDevelopingHarvester(creep: Creep, data: HarvesterData): boolean {
-    const source = Game.getObjectById<Source>(data.sourceId)
-    if (source == undefined) { creep.memory.ready = false; return false }
+function runDevelopingHarvester(creep: Creep, source: Source): boolean {
     const emergency = emergencyProductionTarget(creep)
     if (emergency != undefined && emergencyLoadReady(creep, source)) {
         if (creep.transfer(emergency, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) creep.moveTo(emergency, { range: 1 })
@@ -102,17 +100,17 @@ export default (data: CreepData): ICreepConfig => ({
         return true
     },
     prepare(creep) {
-        if (isDevelopingRoom(creep.room)) return prepareDevelopingHarvester(creep, data as HarvesterData)
+        const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, source || undefined)) return false
+        if (source == undefined) { creep.memory.ready = false; return false }
+        if (sourceLink(creep.room, source) !== undefined) return prepareStationaryMining(creep, source)!
+        if (isDevelopingRoom(creep.room)) return prepareDevelopingHarvester(creep, source)
         if (creep.memory.boostPlan !== undefined) {
-            const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
-            if (source == undefined) { creep.memory.ready = false; return false }
             const prepared = prepareStationaryMining(creep, source)
             if (prepared !== undefined) return prepared
         }
         if (creep.memory.ready) return true
-        const creepData: HarvesterData = data as HarvesterData
-        const sourceTarget: Source = Game.getObjectById<Source>(creepData.sourceId) as Source
-        if (sourceTarget == undefined) return false
+        const sourceTarget = source
 
         // 如果不在目标位置则移动
         if (!creep.pos.isNearTo(sourceTarget)) {
@@ -123,10 +121,12 @@ export default (data: CreepData): ICreepConfig => ({
         return true
     },
     source(creep) {
-        if (isDevelopingRoom(creep.room)) return runDevelopingHarvester(creep, data as HarvesterData)
+        const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, source || undefined)) return true
+        if (source == undefined) { creep.memory.ready = false; return false }
+        if (sourceLink(creep.room, source) !== undefined) return runStationaryMining(creep, source)
+        if (isDevelopingRoom(creep.room)) return runDevelopingHarvester(creep, source)
         if (creep.memory.boostPlan !== undefined) {
-            const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
-            if (source == undefined) { creep.memory.ready = false; return false }
             if (runStationaryMining(creep, source)) return true
         }
         // 如果没有空余容量了，就开始工作
@@ -135,9 +135,7 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
-        const creepData: HarvesterData = data as HarvesterData
-        const sourceTarget: Source = Game.getObjectById<Source>(creepData.sourceId) as Source
-        if (sourceTarget == undefined) { creep.memory.ready = false; return false }
+        const sourceTarget = source
         if (sourceTarget.energy == 0) {
             return false
         }
@@ -145,10 +143,12 @@ export default (data: CreepData): ICreepConfig => ({
         return true
     },
     target(creep) {
-        if (isDevelopingRoom(creep.room)) return runDevelopingHarvester(creep, data as HarvesterData)
+        const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
+        if (retireSourceLinkMiner(creep, source || undefined)) return true
+        if (source == undefined) { creep.memory.ready = false; return false }
+        if (sourceLink(creep.room, source) !== undefined) return runStationaryMining(creep, source)
+        if (isDevelopingRoom(creep.room)) return runDevelopingHarvester(creep, source)
         if (creep.memory.boostPlan !== undefined) {
-            const source = Game.getObjectById<Source>((data as HarvesterData).sourceId)
-            if (source == undefined) { creep.memory.ready = false; return false }
             if (runStationaryMining(creep, source)) return true
         }
         // 如果没有能量了，就切换为采集状态
@@ -186,16 +186,6 @@ export default (data: CreepData): ICreepConfig => ({
             return true
         }
 
-        // 如果有link则存放
-        let link: StructureLink | undefined
-        for (const candidate of creep.room.links) {
-            if (creep.pos.isNearTo(candidate)) { link = candidate; break }
-        }
-        if (link != undefined && link.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-            creep.transfer(link, RESOURCE_ENERGY)
-            return true
-        }
-
         // 如果有container，如果生命值不够，则维修，要么就存放
         let container: StructureContainer | undefined
         let minimumEnergy = Infinity
@@ -214,7 +204,7 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         // 没有Container也没有工地，那就创建
-        if (constructionSite == undefined && container == undefined && link == undefined && creep.room.level < rolePolicy.harvester.stopCreatingContainersAtLevel) {
+        if (constructionSite == undefined && container == undefined && creep.room.level < rolePolicy.harvester.stopCreatingContainersAtLevel) {
             creep.room.createConstructionSite(creep.pos.x, creep.pos.y, STRUCTURE_CONTAINER)
             creep.room.memory.needUpdateCache = true
         }

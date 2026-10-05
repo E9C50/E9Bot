@@ -35,7 +35,7 @@ function world(level = 3) {
             if (type === 'structure') { structureLooks++; return room.structures.filter(item => item.pos.x === x && item.pos.y === y); }
             return room.units.filter(item => item.pos.x === x && item.pos.y === y);
         },
-        find: () => room.units,
+        find:type=>type==='minerals'?[]:room.units,
         createConstructionSite(...args) { calls.push({ method: 'createConstructionSite', args }); return 0; }
     };
     room.controller = { id: 'controller', level, my: true, pos: p(25, 25) };
@@ -76,7 +76,7 @@ function world(level = 3) {
     }
     const loader = createSourceLoader({
         globals: {
-            Game: game, RoomPosition, WORK: 'work', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
+            Game: game, RoomPosition, WORK: 'work', CREEP_LIFE_TIME:1500, HARVEST_POWER:2, FIND_MINERALS:'minerals', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
             LOOK_STRUCTURES: 'structure', LOOK_CREEPS: 'creep', TERRAIN_MASK_WALL: 1,
             STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_LINK: 'link',
             BUILD_POWER: 5, CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
@@ -784,18 +784,18 @@ for (const phase of ['source', 'target']) test(`stationary development harvester
     assert.equal(unit.memory.working, false);
 });
 
-test('development miner seats support source and link simultaneously and prefer source containers', () => {
-    const w = world(), source = w.source(), container = w.structure('container', 'container', 11, 10), link = w.structure('link', 'link', 12, 10), unit = w.creep('miner', 'harvester', 8, 10, 0);
-    const behavior = w.roles.harvester({ sourceId: source.id });
-    assert.equal(behavior.prepare(unit), false);
-    const move = w.intents('moveTo')[0];
-    assert.equal(w.p(move.x, move.y).isNearTo(source), true);
-    assert.equal(w.p(move.x, move.y).isNearTo(link), true);
-    assert.equal(move.range, 0);
-    const reserved = w.logistics.sourceHarvestPosition(unit, source, container);
-    assert.ok(reserved.isNearTo(source) && reserved.isNearTo(container));
-    unit.pos = w.p(11, 10); unit.store.energy = 10; w.clear(); behavior.source(unit);
-    assert.equal(w.intents('transfer')[0].target, link.id);
+test('development Link miners use a shared Source/Link seat and ignore the obsolete source Container',()=>{
+    const w=world(),source=w.source(),container=w.structure('container','container',11,10),link=w.structure('link','link',12,10);
+    const unit=w.creep('miner','harvester',8,10,0,50),behavior=w.roles.harvester({sourceId:source.id});
+    unit.body=[{type:'work',hits:100},{type:'carry',hits:100},{type:'move',hits:100}];unit.hits=300;unit.hitsMax=300;
+    assert.equal(behavior.prepare(unit),false);const move=w.intents('moveTo')[0];
+    assert.equal(w.p(move.x,move.y).isNearTo(source),true);assert.equal(w.p(move.x,move.y).isNearTo(link),true);assert.equal(move.range,0);
+    unit.pos=w.p(move.x,move.y);unit.store.energy=48;container.hits=100;w.clear();
+    assert.equal(behavior.source(unit),true);
+    assert.deepEqual(w.calls.map(call=>[call.method,call.target]),[['transfer',link.id],['harvest',source.id]]);
+    assert.equal(unit.store.energy,48,'native intents preserve the initial Store');
+    w.clear();link.store.energy=2000;unit.store.energy=50;w.game.time++;
+    assert.equal(behavior.target(unit),true);assert.deepEqual(w.calls,[],'full Link pauses without repairing or feeding its old Container');
 });
 
 test('development miners remain productive on the preferred container tile after relocating', () => {
@@ -939,19 +939,20 @@ test('a no-CARRY development miner continues harvesting for native dropped-energ
     assert.deepEqual(w.calls.map(call => call.method), ['harvest']);
 });
 
-test('a no-CARRY development miner uses the exact container tile despite an adjacent link', () => {
-    const w = world(), source = w.source(), container = w.structure('mine', 'container', 11, 10);
-    const link = w.structure('link', 'link', 12, 10), unit = w.creep('miner', 'harvester', 11, 11, 0, 0);
-    const behavior = w.roles.harvester({ sourceId: source.id });
-    assert.equal(w.logistics.sourceHarvestPosition(unit, source, link), undefined);
-    assert.equal(behavior.prepare(unit), false);
-    assert.equal(w.intents('moveTo')[0].x, container.pos.x);
-    assert.equal(w.intents('moveTo')[0].y, container.pos.y);
-    w.clear(); behavior.source(unit);
-    assert.equal(w.intents('harvest').length, 0, 'a misplaced zero-CARRY miner cannot create ground overflow');
-    unit.pos = w.p(11, 10); w.clear(); assert.equal(behavior.prepare(unit), true); behavior.source(unit);
-    assert.equal(w.intents('harvest').length, 1);
-    assert.equal(w.intents('transfer').length, 0);
+test('a no-CARRY development miner yields a usable Link mine and recycles without waiting for its replacement',()=>{
+    const w=world(),source=w.source(),container=w.structure('mine','container',11,10),link=w.structure('link','link',12,10);
+    const unit=w.creep('miner','harvester',11,11,0,0),spawn=w.structure('spawn','spawn',20,20,0,300);
+    spawn.recycleCreep=creep=>{w.calls.push({method:'recycleCreep',name:creep.name,target:spawn.id});return 0;};
+    unit.memory.spawnRoom=w.room.name;unit.memory.ready=true;unit.memory.dontPullMe=true;
+    const behavior=w.roles.harvester({sourceId:source.id});
+    assert.equal(w.logistics.sourceHarvestPosition(unit,source,link),undefined);
+    assert.equal(behavior.prepare(unit),false);assert.equal(w.intents('moveTo')[0].target,spawn.id);
+    assert.equal(unit.memory.ready,false);assert.equal(unit.memory.dontPullMe,false);
+    w.clear();behavior.source(unit);
+    assert.deepEqual(w.calls.map(call=>call.method),['moveTo'],'no harvest, repair, construction or dropped overflow during retirement');
+    unit.pos=w.p(19,20);w.objects.delete(source.id);w.clear();
+    assert.equal(behavior.prepare(unit),false);assert.deepEqual(w.calls.map(call=>call.method),['recycleCreep']);
+    assert.equal(container.store.energy,0);
 });
 
 test('a no-CARRY miner waits for an occupied container tile instead of mining next to it', () => {

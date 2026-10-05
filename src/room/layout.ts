@@ -1,5 +1,8 @@
 import { runAutomaticLayout } from 'planning/automaticLayout'
 import { roomPolicy } from 'settings/roomPolicy'
+import { sourceLinkPolicy } from 'settings/sourceLinks'
+import { cleanupSourceLinkContainers } from 'planning/sourceLinkContainers'
+import { roomWorkDue } from 'runtime/roomSchedule'
 
 // Screeps 房间坐标规则；当前 API 未提供房间边长常量。
 const ROOM_SIZE = 50
@@ -61,5 +64,6 @@ export function autoComputeCenterPos(
 
 /** 保留控制器公开入口；布局和补建由持久蓝图服务管理。 */
 export function releaseConstructionSite(room: Room): void {
+    if (sourceLinkPolicy.enabled && roomWorkDue(room.name, sourceLinkPolicy.inspectionInterval)) cleanupSourceLinkContainers(room)
     runAutomaticLayout(room)
 }

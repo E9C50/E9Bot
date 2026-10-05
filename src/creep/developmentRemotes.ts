@@ -3,7 +3,11 @@ import { developmentRemotePolicy as policy } from 'settings/developmentRemotes'
 import { scoutMovementOptions } from 'shard/scoutMovement'
 import { runtimePolicy } from 'settings/runtime'
 import { isDevelopingRoom } from './development'
-import { deliverHaulerEnergy } from './haulerDelivery'
+import { deliverHaulerEnergy, withHaulerTraffic } from './haulerDelivery'
+import { haulerEnergyPickupReserved, pickupAdjacentHaulerEnergy, reserveHaulerEnergyPickup } from './haulerPickup'
+import { retireSourceLinkMiner } from './sourceLinkMining'
+import { sourceLink } from 'room/sourceLinks'
+import { prepareStationaryMining, runStationaryMining } from './stationaryMining'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -327,6 +331,7 @@ function sourceSite(creep: Creep, source: Source): ConstructionSite | undefined 
 function prepareMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
     const source = Game.getObjectById<Source>(data.developmentRemote.source!.id)
     if (!source) return false
+    if (sourceLink(creep.room, source)) return prepareStationaryMining(creep, source) ?? false
     const station = sourceContainer(creep, source) || sourceSite(creep, source)
     if (station && distance(creep.pos, station.pos) !== 0) { creep.moveTo(station, { range: 0 }); return false }
     if (!creep.pos.isNearTo(source)) { creep.moveTo(source, { range: 1 }); return false }
@@ -336,6 +341,7 @@ function prepareMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
 function runMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
     const source = Game.getObjectById<Source>(data.developmentRemote.source!.id)
     if (!source || !creep.pos.isNearTo(source)) { creep.memory.ready = false; return false }
+    if (sourceLink(creep.room, source)) return runStationaryMining(creep, source)
     const energy = creep.store[RESOURCE_ENERGY], free = creep.store.getFreeCapacity(RESOURCE_ENERGY)
     const container = sourceContainer(creep, source)
     if (container && container.hits <= CONTAINER_DECAY * policy.containerRepairDecayCycles && energy > 0) {
@@ -365,11 +371,14 @@ function runHaulerSource(creep: Creep, data: DevelopmentRemoteData): boolean {
     let dropped: Resource | undefined, nearest = Infinity
     for (const item of creep.room.find(FIND_DROPPED_RESOURCES)) {
         if (item.resourceType !== RESOURCE_ENERGY || item.amount <= 0 || distance(item.pos, sourcePos) > 3) continue
+        if (Math.min(creep.store.getFreeCapacity(RESOURCE_ENERGY), item.amount) > item.amount - haulerEnergyPickupReserved(item)) continue
         const range = distance(creep.pos, item.pos)
         if (range < nearest) { dropped = item; nearest = range }
     }
     if (dropped) {
-        if (creep.pickup(dropped) === ERR_NOT_IN_RANGE) creep.moveTo(dropped, { range: 1 })
+        const code = creep.pickup(dropped)
+        if (code === ERR_NOT_IN_RANGE) creep.moveTo(dropped, { range: 1 })
+        else if (code === OK) reserveHaulerEnergyPickup(creep, dropped, Math.min(creep.store.getFreeCapacity(RESOURCE_ENERGY), dropped.amount))
         return true
     }
     const logistics = data as RemoteFillerData
@@ -412,7 +421,7 @@ export function withDevelopmentRemoteRole(data: CreepData, behavior: ICreepConfi
     const run = (creep: Creep): boolean => data.developmentRemote.kind === 'harvester' ? runMiner(creep, data) :
         data.developmentRemote.kind === 'hauler' ? (creep.memory.working ? runHaulerTarget(creep, data) : runHaulerSource(creep, data)) :
         data.developmentRemote.kind === 'reserver' ? runReserver(creep) : false
-    return { ...behavior, source: run, target: run, isNeed(home, creepName) {
+    const automatic: ICreepConfig = { ...behavior, source: run, target: run, isNeed(home, creepName) {
         const task = data.developmentRemote
         if (task.retiring || !enabled(home) || atWar(home) || manualRooms().has(task.targetRoom)) return false
         if (creepName !== undefined) {
@@ -426,6 +435,7 @@ export function withDevelopmentRemoteRole(data: CreepData, behavior: ICreepConfi
             activeTarget(state, task)
     }, prepare(creep) {
         const task = data.developmentRemote, home = Game.rooms[task.homeRoom]
+        if (task.kind === 'harvester' && retireSourceLinkMiner(creep, task.source ? Game.getObjectById<Source>(task.source.id) || undefined : undefined)) return false
         if (task.retiring || !enabled(home) || manualRooms().has(task.targetRoom)) { retire(creep, data); return false }
         const state = stateFor(home), visible = Game.rooms[task.targetRoom]
         if (visible) {
@@ -458,11 +468,12 @@ export function withDevelopmentRemoteRole(data: CreepData, behavior: ICreepConfi
             else if (creep.store[RESOURCE_ENERGY] <= 0) creep.memory.working = false
         }
         if (task.kind === 'hauler' && creep.memory.working) {
-            if (creep.room.name !== task.homeRoom) { goHome(creep, data); return false }
+            if (creep.room.name !== task.homeRoom) { goHome(creep, data); pickupAdjacentHaulerEnergy(creep); return false }
         } else if (creep.room.name !== task.targetRoom) {
             const destination = task.source || { x: 25, y: 25 }
             const code = creep.moveTo(new RoomPosition(destination.x, destination.y, task.targetRoom), { range: 1, maxRooms: 2 })
             if (code === ERR_NO_PATH) block(home, task.targetRoom, '自动外矿单位无路可达', 'unreachable')
+            else if (task.kind === 'hauler') pickupAdjacentHaulerEnergy(creep)
             return false
         }
         if (task.source && creep.room.name === task.targetRoom && !Game.getObjectById(task.source.id)) { block(home, task.targetRoom, 'Source 现场信息已失效'); return false }
@@ -474,4 +485,5 @@ export function withDevelopmentRemoteRole(data: CreepData, behavior: ICreepConfi
         creep.memory.ready = true
         return true
     } }
+    return data.developmentRemote.kind === 'hauler' ? withHaulerTraffic(automatic) : automatic
 }

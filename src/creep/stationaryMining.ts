@@ -1,4 +1,6 @@
 import { getHarvestPower } from 'runtime/harvestPower'
+import { sourceLink } from 'room/sourceLinks'
+import { retireSourceLinkMiner } from './sourceLinkMining'
 
 interface MiningStation {
     position: RoomPosition
@@ -101,14 +103,16 @@ function miningPosition(creep: Creep, source: Source, buffer: StructureLink | St
 
 function resolveStation(creep: Creep, source: Source): MiningStation | null | undefined {
     if (source.pos.roomName != creep.room.name) return undefined
+    const link = sourceLink(creep.room, source)
+    if (link !== undefined) {
+        const seat = miningPosition(creep, source, link)
+        if (seat.position === undefined) return null
+        reservations.set(seatKey(creep.room, seat.position.x, seat.position.y), creep.name)
+        // A source Link owns this mine; retained shared Containers have another responsibility.
+        return { position: seat.position, link }
+    }
     let station: MiningStation | undefined
     let occupied = false
-    for (const link of creep.room.links) {
-        if (link.my === false || !source.pos.inRangeTo(link, 2) || (typeof link.isActive == 'function' && !link.isActive())) continue
-        const seat = miningPosition(creep, source, link)
-        occupied = occupied || seat.occupied
-        if (seat.position != undefined) { station = { position: seat.position, link }; break }
-    }
     let minimumEnergy = Infinity
     for (const container of creep.room.containers) {
         if (!source.pos.isNearTo(container)) continue
@@ -138,6 +142,7 @@ function findStation(creep: Creep, source: Source): MiningStation | null | undef
 
 /** Undefined means no real workstation exists, so the role must keep its bootstrap behavior. */
 export function prepareStationaryMining(creep: Creep, source: Source): boolean | undefined {
+    if (retireSourceLinkMiner(creep, source)) return false
     const station = findStation(creep, source)
     if (station === undefined) return undefined
     if (station === null) { creep.memory.ready = false; return false }
@@ -152,6 +157,7 @@ export function prepareStationaryMining(creep: Creep, source: Source): boolean |
 
 /** Batch transfers while keeping enough snapshot capacity to harvest on every productive tick. */
 export function runStationaryMining(creep: Creep, source: Source): boolean {
+    if (retireSourceLinkMiner(creep, source)) return true
     const station = findStation(creep, source)
     if (station === undefined) return false
     if (station === null) { creep.memory.ready = false; return true }

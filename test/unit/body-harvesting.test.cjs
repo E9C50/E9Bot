@@ -25,7 +25,7 @@ function world({ remote = false, level = 8, marked = true, x = 10, y = 11, energ
         controller: { my: !remote, level, pos: p(25, 25) },
         getTerrain: () => ({ get: (x, y) => walls.has(`${x},${y}`) ? 1 : 0 }),
         lookForAt(type, x, y) { return (type === 'structures' ? room.structures : occupants).filter(value => value.pos.x === x && value.pos.y === y); },
-        find() { throw new Error('Mature/new remote miners must not scan local fillers or seek emergency spawn delivery'); },
+        find(type) { if (type === 'minerals') return []; throw new Error('Mature/new remote miners must not scan local fillers or seek emergency spawn delivery'); },
         createConstructionSite(x, y, type) { actions.push({ type: 'create', x, y, structureType: type }); return 0; }
     };
     const boosts = { work: { XUHO2: { harvest: 7 }, UO: { harvest: 3 } } };
@@ -46,11 +46,12 @@ function world({ remote = false, level = 8, marked = true, x = 10, y = 11, energ
     };
     if (marked) creep.memory.boostPlan = { tier: 0, steps: [] };
     occupants.push(creep);
-    const game = { time: 1, shard: { name: 'shard3' }, getObjectById: id => objects.get(id) || null };
+    source.room = room;
+    const game = { time: 1, shard: { name: 'shard3' }, rooms: { [room.name]: room }, creeps: { [creep.name]: creep }, getObjectById: id => objects.get(id) || null };
     const loader = createSourceLoader({ globals: { Game: game, RoomPosition: Position, RESOURCE_ENERGY: 'energy', WORK: 'work',
         LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', TERRAIN_MASK_WALL: 1, CONTAINER_DECAY: 5000,
-        STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', ERR_NOT_IN_RANGE: -9,
-        FIND_MY_CREEPS: 'my-creeps', HARVEST_POWER: 2, CREEP_LIFE_TIME: 1500, BOOSTS: boosts }, modules: { utils: { getDistance: (a, b) => a.getRangeTo(b),
+        STRUCTURE_ROAD: 'road', STRUCTURE_LINK: 'link', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', ERR_NOT_IN_RANGE: -9, OK: 0,
+        FIND_MY_CREEPS: 'my-creeps', FIND_MINERALS: 'minerals', HARVEST_POWER: 2, CREEP_LIFE_TIME: 1500, BOOSTS: boosts }, modules: { utils: { getDistance: (a, b) => a.getRangeTo(b),
             getClosestTarget: (pos, values) => values.reduce((best, value) => !best || pos.getRangeTo(value) < pos.getRangeTo(best) ? value : best, undefined) } } });
     const behavior = loader.load(remote ? 'role/adv/RoleAdvRemoteHarvester' : 'role/base/RoleBaseHarvester').default(creep.memory.data);
     function structure(id, type, x, y, { energy = 0, capacity = type === 'link' ? 800 : 2000, hits = 250000, my = true, active = true } = {}) {
@@ -228,36 +229,36 @@ test('a new miner moves to the source/buffer intersection even when its old read
     assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
 });
 
-test('station resolution shares the prepare/run lookup and skips distant link activation checks', () => {
+test('station resolution shares the room index and prepare/run lookup', () => {
     const w = world();
     for (let index = 0; index < 5; index++) w.structure(`distant-${index}`, 'link', 30 + index, 30);
     const link = w.structure('source-link', 'link', 11, 11);
     for (let index = 0; index < 19; index++) w.tick();
-    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 19);
+    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 19 * 6);
     assert.equal(link.activeChecks, 19);
 });
 
-test('station caches observe changed Store/hits after preparation and invalidate moved positions in the same tick', () => {
+test('Link station caches observe live Store and discard obsolete Container duties while positions move', () => {
     const w = world({ energy: 40 }); const link = w.structure('link', 'link', 11, 11);
     const container = w.structure('container', 'container', 10, 11);
     assert.equal(w.behavior.prepare(w.creep), true);
     link.store.energy = 800;
     w.behavior.source(w.creep);
-    assert.equal(w.actions.find(action => action.type === 'transfer').target, container);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+    assert.equal(container.store.energy, 0);
     assert.equal(link.activeChecks, 1);
-    w.actions.length = 0;
-    container.hits = 5000;
+    w.actions.length = 0; container.hits = 5000;
     w.behavior.source(w.creep);
-    assert.deepEqual(w.actions.map(action => action.type), ['repair']);
-    assert.equal(link.activeChecks, 1, 'work-time Store/hits changes do not require re-resolving station geometry');
-    w.actions.length = 0;
-    w.creep.pos.x = 15;
-    assert.equal(w.behavior.prepare(w.creep), false);
-    assert.equal(w.actions[0].type, 'move');
-    assert.equal(link.activeChecks, 2, 'mutating a Position object must invalidate its stored coordinate identity');
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+    assert.equal(link.activeChecks, 1, 'live Store/hits do not rebuild geometry');
+    link.store.energy = 700; w.actions.length = 0;
+    w.behavior.source(w.creep);
+    assert.equal(w.actions.find(action => action.type === 'transfer').target, link);
+    w.actions.length = 0; w.creep.pos.x = 15;
+    assert.equal(w.behavior.prepare(w.creep), false); assert.equal(w.actions[0].type, 'move');
+    assert.equal(link.activeChecks, 1, 'position changes reuse the room Link index');
     w.creep.pos = w.p(10, 11); w.actions.length = 0;
-    assert.equal(w.behavior.prepare(w.creep), true);
-    assert.equal(link.activeChecks, 3, 'replacing the Position object also re-resolves its station');
+    assert.equal(w.behavior.prepare(w.creep), true); assert.equal(link.activeChecks, 1);
 });
 
 test('station caches never retain old source/room objects or inactive links across ticks and shards', () => {
@@ -322,21 +323,21 @@ test('temporarily occupied source/buffer seats wait instead of creating a second
     assert.deepEqual(w.actions[0], { type: 'move', x: 11, y: 11, roomName: w.room.name, range: 0 });
 });
 
-test('a full link falls back to the adjacent source container and a full pair stores cargo without dropping', () => {
-    const w = world({ energy: 40 }); w.structure('link', 'link', 11, 11, { energy: 800 });
+test('a full source Link keeps cargo and pauses instead of feeding its obsolete Container or dropping', () => {
+    const w = world({ energy: 40 }); const link = w.structure('link', 'link', 11, 11, { energy: 800 });
     const container = w.structure('container', 'container', 10, 11);
-    assert.deepEqual(w.tick(), { amount: 10, sent: 40 }); assert.equal(container.store.energy, 40);
-    container.store.energy = 2000;
-    for (let index = 0; index < 4; index++) assert.deepEqual(w.tick(), { amount: 10, sent: 0 });
-    assert.equal(w.creep.store.energy, 50); assert.deepEqual(w.tick(), { amount: 0, sent: 0 });
-    assert.deepEqual(w.actions, []);
-    container.store.energy = 1950; assert.deepEqual(w.tick(), { amount: 0, sent: 50 });
-    assert.equal(w.creep.store.energy, 0, 'a transfer has not freed capacity until native intents resolve');
+    assert.deepEqual(w.tick(), { amount: 10, sent: 0 }); assert.equal(container.store.energy, 0);
+    for (let index = 0; index < 4; index++) assert.deepEqual(w.tick(), { amount: 0, sent: 0 });
+    assert.equal(w.creep.store.energy, 50); assert.deepEqual(w.actions, []);
+    container.store.energy = 1950; assert.deepEqual(w.tick(), { amount: 0, sent: 0 });
+    link.store.energy = 750; assert.deepEqual(w.tick(), { amount: 0, sent: 50 });
+    assert.equal(w.creep.store.energy, 0, 'transfer creates capacity only when native intents resolve');
+    assert.equal(container.store.energy, 1950);
+    link.store.energy = 700; assert.deepEqual(w.tick(), { amount: 10, sent: 0 });
 });
 
 test('container decay prevention occupies the WORK tick; ordinary minor damage does not interrupt harvesting', () => {
     const w = world(); const container = w.structure('container', 'container', 10, 11, { hits: 5000 });
-    w.structure('link', 'link', 11, 11);
     assert.deepEqual(w.tick(), { amount: 0, sent: 0 });
     assert.deepEqual(w.actions.map(action => action.type), ['repair']); assert.equal(container.hits, 5500);
     assert.deepEqual(w.tick(), { amount: 10, sent: 0 });
@@ -401,4 +402,77 @@ test('development emergency recovery remains ahead of the new workstation branch
 test('stationary mining imports before Game is installed', () => {
     const loader = createSourceLoader(); const api = loader.load('creep/stationaryMining');
     assert.equal(typeof api.prepareStationaryMining, 'function'); assert.equal(typeof api.runStationaryMining, 'function');
+});
+
+for (const remote of [false, true]) for (const marked of [false, true]) test(
+    (remote ? 'manual remote' : 'local') + ' ' + (marked ? 'new' : 'legacy') + ' Link miner releases an incompatible zero-CARRY body before a replacement arrives', () => {
+        const w=world({remote, marked, x:11, y:11, carry:0, energy:0});
+        w.structure('link','link',12,12);
+        w.structure('old-container','container',11,11,{hits:100,energy:200});
+        w.room.constructionSites.push({id:'site', my:true, structureType:'container', pos:w.p(11,11)});
+        const homeName=remote?'W2N1':w.room.name;
+        const spawn={pos:w.p(20,20,homeName),recycleCreep(creep){w.actions.push({type:'recycle',name:creep.name});return 0;}};
+        const home=remote?{name:homeName,spawns:[spawn]}:w.room; home.spawns=[spawn]; w.game.rooms[homeName]=home;
+        w.creep.memory.spawnRoom=homeName; w.creep.memory.dontPullMe=true;
+        assert.equal(w.behavior.prepare(w.creep),false);
+        assert.equal(w.creep.memory.ready,false); assert.equal(w.creep.memory.working,false); assert.equal(w.creep.memory.dontPullMe,false);
+        assert.deepEqual(w.actions.map(action=>action.type),['move']); assert.equal(w.actions[0].roomName,homeName);
+        assert.equal(w.actions[0].x,20); assert.equal(w.actions[0].range,1);
+        w.objects.delete(w.source.id); w.creep.room=home; w.creep.pos=w.p(19,20,homeName); w.actions.length=0; w.game.time++;
+        assert.equal(w.behavior.prepare(w.creep),false);
+        assert.deepEqual(w.actions,[{type:'recycle',name:w.creep.name}],'persistent retirement survives loss of Source vision');
+    });
+
+for (const remote of [false,true]) test((remote?'manual remote':'legacy local')+' unmarked CARRY Link miner uses its Source/Link intersection without repairing, building or recreating a Container',()=>{
+    const w=world({remote,marked:false,x:9,y:10,energy:40}); const link=w.structure('link','link',12,12);
+    const container=w.structure('old-container','container',10,11,{hits:100});
+    w.room.constructionSites.push({id:'site',my:true,structureType:'container',pos:w.p(10,11)});
+    assert.equal(w.behavior.prepare(w.creep),false); assert.deepEqual(w.actions,[{type:'move',x:11,y:11,roomName:w.room.name,range:0}]);
+    w.creep.pos=w.p(11,11); w.actions.length=0; w.game.time++; w.creep.memory.working=true;
+    assert.equal(w.behavior.prepare(w.creep),true); assert.equal(w.behavior.target(w.creep),true);
+    assert.deepEqual(w.actions.map(action=>action.type),['transfer','harvest']); assert.equal(w.actions[0].target,link); assert.equal(container.hits,100);
+    link.store.energy=800; w.creep.store.energy=50; w.actions.length=0; w.game.time++;
+    assert.equal(w.behavior.source(w.creep),true); assert.deepEqual(w.actions,[]);
+    w.room.containers.length=0; w.room.constructionSites.length=0; w.game.time++;
+    assert.equal(w.behavior.target(w.creep),true); assert.deepEqual(w.actions,[]);
+});
+
+test('developing unmarked CARRY miner follows its usable Link without an emergency-carrier scan',()=>{
+    const w=world({level:6,marked:false,energy:40}); const link=w.structure('link','link',11,11);
+    const container=w.structure('old-container','container',10,11,{hits:100});
+    w.room.constructionSites.push({id:'site',my:true,structureType:'container',pos:w.p(10,11)});
+    assert.equal(w.behavior.prepare(w.creep),true); assert.equal(w.behavior.source(w.creep),true);
+    assert.deepEqual(w.actions.map(action=>action.type),['transfer','harvest']); assert.equal(w.actions[0].target,link); assert.equal(container.hits,100);
+});
+
+test('zero-CARRY miner yields its unique Link seat while its home Spawn is busy',()=>{
+    const w=world({carry:0,energy:0,x:11,y:11}); w.structure('link','link',12,12);
+    const spawn={pos:w.p(12,11),recycleCreep(){w.actions.push({type:'recycle-busy'});return -4;}}; w.room.spawns=[spawn];
+    assert.equal(w.behavior.prepare(w.creep),false);
+    assert.deepEqual(w.actions.map(action=>action.type),['recycle-busy','move']);
+    const destination=w.p(w.actions[1].x,w.actions[1].y); assert.equal(destination.isNearTo(w.source),false); assert.equal(w.actions[1].range,0);
+});
+
+test('zero-CARRY miner yields the Link workstation even when no home Spawn exists',()=>{
+    const w=world({carry:0,energy:0,x:11,y:11}); w.structure('link','link',12,12);
+    assert.equal(w.behavior.prepare(w.creep),false);
+    assert.deepEqual(w.actions.map(action=>action.type),['move']);
+    assert.equal(w.p(w.actions[0].x,w.actions[0].y).isNearTo(w.source),false);
+});
+
+for (const invalid of ['enemy','inactive','distant','blocked']) test('zero-CARRY miner retains Container mining when the candidate Link is '+invalid,()=>{
+    const w=world({carry:0,energy:0,x:10,y:11});
+    w.structure('container','container',10,11); w.structure('link','link',invalid==='distant'?13:12,invalid==='blocked'?12:10,
+        {my:invalid!=='enemy',active:invalid!=='inactive'});
+    if(invalid==='blocked') w.walls.add('11,11');
+    const api=w.loader.load('creep/sourceLinkMining'); assert.equal(api.sourceLinkMinerIncompatible(w.creep,w.source),false);
+    assert.equal(w.behavior.prepare(w.creep),true); assert.equal(w.behavior.source(w.creep),true);
+    assert.deepEqual(w.actions.map(action=>action.type),['harvest']); assert.equal(w.creep.memory.sourceLinkRetiring,undefined);
+});
+
+test('compatible CARRY miners do not scan Link geometry in the incompatibility predicate',()=>{
+    let reads=0;
+    const loader=createSourceLoader({globals:{RESOURCE_ENERGY:'energy'},modules:{'room/sourceLinks':{sourceLink(){reads++;throw new Error('unexpected scan');}}}});
+    assert.equal(loader.load('creep/sourceLinkMining').sourceLinkMinerIncompatible({store:{getCapacity:()=>50}},{}),false);
+    assert.equal(reads,0);
 });

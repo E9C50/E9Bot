@@ -5,18 +5,31 @@ const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 function world(roleName, data = {}) {
     const objects = new Map(), actions = [];
     const reads = { lookups: [], lists: {}, entries: {}, distances: 0, methods: 0, energy: {}, free: {} };
-    const game = { getObjectById(id) { reads.lookups.push(id); return objects.get(id) || null; } };
+    const game = { time:1, shard:{name:'shard3'}, rooms:{}, getObjectById(id) { reads.lookups.push(id); return objects.get(id) || null; } };
     const memory = { warMode: {} };
     const lists = { wallsNeedRepair: [], constructionSites: [], links: [], containers: [], extensions: [], spawns: [] };
-    const room = { name: 'W1N1', level: 6, memory: { roomFillJob: {} },
+    const room = { name: 'W1N1', level: 6, memory: { roomFillJob: {}, fastUpgrade:false }, sources:[], structures:[],
+        getTerrain:()=>({get:()=>0}),
+        find(type){if(type==='minerals') return [];throw new Error('unexpected native scan '+type);},
+        lookForAt(type,x,y){return (type==='structures'?room.structures:[creep]).filter(value=>value.pos.x===x&&value.pos.y===y);},
         getDefenderCostMatrix: () => ({ get: () => 0 }),
         createConstructionSite(x, y, type) { actions.push({ type: 'create', x, y, structureType: type }); return 0; } };
     for (const name of Object.keys(lists)) Object.defineProperty(room, name, { get() {
         reads.lists[name] = (reads.lists[name] || 0) + 1; return lists[name];
     } });
     const distance = (first, second) => { reads.distances++; return Math.max(Math.abs(first.x - second.x), Math.abs(first.y - second.y)); };
-    const position = (x, y, roomName = room.name) => ({ x, y, roomName });
-    const creep = { name: 'worker', pos: position(10, 10), room, store: { energy: 50, getFreeCapacity: () => 50, getUsedCapacity: () => 50 },
+    class Position {
+        constructor(x,y,roomName=room.name){Object.assign(this,{x,y,roomName});}
+        getRangeTo(value){const p=value.pos||value;return p.roomName===this.roomName?Math.max(Math.abs(this.x-p.x),Math.abs(this.y-p.y)):Infinity;}
+        isNearTo(value){return this.getRangeTo(value)<=1;}
+        inRangeTo(value,range){return this.getRangeTo(value)<=range;}
+        isEqualTo(value){return this.getRangeTo(value)===0;}
+    }
+    const position=(x,y,roomName=room.name)=>new Position(x,y,roomName);
+    const creep = { id:'worker-original', name: 'worker', pos: position(10, 10), room,
+        body:[{type:'work',hits:100},{type:'carry',hits:100},{type:'carry',hits:100},{type:'move',hits:100}],hits:400,hitsMax:400,
+        getActiveBodyparts:part=>creep.body.filter(item=>item.type===part&&item.hits>0).length,
+        store: { energy: 50, getCapacity:()=>100, getFreeCapacity: () => 100-creep.store.energy, getUsedCapacity: () => creep.store.energy },
         memory: { data, working: true },
         moveTo(target) { actions.push({ type: 'move', id: target.id }); return 0; },
         say(message) { actions.push({ type: 'say', message }); }, goBoost: () => true,
@@ -31,7 +44,14 @@ function world(roleName, data = {}) {
     for (const action of ['repair', 'build', 'transfer', 'withdraw', 'harvest']) creep[action] = (target, resource) => {
         actions.push({ type: action, id: target.id, ...(resource ? { resource } : {}) }); return 0;
     };
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', ERR_NOT_IN_RANGE: -9 }, modules: {
+    if(roleName==='harvester') {
+        const source={id:data.sourceId||'source',pos:position(10,9),room,energy:3000};objects.set(source.id,source);room.sources=[source];
+    }
+    game.rooms[room.name]=room;
+    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RoomPosition:Position, RESOURCE_ENERGY: 'energy',
+        STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_ROAD:'road', STRUCTURE_RAMPART:'rampart',
+        LOOK_STRUCTURES:'structures',LOOK_CREEPS:'creeps',FIND_MINERALS:'minerals',TERRAIN_MASK_WALL:1,
+        WORK:'work',HARVEST_POWER:2,CONTAINER_DECAY:5000,CREEP_LIFE_TIME:1500, ERR_NOT_IN_RANGE: -9 }, modules: {
         utils: { getDistance: distance, getClosestTarget() { throw new Error('Candidate filtering and closest selection must be one pass'); } },
         './RoleBaseUpgrader': () => ({ target() { actions.push({ type: 'upgrade' }); return true; } }),
     } });
@@ -45,7 +65,7 @@ function world(roleName, data = {}) {
         };
         Object.defineProperty(store, 'energy', { enumerable: true, get() { reads.energy[id] = (reads.energy[id] || 0) + 1; return state.energy; } });
         const value = { id, pos: position(x, y), store, hits, hitsMax, structureType: type, ...extra };
-        objects.set(id, value); return Object.assign(value, { state });
+        objects.set(id, value); room.structures.push(value); return Object.assign(value, { state });
     }
     function site(id, x = 10, y = 10) {
         const value = { id, pos: position(x, y), my: true };
@@ -61,7 +81,7 @@ function world(roleName, data = {}) {
         } });
         return lists[name];
     }
-    return { role, data, creep, room, memory, objects, actions, reads, structure, site, list, position };
+    return { role, data, creep, room, game, memory, objects, actions, reads, structure, site, list, position };
 }
 
 test('repairer immediately repairs the newly selected weakest wall, keeps equal-hit order and never sorts the shared room list', () => {
@@ -103,9 +123,10 @@ test('war repairer chooses the weakest reachable wall in one pass and falls back
     assert.equal(w.actions.at(-1).type, 'upgrade'); assert.equal(w.data.repairTarget, '');
 });
 
-test('harvester ready preparation needs no source lookup and missing or out-of-range sources reset readiness safely', () => {
+test('harvester validates its ready Source once per phase and safely resets missing or out-of-range Sources', () => {
     const w = world('harvester', { sourceId: 'source' }); w.creep.memory.ready = true;
-    assert.equal(w.role.prepare(w.creep), true); assert.equal(w.reads.lookups.length, 0);
+    assert.equal(w.role.prepare(w.creep), true); assert.deepEqual(w.reads.lookups,['source']);
+    w.objects.delete('source');
     assert.equal(w.role.source(w.creep), false); assert.equal(w.creep.memory.ready, false);
     assert.equal(w.role.prepare(w.creep), false);
     const source = { id: 'source', pos: w.position(11, 10), energy: 3000 }; w.objects.set(source.id, source);
@@ -113,13 +134,13 @@ test('harvester ready preparation needs no source lookup and missing or out-of-r
     w.creep.harvest = () => -9; assert.equal(w.role.source(w.creep), true); assert.equal(w.creep.memory.ready, false);
 });
 
-test('harvester finds the nearest in-range construction site in one scan, retaining first-site ties and building before links', () => {
+test('harvester without a usable Source Link selects the closest construction site in one scan and retains first-site ties', () => {
     const w = world('harvester', { sourceId: 'source', buildTarget: 'second' });
     const sites = [w.site('too-far', 14), w.site('first', 12), w.site('second', 10, 12), w.site('third', 13)];
-    w.list('constructionSites', sites); w.list('links', [w.structure('link')]);
+    w.list('constructionSites', sites); w.list('links', [w.structure('unrelated-link',{type:'link',x:30})]);
     w.role.target(w.creep);
     assert.equal(w.data.buildTarget, 'first'); assert.deepEqual(w.actions, [{ type: 'build', id: 'first' }]);
-    assert.equal(w.reads.entries.constructionSites, sites.length); assert.equal(w.reads.lists.links || 0, 0);
+    assert.equal(w.reads.entries.constructionSites, sites.length); assert.equal(w.reads.entries.links,1,'shared Link index reads the candidate once');
     assert.equal(w.reads.methods, 0);
 });
 
@@ -132,15 +153,27 @@ test('harvester can reuse its cached construction site underfoot without scannin
     assert.equal(w.actions.at(-1).id, 'new-underfoot');
 });
 
-test('completed cached construction invalidates the room cache and harvester retains the first adjacent link even when another has capacity', () => {
-    const w = world('harvester', { sourceId: 'source', buildTarget: 'finished' });
-    w.list('constructionSites', []);
-    w.list('links', [w.structure('first-link', { energy: 100 }), w.structure('second-link')]);
-    w.list('containers', [w.structure('container', { energy: 50, hits: 100 })]);
-    w.role.target(w.creep);
-    assert.equal(w.data.buildTarget, undefined); assert.equal(w.room.memory.needUpdateCache, true);
-    assert.deepEqual(w.actions, [{ type: 'transfer', id: 'container', resource: 'energy' }]);
-    assert.equal(w.reads.entries.links, 1);
+test('completed cached construction invalidates the room cache before normal Container delivery without a Source Link',()=>{
+    const w=world('harvester',{sourceId:'source',buildTarget:'finished'});w.list('constructionSites',[]);
+    w.list('containers',[w.structure('container',{energy:50,hits:100})]);w.role.target(w.creep);
+    assert.equal(w.data.buildTarget,undefined);assert.equal(w.room.memory.needUpdateCache,true);
+    assert.deepEqual(w.actions,[{type:'transfer',id:'container',resource:'energy'}]);
+});
+
+test('a full Source Link retains the cargo and ignores nearby Container fallback even when a second Link has capacity',()=>{
+    const w=world('harvester',{sourceId:'source'});w.creep.store.energy=100;
+    const first=w.structure('first-link',{type:'link',x:11,y:10,energy:100,my:true,isActive:()=>true});
+    const second=w.structure('second-link',{type:'link',x:12,y:10,my:true,isActive:()=>true});
+    w.list('links',[first,second]);w.list('containers',[w.structure('container',{energy:50,hits:30})]);
+    w.list('constructionSites',[w.site('source-container',10,10)]);
+    assert.equal(w.role.prepare(w.creep),true);assert.equal(w.role.target(w.creep),true);assert.deepEqual(w.actions,[]);
+    assert.equal(w.creep.store.energy,100);assert.equal(w.creep.memory.working,false);
+    assert.equal(w.reads.entries.links,2,'one room index is shared by preparation and work');
+    assert.equal(w.reads.lists.containers||0,0);assert.equal(w.reads.lists.constructionSites||0,0);
+    first.state.energy=0;w.role.source(w.creep);
+    assert.deepEqual(w.actions,[{type:'transfer',id:'first-link',resource:'energy'}]);
+    assert.equal(w.creep.store.energy,100,'a native transfer intent does not immediately free Store capacity');
+    assert.equal(w.reads.methods,0);
 });
 
 test('harvester selects the lowest current-energy adjacent container in one pass and repairs it before transferring', () => {
@@ -156,11 +189,11 @@ test('harvester selects the lowest current-energy adjacent container in one pass
     assert.equal(w.actions.at(-1).id, 'first'); assert.equal(w.actions.at(-1).type, 'transfer');
 });
 
-test('harvester creates a missing local container below RCL8 and never creates one if a full adjacent link already exists', () => {
+test('harvester creates a missing Container below RCL8 and never recreates one beside its valid full Source Link', () => {
     const w = world('harvester', { sourceId: 'source' }); w.role.target(w.creep);
     assert.deepEqual(w.actions, [{ type: 'create', x: 10, y: 10, structureType: 'container' }]);
     w.actions.length = 0; w.room.level = 8; w.role.target(w.creep); assert.deepEqual(w.actions, []);
-    w.room.level = 6; w.list('links', [w.structure('full-link', { energy: 100 })]); w.role.target(w.creep);
+    w.room.level = 6; w.creep.store.energy=100; w.list('links', [w.structure('full-link', { type:'link',x:11,y:10,energy:100,my:true,isActive:()=>true })]); w.game.time++; w.role.target(w.creep);
     assert.deepEqual(w.actions, []);
 });
 

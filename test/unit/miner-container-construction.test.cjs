@@ -11,16 +11,20 @@ function world(level = 1) {
         inRangeTo(target, range) { return this.getRangeTo(target) <= range; },
         isEqualTo(target) { return this.getRangeTo(target) === 0; } });
     const store = (energy, capacity) => ({ energy, getCapacity: () => capacity, getFreeCapacity() { return capacity - this.energy; } });
-    const room = { name: 'E1S1', level, controller: { level, my: true }, memory: {}, energyAvailable: 300,
-        links: [], containers: [], spawns: [], extensions: [], constructionSites: [], units: [], find: () => room.units };
+    const room = { name: 'E1S1', level, controller: { level, my: true, pos: pos(25, 25) }, memory: {}, energyAvailable: 300,
+        links: [], containers: [], spawns: [], extensions: [], structures: [], constructionSites: [], units: [], find: () => room.units,
+        getTerrain: () => ({ get: () => 0 }), mineral: { pos: pos(35, 35) } };
     const source = { id: 'source', pos: pos(10, 10), energy: 3000 };
+    room.sources = [source];
     objects.set(source.id, source);
     function site(id, type = 'container', x = 11, y = 10, my = true) {
         const target = { id, structureType: type, pos: pos(x, y), my, progress: 0, progressTotal: 80 };
         room.constructionSites.push(target); objects.set(id, target); return target;
     }
     function structure(id, type, x, y, energy = 0, capacity = 2000) {
-        const target = { id, structureType: type, pos: pos(x, y), my: true, store: store(energy, capacity), hits: 250000, hitsMax: 250000 };
+        const target = { id, structureType: type, pos: pos(x, y), my: true, store: store(energy, capacity), hits: 250000, hitsMax: 250000,
+            isActive: () => type !== 'link' || level >= 5 };
+        room.structures.push(target);
         objects.set(id, target); room[{ link: 'links', container: 'containers', spawn: 'spawns' }[type]].push(target); return target;
     }
     function miner(energy = 10, capacity = 50, x = 11, y = 10) {
@@ -33,6 +37,7 @@ function world(level = 1) {
         room.units.push(unit); return unit;
     }
     const loader = createSourceLoader({ globals: { Game: game, RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container',
+        STRUCTURE_LINK: 'link', STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', TERRAIN_MASK_WALL: 1,
         FIND_MY_CREEPS: 'my', CONTAINER_DECAY: 5000, ERR_NOT_IN_RANGE: -9 },
         modules: { utils: { getDistance: (a, b) => a.getRangeTo(b) },
             'creep/developmentLogistics': { sourceHarvestPosition: (unit, mine, buffer) => unit.pos.isNearTo(mine) && unit.pos.isNearTo(buffer) ? unit.pos : undefined },

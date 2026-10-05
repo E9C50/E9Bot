@@ -21,7 +21,9 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
     const spawn = { id: 'spawn', my: true, room: home, owner: { username: 'me' }, pos: new Position(25, 25, home.name), store: store(0), recycleCreep: () => { calls.recycling++; return 0; } };
     home.spawns.push(spawn); objects.set(spawn.id, spawn);
     const target = { name: 'E38N5', memory: {}, controller: { my: false, pos: new Position(20, 20, 'E38N5') },
-        sources: [source('remote-one', 10, 'E38N5'), source('remote-two', 40, 'E38N5')], structures: [], hostiles: [], containers: [], constructionSites: [], dropped: [],
+        sources: [source('remote-one', 10, 'E38N5'), source('remote-two', 40, 'E38N5')], structures: [], hostiles: [], containers: [], links:[], constructionSites: [], dropped: [],
+        getTerrain:()=>({get:()=>0}),
+        lookForAt(type,x,y){return type==='look-structures'?this.structures.filter(value=>value.pos.x===x&&value.pos.y===y):[];},
         createConstructionSite(x, y, type) { calls.sites.push({ x, y, type }); return 0; },
         find(type) { return type === 'sources' ? this.sources : type === 'structures' || type === 'hostile-structures' ? this.structures : type === 'hostiles' ? this.hostiles : type === 'dropped' ? this.dropped : []; } };
     const path = Array.from({ length: pathLength }, (_, index) => new Position(index % 45 + 2, 15, index < pathLength / 2 ? home.name : target.name));

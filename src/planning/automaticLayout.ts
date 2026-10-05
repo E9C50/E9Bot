@@ -5,6 +5,7 @@ import { constructionPolicy } from 'settings/construction'
 import { roomPolicy } from 'settings/roomPolicy'
 import { migrateControllerContainer } from './controllerContainerMigration'
 import { roomWorkDue } from 'runtime/roomSchedule'
+import { cleanupSourceLinkContainers } from './sourceLinkContainers'
 
 let tick = -1
 let planningAttempts = 0
@@ -87,6 +88,7 @@ export function runAutomaticLayout(room: Room): void {
     synchronizeBlueprintMetadata(room, blueprint)
     if (!matureInspection && !fresh && !controllerChanged && !levelChanged && !forced && !noSpawn && state.lastBuildTick != undefined &&
         Game.time - state.lastBuildTick < constructionPolicy.building.interval) return
+    cleanupSourceLinkContainers(room)
     if (constructionBudget == undefined) constructionBudget = {
         remaining: Math.max(0, MAX_CONSTRUCTION_SITES - Object.keys(Game.constructionSites).length),
         intents: new Map(),

@@ -1,9 +1,27 @@
 import roles from 'role'
 import { roleAdvEnum, roleBaseEnum } from 'settings/creep'
 import { populationPolicy } from 'settings/population'
-import { addCreepConfig } from './demand'
+import { addCreepConfig, createCreepName } from './demand'
 import { isDevelopingRoom } from './development'
 import { releaseDevelopmentBaseConfig } from './developmentPopulation'
+import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
+import { sourceLinkPolicy } from 'settings/sourceLinks'
+
+/** A zero-CARRY resident cannot hold the only Link-miner birth slot until natural death. */
+function linkedMinerName(room: Room, source: Source, name: string): string {
+    const current = Game.creeps[createCreepName(roleBaseEnum.HARVESTER, name)]
+    if (current && current.getActiveBodyparts(CARRY) > 0) return name
+    const prefix = `${name}_LINK_CARRY_`
+    // Keep a healthy replacement's demand after its predecessor retires.
+    const replacement = Object.values(Game.creeps).find(creep => creep.memory.spawnRoom === room.name &&
+        creep.memory.role === roleBaseEnum.HARVESTER && (creep.memory.data as HarvesterData).sourceId === source.id &&
+        creep.memory.name?.startsWith(prefix) && creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(WORK) > 0)
+    if (replacement) return replacement.memory.name
+    if (current === undefined) return name
+    let index = 0
+    while (Game.creeps[createCreepName(roleBaseEnum.HARVESTER, `${prefix}${index}`)]) index++
+    return `${prefix}${index}`
+}
 /**
  * 检查房间信息，发布对应Creep需求
  */
@@ -55,10 +73,11 @@ export function releaseBaseCreepConfig(): void {
             // 三级之后每个矿一个矿工
             if (room.level > populationPolicy.base.singleHarvesterAfterLevel)
                 canHarvesterPos = 1
+            const linked = room.links.length > 0 && sourceLink(room, source) !== undefined
             for (let i = 0; i < canHarvesterPos; i++) {
                 const creepMemory: HarvesterData = { sourceId: source.id }
-                const creepName: string =
-                    room.name + '_HARVESTER_' + source.id + '_' + i
+                const baseName = room.name + '_HARVESTER_' + source.id + '_' + i
+                const creepName = linked ? linkedMinerName(room, source, baseName) : baseName
                 addCreepConfig(
                     room,
                     roleBaseEnum.HARVESTER,
@@ -186,6 +205,7 @@ export function releaseBaseCreepConfig(): void {
         }
 
         // Source旁边的Container，发布对应Creep
+        const linkSalvage = new Set<string>()
         room.containers.forEach((container) => {
             if (
                 room.sources.filter((source) =>
@@ -197,16 +217,20 @@ export function releaseBaseCreepConfig(): void {
             )
                 return
 
+            const adjacentSources = room.links.length > 0 ? room.sources.filter(source =>
+                source.pos.inRangeTo(container, sourceLinkPolicy.containerRange)) : []
+            // A shared Container must still transport production from any unlinked Source.
+            const linkedSource = adjacentSources.length > 0 && adjacentSources.every(source => hasSourceLinkTransport(room, source)) && adjacentSources[0]
+            const salvage = linkedSource && container.store[RESOURCE_ENERGY] > 0 && !linkSalvage.has(linkedSource.id)
             const creepFillerMemory: FillerData = { sourceId: container.id }
             const creepFillerName0 =
                 room.name + '_FILLER_CONTAINER_' + container.id + '_0'
-            addCreepConfig(
-                room,
-                roleBaseEnum.FILLER,
-                creepFillerName0,
-                creepFillerMemory
-            )
+            if (!linkedSource || salvage) {
+                addCreepConfig(room, roleBaseEnum.FILLER, creepFillerName0, creepFillerMemory)
+                if (linkedSource) linkSalvage.add(linkedSource.id)
+            }
             if (
+                !linkedSource &&
                 container.store[RESOURCE_ENERGY] >
                     populationPolicy.base.extraFillerEnergy &&
                 room.storage != undefined

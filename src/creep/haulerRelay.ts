@@ -3,6 +3,7 @@ import { isDevelopmentRemoteData, canRelayDevelopmentHauler } from './developmen
 import { haulerRelayPolicy as policy } from 'settings/haulerRelay'
 import { runtimePolicy } from 'settings/runtime'
 import type { CachedMovementPath, CachedMovementStep } from 'utils/cachedMovement'
+import { blockHaulerEnergyPickup } from './haulerPickup'
 
 interface Lane {
     key: string
@@ -137,6 +138,7 @@ export function runHaulerRelays(): void {
         const amount = donor.creep.store[RESOURCE_ENERGY]
         if (amount <= 0 || receiver.creep.store.getFreeCapacity(RESOURCE_ENERGY) < amount) continue
         if (donor.creep.transfer(receiver.creep, RESOURCE_ENERGY, amount) !== OK) continue
+        blockHaulerEnergyPickup(donor.creep); blockHaulerEnergyPickup(receiver.creep)
         handled.add(donor.creep.name); handled.add(receiver.creep.name)
         setPhase(donor, 'load'); setPhase(receiver, 'deliver')
         // Each new route already contains this unit's current tile as the opposing next step.

@@ -2,6 +2,21 @@ import { isDevelopingRoom } from './development'
 import { developmentPolicy } from 'settings/development'
 import { harvestWorkParts } from './bodyEffectiveness'
 import { getSourceMiningWorkTarget } from './developmentEconomy'
+import { hasSourceLinkTransport } from 'room/sourceLinks'
+
+/** An obsolete dedicated mine carrier can finish its delivery before yielding to Link transport. */
+function obsoleteLinkHauler(creep: Creep, home: Room): boolean {
+    if (!home.links?.length || creep.store[RESOURCE_ENERGY] > 0) return false
+    const data = creep.memory.data as FillerData
+    let mineId = data.mineId || creep.memory.developmentHauler?.mineId
+    const prefix = `${home.name}_DEVELOP_FILLER_`, name = creep.memory.name || creep.name
+    if (!mineId && name.startsWith(prefix)) mineId = name.slice(prefix.length, name.lastIndexOf('_')) as Id<Source>
+    const source = home.sources.find(source => source.id === (mineId || data.sourceId))
+    if (!source || !hasSourceLinkTransport(home, source)) return false
+    if (home.containers.some(container => source.pos.inRangeTo(container, 1) && container.store[RESOURCE_ENERGY] > 0)) return false
+    return !(home.droppedResource || []).some(drop => drop.resourceType === RESOURCE_ENERGY && drop.amount > 0 &&
+        source.pos.inRangeTo(drop, developmentPolicy.hauling.mineResourceRange))
+}
 
 /** Growth units yield to the normal population only after its essential production is working. */
 export function retireDevelopmentCreep(creep: Creep): boolean {
@@ -15,7 +30,8 @@ export function retireDevelopmentCreep(creep: Creep): boolean {
     const developing = isDevelopingRoom(home)
     if (developing) {
         // No catalog yet means the population controller has not had a chance to refresh.
-        if (home.memory.creepConfig === undefined || configs[creep.name] || creep.memory.role === 'filler') return false
+        if (home.memory.creepConfig === undefined || configs[creep.name] ||
+            creep.memory.role === 'filler' && !obsoleteLinkHauler(creep, home)) return false
         if (creep.memory.role === 'harvester') {
             const sourceId = (creep.memory.data as HarvesterData).sourceId
             const source = Game.getObjectById<Source>(sourceId)
