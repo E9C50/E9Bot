@@ -286,15 +286,43 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
 
     const essentialSites = room.constructionSites.filter(site => site.structureType != STRUCTURE_ROAD && site.structureType != STRUCTURE_RAMPART)
     const building = room.constructionSites.length > 0
-    const energySource = room.storage || room.containers.find(container => room.sources.some(source => range(source.pos, container.pos) <= 1)) || room.sources[0]
+    const sourceContainer = room.containers.find(container => room.sources.some(source => range(source.pos, container.pos) <= 1))
+    const energySource = room.storage || sourceContainer || room.sources[0]
     if (energySource) {
         const constructionWork = Math.max(1, Math.min(policy.building.maximumCreeps * policy.building.workPartsPerCreep,
             Math.floor(income * (1 - policy.upgrading.incomeShareWhileBuilding) / BUILD_POWER) +
             (stored > policy.upgrading.storageReserve ? policy.building.maximumCreeps * policy.building.workPartsPerCreep : 0)))
         const builderWork = essentialSites.length > 0 ? policy.building.workPartsPerCreep : policy.building.roadOnlyWorkParts
         const builderCount = building ? Math.min(policy.building.maximumCreeps, Math.ceil(constructionWork / builderWork)) : 0
-        for (let index = 0; index < builderCount; index++) publish(room, 'builder', `${room.name}_DEVELOP_BUILDER_${index}`,
-            { sourceId: energySource.id, buildTarget: '' }, { workParts: Math.min(builderWork, constructionWork - index * builderWork) })
+        const builders = creeps.filter(creep => creep.memory.role === 'builder' && creep.room.name === room.name && workParts(creep) > 0)
+        const incumbents = builders.filter(creep => creep.memory.name && (creep.spawning ||
+            (creep.ticksToLive ?? 0) > replacementLead(room, creep, energySource.pos)))
+        const firstBootstrap = !room.storage && !sourceContainer && essentialSites.length > 0 && builders.length === 0
+        let nextIndex = 0
+        for (let index = 0; index < builderCount; index++) {
+            let name = incumbents.shift()?.memory.name
+            if (!name) {
+                const limit = builders.length + builderCount + policy.replacement.maximumReplacementsPerRoom
+                while (nextIndex < limit) {
+                    const candidate = `${room.name}_DEVELOP_BUILDER_${nextIndex++}`
+                    if (!Game.creeps[createCreepName('builder', candidate)]) { name = candidate; break }
+                }
+            }
+            if (!name) break
+            const bootstrap = firstBootstrap && index === 0
+            // Establish one self-supplied constructor after mining/hauling recovery,
+            // before filling the complete production fleet. Do not wait for 300 energy.
+            const body: NonNullable<CreepMemory['development']> = bootstrap ? {
+                workParts: 1, carryParts: 1,
+                maximumCost: BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE],
+            } : { workParts: Math.min(builderWork, constructionWork - index * builderWork) }
+            publish(room, 'builder', name, { sourceId: energySource.id, buildTarget: '' }, body,
+                bootstrap ? policy.building.firstCreepPriority : undefined)
+            if (bootstrap) {
+                const config = room.memory.creepConfig[createCreepName('builder', name)]
+                if (config) config.bodyProfile = { boostTier: 0 }
+            }
+        }
     }
     const totalWork = Math.max(policy.upgrading.minimumWorkParts, Math.min(policy.upgrading.maximumTotalWorkParts,
         Math.floor(upgradeIncome *

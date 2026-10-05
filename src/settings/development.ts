@@ -11,6 +11,7 @@ export const developmentPolicy = {
         mineResourceRange: 1, waitingRange: 2,
     },
     upgrading: {
+        selfHarvestLoadRatio: 1,
         minimumWorkParts: 1,
         maximumWorkPartsPerCreep: 20,
         maximumTotalWorkParts: 60,
@@ -26,7 +27,7 @@ export const developmentPolicy = {
         maximumBacklogWorkParts: 10,
         firstCreepPriority: 1.5,
     },
-    building: { maximumCreeps: 2, workPartsPerCreep: 4, roadOnlyWorkParts: 1, infrastructureMinimumCapacity: 550 },
+    building: { maximumCreeps: 2, workPartsPerCreep: 4, roadOnlyWorkParts: 1, infrastructureMinimumCapacity: 550, firstCreepPriority: 0.75 },
     logistics: { controllerRefillRatio: 0.75, minimumTowerEnergy: 500, emergencySpawnEnergy: 300 },
     bodies: {
         minerWorkParts: 5,

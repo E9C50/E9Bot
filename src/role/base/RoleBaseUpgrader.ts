@@ -4,6 +4,7 @@ import { controllerUpgradePosition } from 'creep/developmentLogistics'
 import { controllerSupplyPosition } from 'creep/controllerSupplyPositions'
 import { runStationaryUpgrading } from 'creep/stationaryUpgrading'
 import { controllerEnergyRelayCanSupply, runControllerEnergyRelay } from 'creep/controllerEnergyRelay'
+import { developmentPolicy } from 'settings/development'
 
 function usableStore(target: AnyStoreStructure | null | undefined): target is AnyStoreStructure {
     return target != undefined && 'store' in target && (!('my' in target) || target.my !== false) && target.store[RESOURCE_ENERGY] > 0
@@ -22,6 +23,7 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
     const supply = controllerSupplyPosition(creep), buffer = supply.buffer
     creep.memory.working = energy > 0
     if (buffer != undefined) {
+        delete data.harvestingSourceId
         const supplied = controllerEnergyRelayCanSupply(creep, buffer)
         const retainCurrent = !supply.requireAdjacent && (energy > 0 || creep.pos.isNearTo(buffer) || supplied)
         const seat = controllerUpgradePosition(creep, buffer, undefined, retainCurrent, supply.requireAdjacent)
@@ -31,7 +33,20 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
         return true
     }
 
-    // A mobile bootstrap worker consumes partial loads instead of waiting to fill.
+    // Self-harvesting needs a full travel batch; received energy may be used immediately.
+    if (data.harvestingSourceId != undefined) {
+        const source = Game.getObjectById<Source>(data.harvestingSourceId)
+        const load = Math.ceil(creep.store.getCapacity(RESOURCE_ENERGY) *
+            Math.max(0, Math.min(1, developmentPolicy.upgrading.selfHarvestLoadRatio)))
+        if (source?.pos.roomName === creep.room.name && source.energy > 0 && energy < load &&
+            creep.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+            creep.memory.working = false
+            if (creep.harvest(source) == ERR_NOT_IN_RANGE) creep.moveTo(source, { range: 1 })
+            return true
+        }
+        delete data.harvestingSourceId
+    }
+
     if (energy > 0) {
         if (getDistance(creep.pos, controller.pos) > 3) {
             creep.memory.dontPullMe = false
@@ -64,6 +79,8 @@ function runDevelopingUpgrader(creep: Creep, data: UpgraderData): boolean {
         if (source == undefined || getDistance(candidate.pos, controller.pos) < getDistance(source.pos, controller.pos)) source = candidate
     }
     if (source == undefined) return false
+    data.harvestingSourceId = source.id
+    creep.memory.working = false
     if (creep.harvest(source) == ERR_NOT_IN_RANGE) creep.moveTo(source, { range: 1 })
     return true
 }

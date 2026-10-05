@@ -310,6 +310,71 @@ test('mobile RCL1 upgrader self-harvests the source nearest the controller witho
     assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['harvest', 'near']]);
 });
 
+test('RCL1 self-harvesting upgrader fills a native travel batch before switching from mining to upgrading', () => {
+    const w = world(1), source = w.source('mine', 10, 10);
+    const unit = w.creep('worker', 'upgrader', 11, 10, 0, 10), data = { sourceId: source.id };
+    const behavior = w.roles.upgrader(data);
+    unit.memory.working = true;
+    for (let tick = 0; tick < 5; tick++) {
+        w.clear(); behavior[unit.memory.working ? 'target' : 'source'](unit);
+        assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['harvest', source.id]]);
+        assert.equal(unit.memory.working, false);
+        assert.equal(data.harvestingSourceId, source.id);
+        unit.store.energy += 2; source.energy -= 2; w.game.time++;
+    }
+    w.clear(); behavior.source(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['moveTo', 'controller']]);
+    assert.equal(unit.memory.working, true);
+    assert.equal(data.harvestingSourceId, undefined);
+    assert.equal(w.intents('moveTo')[0].range, 3);
+    unit.pos = w.p(23, 25);
+    for (let tick = 0; tick < 10; tick++) {
+        w.clear(); behavior.target(unit);
+        assert.deepEqual(w.calls.map(call => call.method), ['upgradeController']);
+        unit.store.energy--; w.game.time++;
+    }
+    w.clear(); behavior.target(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['harvest', source.id], ['moveTo', source.id]]);
+    assert.equal(unit.memory.working, false);
+    assert.equal(data.harvestingSourceId, source.id);
+});
+
+test('self-harvesting upgrader spends its final partial batch when the source depletes or disappears', () => {
+    for (const missing of [false, true]) {
+        const w = world(1), source = w.source('mine', 10, 10, 2);
+        const unit = w.creep('worker', 'upgrader', 11, 10, 0, 50), data = { sourceId: source.id };
+        const behavior = w.roles.upgrader(data);
+        behavior.source(unit); unit.store.energy = 2; source.energy = 0;
+        if (missing) w.objects.delete(source.id);
+        w.game.time++; w.clear(); behavior.source(unit);
+        assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['moveTo', 'controller']]);
+        assert.equal(data.harvestingSourceId, undefined);
+        assert.equal(unit.memory.working, true);
+    }
+});
+
+test('self-harvesting load ratio is configurable without changing passive partial energy use', () => {
+    const w = world(1), source = w.source('mine', 10, 10);
+    const unit = w.creep('worker', 'upgrader', 11, 10, 0, 10), data = { sourceId: source.id };
+    const behavior = w.roles.upgrader(data);
+    w.policy.upgrading.selfHarvestLoadRatio = 0.5;
+    behavior.source(unit); unit.store.energy = 4; w.game.time++; w.clear(); behavior.source(unit);
+    assert.deepEqual(w.calls.map(call => call.method), ['harvest']);
+    unit.store.energy = 6; w.game.time++; w.clear(); behavior.source(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['moveTo', 'controller']]);
+    assert.equal(data.harvestingSourceId, undefined);
+});
+
+test('a new controller supply clears bootstrap harvesting and immediately joins stationary refill and upgrade', () => {
+    const w = world(1), source = w.source('mine', 10, 10);
+    const unit = w.creep('worker', 'upgrader', 23, 25, 2, 50);
+    const data = { sourceId: source.id, harvestingSourceId: source.id };
+    const buffer = w.structure('controller-buffer', 'container', 22, 25, 1000);
+    w.roles.upgrader(data).source(unit);
+    assert.deepEqual(w.calls.map(call => [call.method, call.target]), [['upgradeController', 'controller'], ['withdraw', buffer.id]]);
+    assert.equal(data.harvestingSourceId, undefined);
+});
+
 test('mobile upgrader consumes partial loads and walks only to native upgrade range', () => {
     const w = world(1), unit = w.creep('worker', 'upgrader', 10, 10, 3), behavior = w.roles.upgrader({});
     behavior.source(unit);

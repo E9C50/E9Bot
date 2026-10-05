@@ -3,7 +3,7 @@ const test = require('node:test');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function store(energy = 0, capacity = 100) {
-    return { energy, getFreeCapacity: () => capacity - energy, getUsedCapacity: () => energy, getCapacity: () => capacity };
+    return { energy, getFreeCapacity() { return capacity - this.energy; }, getUsedCapacity() { return this.energy; }, getCapacity: () => capacity };
 }
 
 function world({ level = 2, capacity = 300, my = true, disabled = false } = {}) {
@@ -231,3 +231,26 @@ for (const options of [{ level: 8, capacity: 12900 }, { disabled: true, level: 7
         w.behavior.source(w.creep); assert.equal(w.intents('moveTo')[0].target, controllerStore.id);
     });
 }
+
+
+test('RCL1 self-supplied constructor fills its 50-energy batch and then builds source infrastructure before logistics exist', () => {
+    const w = world({ level: 1, capacity: 300 });
+    const source = w.source('source', 15, 16);
+    const site = w.site('source-container', 'container', 15, 16);
+    w.creep.store = store(0, 50); w.creep.memory.working = false; w.data.sourceId = source.id;
+    for (let tick = 0; tick < 25; tick++) {
+        w.clear();
+        assert.equal(w.behavior.source(w.creep), true);
+        assert.equal(w.intents('harvest').length, 1);
+        assert.equal(w.intents('build').length, 0);
+        assert.equal(w.intents('moveTo').length, 0);
+        assert.equal(w.creep.memory.working, false);
+        w.creep.store.energy += 2; w.game.time++;
+    }
+    w.clear(); assert.equal(w.behavior.source(w.creep), false);
+    assert.equal(w.creep.memory.working, true);
+    assert.equal(w.intents('harvest').length, 0);
+    assert.equal(w.behavior.target(w.creep), true);
+    assert.equal(w.intents('build')[0].target, site.id);
+    assert.equal(w.intents('moveTo').length, 0);
+});

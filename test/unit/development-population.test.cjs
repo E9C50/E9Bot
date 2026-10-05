@@ -49,6 +49,7 @@ function makeWorld(home, { creeps = {}, visibleSources = [], automaticHauling = 
         return true;
     } });
     const factories = Object.fromEntries(['manager', 'processer', 'miner', 'harvester', 'filler', 'builder', 'upgrader', 'repairer'].map(role => [role, factory(role)]));
+    factories.isRoleSupported = role => typeof factories[role] === 'function' && role !== 'isRoleSupported';
     const demand = {
         createCreepName: (role, name) => `${role.toUpperCase()}_${name}`,
         addCreepConfig(target, role, name, data) {
@@ -65,7 +66,11 @@ function makeWorld(home, { creeps = {}, visibleSources = [], automaticHauling = 
         ENERGY_REGEN_TIME: 300, CREEP_SPAWN_TIME: 3, MAX_CREEP_SIZE: 50, BUILD_POWER: 5,
         STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link',
         TERRAIN_MASK_WALL: 1, LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', FIND_STRUCTURES: 'structures',
-    }, modules: { role: factories, './demand': demand } });
+    }, modules: { role: factories, './demand': demand,
+        'settings/boost': { boostTypeEnum: { BoostTypeMove: 'boostMove', BoostTypeCarry: 'boostCarry', BoostTypeBuild: 'boostBuild' },
+            boostBodyPart: {}, boostConfig: {}, roleBoostConfig: {} },
+        'creep/boosting': { canPrepareBoosts() { throw Error('the bootstrap constructor cannot depend on boost preparation'); } },
+    } });
     if (automaticHauling) for (const source of home.sources) {
         if (!Object.values(creeps).some(creep => !creep.spawning && creep.memory.role === 'harvester' &&
             creep.room.name === home.name && creep.memory.data.sourceId === source.id &&
@@ -85,6 +90,7 @@ function makeWorld(home, { creeps = {}, visibleSources = [], automaticHauling = 
     return { loader, game, home, objects, calls, demand,
         policy: loader.load('settings/development').developmentPolicy,
         release() { home.memory.creepConfig = {}; api.releaseBaseCreepConfig(); return Object.values(home.memory.creepConfig); },
+        queue() { return Array.from(loader.load('creep/spawnQueue').buildSpawnQueue(home)); },
     };
 }
 
@@ -113,6 +119,121 @@ test('RCL1 with a Spawn publishes a Source-fed upgrader before any Container exi
     assert.ok(byRole(configs, 'harvester').length > 0);
     assert.ok(byRole(configs, 'filler').length > 0);
     assert.deepEqual(state.calls, [], 'the real developing-room branch bypasses legacy factories');
+});
+
+test('RCL1 construction publishes a cheap self-fed first builder without waiting for arrived hauling income', () => {
+    const home = room();
+    home.constructionSites = [{ id: 'source-container-site', structureType: 'container' }];
+    const state = makeWorld(home);
+    const builders = byRole(state.release(), 'builder');
+    assert.equal(builders.length, 1);
+    assert.equal(builders[0].data.sourceId, home.sources[0].id);
+    assert.equal(builders[0].development.workParts, 1);
+    assert.equal(builders[0].development.carryParts, 1);
+    assert.equal(builders[0].development.maximumCost, costs.work + costs.carry + costs.move);
+    assert.equal(builders[0].spawnPriority, state.policy.building.firstCreepPriority);
+    assert.ok(builders[0].spawnPriority < state.loader.load('settings/creep').spawnPriority.harvester,
+        'the first constructor must not wait for the full mining quota');
+});
+
+test('the real bootstrap queue establishes a miner then a carrier then a builder before expanding either fleet', () => {
+    const home = room();
+    home.constructionSites = [{ id: 'source-container-site', structureType: 'container' }];
+    const state = makeWorld(home, { automaticHauling: false });
+    state.release();
+    const next = () => home.memory.creepConfig[state.queue()[0]];
+    const inhabit = config => {
+        const unit = worker(home, { role: config.role, work: config.development.workParts || 0, name: config.name, data: config.data });
+        unit.name = state.demand.createCreepName(config.role, config.name);
+        unit.store = store(0, (config.development.carryParts || 1) * 50);
+        state.game.creeps[unit.name] = unit;
+        return unit;
+    };
+    assert.equal(next().role, 'harvester', 'initial production recovery overrides builder priority');
+    inhabit(next()); state.release();
+    assert.equal(next().role, 'filler', 'the first Source.id carrier overrides all consumer and expansion priorities');
+    inhabit(next()); state.release();
+    assert.equal(next().role, 'builder', 'do not wait for the remaining two miners and carriers');
+    const constructor = inhabit(next()); state.release();
+    assert.equal(next().role, 'harvester', 'production expansion resumes after the constructor is paid for');
+    assert.equal(byRole(Object.values(home.memory.creepConfig), 'builder').length, 1);
+    assert.equal(byRole(Object.values(home.memory.creepConfig), 'builder')[0].name, constructor.memory.name);
+});
+
+test('the first bootstrap builder becomes affordable at 200 actual energy without spending an unaffordable intent', () => {
+    const home = room();
+    home.constructionSites = [{ id: 'source-container-site', structureType: 'container' }];
+    const state = makeWorld(home), config = byRole(state.release(), 'builder')[0];
+    const bodies = state.loader.load('creep/developmentBodies');
+    home.energyAvailable = 199;
+    assert.deepEqual(Array.from(bodies.getDevelopmentBody(home, config)), []);
+    home.energyAvailable = 200;
+    const body = Array.from(bodies.getDevelopmentBody(home, config));
+    assert.deepEqual(body, ['work', 'carry', 'move']);
+    assert.equal(body.reduce((cost, part) => cost + costs[part], 0), home.energyAvailable);
+    const selected = state.loader.load('creep/bodySelection').selectCreepBody(home, config, false);
+    assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move'], 'the actual default selector also makes the body at 200');
+    assert.equal(selected.boostPlan.tier, 0);
+});
+
+test('custom builder bodies cannot exceed the 200-energy bootstrap limit or wait for unavailable boosts', () => {
+    for (const preference of ['global', 'room']) for (const terrain of ['plain', 'swamp']) {
+        const home = room();
+        home.constructionSites = [{ id: 'container-site', structureType: 'container' }];
+        const state = makeWorld(home);
+        const profile = { workParts: 20, carryParts: 25, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
+        if (preference === 'global') state.loader.load('settings/bodyPolicy').bodyPolicy.profiles.builder = profile;
+        else home.memory.bodyProfiles = { builder: profile };
+        const config = byRole(state.release(), 'builder')[0];
+        assert.equal(config.bodyProfile.boostTier, 0);
+        const selector = state.loader.load('creep/bodySelection').selectCreepBody;
+        home.energyAvailable = 199;
+        assert.deepEqual(Array.from(selector(home, config, false).body), []);
+        home.energyAvailable = 200;
+        const selected = selector(home, config, false);
+        assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
+        assert.equal(selected.boostPlan.tier, 0);
+        assert.equal(selected.boostPlan.steps.length, 0);
+    }
+});
+
+test('an existing or spawning local builder retains its demand instead of creating another bootstrap worker', () => {
+    for (const spawning of [false, true]) {
+        const home = room();
+        home.constructionSites = [{ id: 'container-site', structureType: 'container' }];
+        const existing = worker(home, { role: 'builder', work: 1, name: 'existing-constructor', spawning });
+        const state = makeWorld(home, { creeps: { existing } });
+        const builders = byRole(state.release(), 'builder');
+        assert.equal(builders.length, 1);
+        assert.equal(builders[0].name, existing.memory.name);
+        assert.equal(builders[0].spawnPriority, state.loader.load('settings/creep').spawnPriority.builder);
+        assert.equal(builders[0].development.maximumCost, undefined);
+    }
+});
+
+test('construction-free or road-only rooms never receive a priority bootstrap constructor', () => {
+    const home = room(), state = makeWorld(home);
+    assert.equal(byRole(state.release(), 'builder').length, 0);
+    home.constructionSites = [{ id: 'road-site', structureType: 'road' }];
+    const builders = byRole(state.release(), 'builder');
+    assert.equal(builders.length, 1);
+    assert.equal(builders[0].spawnPriority, state.loader.load('settings/creep').spawnPriority.builder);
+    assert.equal(builders[0].development.maximumCost, undefined);
+});
+
+test('established source logistics keep normal construction priority and the existing energy budget', () => {
+    for (const logistic of ['container', 'storage']) {
+        const home = room();
+        home.constructionSites = [{ id: 'extension-site', structureType: 'extension' }];
+        if (logistic === 'container') home.containers = [structure('mine-container', 'container', 11, 10, 1000)];
+        else home.storage = structure('storage', 'storage', 20, 21, 0);
+        const state = makeWorld(home), builders = byRole(state.release(), 'builder');
+        assert.equal(builders.length, 1);
+        assert.equal(builders[0].development.workParts, 1);
+        assert.equal(builders[0].spawnPriority, state.loader.load('settings/creep').spawnPriority.builder);
+        assert.equal(builders[0].development.maximumCost, undefined);
+        assert.equal(builders[0].data.sourceId, logistic === 'container' ? 'mine-container' : 'storage');
+    }
 });
 
 test('empty regenerating Sources retain the same development mining demand', () => {

@@ -35,6 +35,17 @@ function emergencyLoadReady(creep: Creep, source: Source): boolean {
     return creep.store[RESOURCE_ENERGY] > 0 && (creep.store.getFreeCapacity(RESOURCE_ENERGY) == 0 || source.energy == 0)
 }
 
+/** Use the mine's own harvest to build its container without leaving the Source workstation. */
+function buildSourceContainer(creep: Creep, source: Source): boolean {
+    if (!creep.pos.isNearTo(source) || !(creep.store[RESOURCE_ENERGY] > 0)) return false
+    const site = creep.room.constructionSites.find(site => site.my && site.structureType === STRUCTURE_CONTAINER && source.pos.isNearTo(site))
+    if (site === undefined) return false
+    // build and harvest share one native WORK intent; refill on the next empty tick.
+    creep.memory.working = false
+    creep.build(site)
+    return true
+}
+
 function prepareDevelopingHarvester(creep: Creep, data: HarvesterData): boolean {
     const source = Game.getObjectById<Source>(data.sourceId)
     if (source == undefined) return false
@@ -58,6 +69,7 @@ function runDevelopingHarvester(creep: Creep, data: HarvesterData): boolean {
         if (creep.transfer(emergency, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) creep.moveTo(emergency, { range: 1 })
         return true
     }
+    if (emergency === undefined && buildSourceContainer(creep, source)) return true
     const buffers = sourceBuffers(creep, source)
     const energy = creep.store[RESOURCE_ENERGY], free = creep.store.getFreeCapacity(RESOURCE_ENERGY)
     // Without a carrier, save a full batch instead of walking to spawn for each harvest.

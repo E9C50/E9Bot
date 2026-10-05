@@ -156,7 +156,7 @@ interface FillerData { sourceId: string, targetId?: string, mineId?: string }
 interface ManagerData { }
 interface ProcesserData { waiting: number }
 
-interface UpgraderData { sourceId: string }
+interface UpgraderData { sourceId: string; harvestingSourceId?: string }
 interface BuilderData { sourceId: string, buildTarget?: string }
 interface RepairerData { sourceId: string, repairTarget?: string }
 
