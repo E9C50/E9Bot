@@ -98,3 +98,23 @@ test('worker fallback is limited to the delivery room and uses no path search or
     Object.defineProperty(w.game,'creeps',{get(){throw Error('global scan forbidden');}});
     assert.equal(w.deliverHaulerEnergy(w.unit('import',10,10)),false);assert.equal(w.calls.length,0);
 });
+
+
+test('delivery carriers release old and moveTo-created crossing locks while moving, unloading or idle', () => {
+    const w = world();
+    w.structure('storage', 'storage', 25, 25, 0, 10000);
+    const carrier = w.unit('import', 10, 10);
+    carrier.memory.dontPullMe = true;
+    const move = carrier.moveTo;
+    carrier.moveTo = function (...args) { this.memory.dontPullMe = true; return move.apply(this, args); };
+    assert.equal(w.deliverHaulerEnergy(carrier), true);
+    assert.equal(carrier.memory.dontPullMe, false, 'a repeated native moveTo call must not lock depot traffic');
+    carrier.memory.dontPullMe = true;
+    carrier.pos = new w.Position(24, 24);
+    assert.equal(w.deliverHaulerEnergy(carrier), true);
+    assert.equal(carrier.memory.dontPullMe, false, 'a carrier handing in cargo is not a stationary worker');
+    const empty = w.unit('waiting', 24, 24, 0);
+    empty.memory.dontPullMe = true;
+    assert.equal(w.deliverHaulerEnergy(empty), false);
+    assert.equal(empty.memory.dontPullMe, false, 'empty haulers also allow occupied depot tiles to be crossed');
+});

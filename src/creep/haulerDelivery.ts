@@ -70,6 +70,7 @@ function receiver(creep: Creep, room: Room): Receiver | undefined {
 /** One transfer intent; adjacent waypoints and remaining cargo continue toward Storage in the same tick. */
 export function deliverHaulerEnergy(creep: Creep, room: Room = creep.room): boolean {
     sync()
+    creep.memory.dontPullMe = false
     if (creep.room.name !== room.name || creep.store[RESOURCE_ENERGY] <= 0) return false
     const target = receiver(creep, room)
     if (!target) return false
@@ -83,5 +84,8 @@ export function deliverHaulerEnergy(creep: Creep, room: Room = creep.room): bool
         if (storage && storage.id !== target.id && free(storage) > 0 && creep.store[RESOURCE_ENERGY] > amount &&
             range(creep.pos, storage.pos) > policy.deliveryRange) creep.moveTo(storage, { range: policy.deliveryRange })
     }
+    // The legacy moveTo wrapper locks stationary creeps after repeated calls;
+    // delivery carriers must remain yieldable even while waiting at a depot.
+    creep.memory.dontPullMe = false
     return true
 }

@@ -215,6 +215,58 @@ test('war-paused loaded automatic carriers unload safely after reaching their ho
     assert.equal(w.calls.delegated, 0);
 });
 
+test('an inactive empty hauler already near home releases its old position lock without repeated movement', () => {
+    const w = world(); w.release(); const data = w.task('hauler');
+    w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };
+    const creep = w.unit(data, w.home, { x: 24, y: 25 });
+    creep.memory.dontPullMe = true;
+    const behavior = w.api.withDevelopmentRemoteRole(data, w.behavior);
+    for (let tick = 0; tick < 6; tick++) {
+        w.game.time++;
+        assert.equal(behavior.prepare(creep), false);
+        assert.equal(creep.memory.dontPullMe, false);
+    }
+    assert.equal(w.calls.moves.length, 0);
+    assert.equal(w.calls.actions.length, 0);
+    assert.equal(w.calls.recycling, 0);
+    assert.equal(w.calls.delegated, 0);
+    assert.equal(data.developmentRemote.retiring, undefined, 'a temporary safety pause must not retire the carrier');
+});
+
+test('homeward movement clears a lock set inside the BetterMove wrapper and preserves no-path feedback', () => {
+    for (const code of [0, -2]) {
+        const w = world(); w.release(); const data = w.task('hauler'); w.game.time++;
+        w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };
+        const creep = w.unit(data, w.target), originalMove = creep.moveTo, messages = [];
+        creep.moveTo = function (...args) { originalMove.apply(this, args); this.memory.dontPullMe = true; return code; };
+        creep.say = message => messages.push(message);
+        const behavior = w.api.withDevelopmentRemoteRole(data, w.behavior);
+        assert.equal(behavior.prepare(creep), false);
+        assert.equal(creep.memory.dontPullMe, false);
+        assert.equal(w.calls.moves.length, 1);
+        assert.equal(w.calls.moves[0].pos.roomName, w.home.name);
+        assert.equal(w.calls.moves[0].options.range, 1);
+        assert.deepEqual(messages, code === -2 ? ['撤离无路'] : []);
+        assert.equal(w.calls.delegated, 0);
+    }
+});
+
+test('a blocked loaded hauler at home still deposits its cargo into Storage without early retirement', () => {
+    const w = world(); w.release(); const data = w.task('hauler'); w.game.time++;
+    w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };
+    const creep = w.unit(data, w.home, { energy: 550, working: true });
+    w.home.storage = { id: 'storage', pos: new w.Position(24, 25, w.home.name), store: w.store(0, 10000) };
+    assert.equal(w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(creep), false);
+    assert.equal(w.calls.actions.length, 1);
+    assert.equal(w.calls.actions[0].type, 'transfer');
+    assert.equal(w.calls.actions[0].target, w.home.storage);
+    assert.equal(creep.store.energy, 550, 'issuing the transfer must not predict this tick Store changes');
+    assert.equal(w.calls.moves.length, 0);
+    assert.equal(w.calls.recycling, 0);
+    assert.equal(data.developmentRemote.retiring, undefined);
+    assert.equal(w.calls.delegated, 0);
+});
+
 test('a low-level room scouts without flags but waits for capacity and a real local harvester before mining', () => {
     const w = world({ level: 2, capacity: 300, visible: false }); w.release();
     assert.deepEqual(w.calls.published.map(call => call.role), ['scout']); assert.deepEqual(w.game.flags, {});

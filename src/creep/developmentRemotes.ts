@@ -287,7 +287,11 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
 
 function goHome(creep: Creep, data: DevelopmentRemoteData): void {
     const target = data.developmentRemote
-    const code = creep.moveTo(new RoomPosition(target.homePosition.x, target.homePosition.y, target.homeRoom), { range: 1 })
+    const position = new RoomPosition(target.homePosition.x, target.homePosition.y, target.homeRoom)
+    if (creep.pos.inRangeTo(position, 1)) { creep.memory.dontPullMe = false; return }
+    const code = creep.moveTo(position, { range: 1 })
+    // BetterMove may lock a repeatedly stalled mover; withdrawing units must remain swappable.
+    creep.memory.dontPullMe = false
     if (code === ERR_NO_PATH) creep.say('撤离无路')
 }
 function retire(creep: Creep, data: DevelopmentRemoteData): void {
