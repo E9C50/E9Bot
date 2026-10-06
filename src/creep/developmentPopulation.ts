@@ -9,6 +9,7 @@ import { rolePolicy } from 'settings/rolePolicy'
 import { interShardPolicy } from 'settings/interShard'
 import type { ShardUnitData } from 'shard/missions'
 import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
+import { releaseRepairerCreepConfigs } from './repairerPopulation'
 
 function workParts(creep: Creep): number { return creep.getActiveBodyparts(WORK) }
 function range(first: RoomPosition, second: RoomPosition): number {
@@ -232,6 +233,7 @@ function remoteIncome(room: Room, creeps: Creep[]): number {
 
 /** 沿用已建成的 63bot 资源容器与控制器容器，不移动任何建筑。 */
 export function releaseDevelopmentBaseConfig(room: Room): void {
+    releaseRepairerCreepConfigs(room, true)
     if (room.spawns.length == 0) return
     const creeps = Object.values(Game.creeps).filter(creep => creep.memory.spawnRoom == room.name)
     // Adopt old local consumers into the budget; full-level rooms never enter this publisher.

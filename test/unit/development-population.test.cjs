@@ -1303,7 +1303,143 @@ test('healthy ordinary mature builders keep the normal configuration without gro
 
 test('mature rooms without construction do not inspect existing builder bodies or publish any future constructor', () => {
     const home = legacyRoom(); home.constructionSites = [];
+    home.wallsNeedRepair = []; home.ramparts = [];
     const state = makeWorld(home, { automaticHauling: false });
     Object.defineProperty(state.game, 'creeps', { get() { throw Error('idle mature rooms must not scan the empire population'); } });
     assert.equal(byRole(state.release(), 'builder').length, 0);
+});
+
+test('owned Ramparts publish one permanent repairer without Storage or soft wall damage at every owned stage', () => {
+    for (const level of [1, 4, 7, 8]) for (const stored of [undefined, 0, 10000, 500000]) {
+        const home = room({ level, capacity: 300 });
+        home.ramparts = [{ id: 'full-rampart', my: true, hits: 300000000, hitsMax: 300000000 }];
+        if (stored !== undefined) home.storage = structure('storage', 'storage', 20, 21, stored);
+        const state = makeWorld(home, { automaticHauling: false });
+        const configs = byRole(state.release(), 'repairer');
+        assert.equal(configs.length, 1, `RCL${level}/Storage=${stored}`);
+        assert.equal(configs[0].data.sourceId, home.storage?.id || home.sources[0].id);
+        assert.equal(configs[0].development?.workParts, level < 8 ? 1 : undefined);
+        assert.equal(configs[0].bodyProfile?.boostTier, level < 8 ? 0 : undefined);
+    }
+});
+
+test('a Rampart floor merges with the legacy fleet and remains independent of its surplus ceiling', () => {
+    const home = legacyRoom(), state = makeWorld(home, { automaticHauling: false });
+    home.ramparts = [{ my: true }];
+    const base = state.loader.load('settings/population').populationPolicy.base;
+    base.maximumRepairers = 5; home.storage.store.energy = 250000;
+    assert.equal(byRole(state.release(), 'repairer').length, 3);
+    assert.equal(byRole(Object.values(home.memory.creepConfig), 'repairer')[0].name, `${home.name}_REPAIRER_STORAGE0`);
+    home.wallsNeedRepair = [];
+    assert.equal(byRole(state.release(), 'repairer').length, 1, 'surplus energy alone cannot enlarge the permanent fleet');
+    base.maximumRepairers = 0;
+    assert.equal(byRole(state.release(), 'repairer').length, 1, 'the existing ceiling only limits extras');
+    state.loader.load('settings/rolePolicy').rolePolicy.repairer.minimumRampartWorkers = 2;
+    assert.equal(byRole(state.release(), 'repairer').length, 2, 'the minimum is configurable');
+    home.ramparts = [];
+    assert.equal(byRole(state.release(), 'repairer').length, 0);
+});
+
+test('removing owned Ramparts withdraws the floor while preserving the old energy, RCL and wall gates', () => {
+    const home = legacyRoom(), state = makeWorld(home, { automaticHauling: false });
+    state.loader.load('settings/population').populationPolicy.base.maximumRepairers = 5;
+    home.storage.store.energy = 250000; home.ramparts = [{ my: false }];
+    assert.equal(byRole(state.release(), 'repairer').length, 3, 'legacy soft-wall jobs remain available');
+    home.storage.store.energy = 10000;
+    assert.equal(byRole(state.release(), 'repairer').length, 0, 'foreign Ramparts cannot bypass the original energy gate');
+    home.ramparts = [{ my: true }];
+    assert.equal(byRole(state.release(), 'repairer').length, 1);
+    home.ramparts = []; home.storage.store.energy = 250000;
+    home.controller.level = home.level = 5; home.memory.fastUpgrade = false;
+    assert.equal(byRole(state.release(), 'repairer').length, 1, 'lower-level legacy extras still keep the original single-worker limit');
+    home.wallsNeedRepair = [];
+    assert.equal(byRole(state.release(), 'repairer').length, 0);
+    assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'repairer').length, 0);
+});
+
+test('several source Containers do not duplicate the no-Storage permanent repairer', () => {
+    const home = legacyRoom(); delete home.storage; delete home.centerLink;
+    home.ramparts = [{ my: true }]; home.wallsNeedRepair = [];
+    const state = makeWorld(home, { automaticHauling: false }), configs = byRole(state.release(), 'repairer');
+    assert.equal(configs.length, 1);
+    assert.equal(configs[0].data.sourceId, home.containers[0].id);
+});
+
+test('the real growth repairer selector provides one affordable WORK at 200 energy without boost waiting', () => {
+    for (const preference of ['global', 'room']) for (const terrain of ['plain', 'swamp']) {
+        const home = room({ level: 4, capacity: 1300 }); home.energyAvailable = 200; home.ramparts = [{ my: true }];
+        const state = makeWorld(home, { automaticHauling: false });
+        const profile = { workParts: 20, carryParts: 25, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
+        if (preference === 'global') state.loader.load('settings/bodyPolicy').bodyPolicy.profiles.repairer = profile;
+        else home.memory.bodyProfiles = { repairer: profile };
+        const config = byRole(state.release(), 'repairer')[0];
+        assert.equal(config.development.workParts, 1);
+        assert.equal(config.development.maximumCost, 200);
+        const selector = state.loader.load('creep/bodySelection').selectCreepBody;
+        const selected = selector(home, config, false);
+        assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
+        assert.equal(selected.boostPlan.tier, 0); assert.equal(selected.boostPlan.steps.length, 0);
+        home.energyAvailable = 199;
+        assert.deepEqual(Array.from(selector(home, config, false).body), []);
+    }
+});
+
+test('a mature permanent repairer is affordable before the full pool while extras retain their old budget', () => {
+    const home = legacyRoom(); home.energyAvailable = 200; home.ramparts = [{ my: true }];
+    const state = makeWorld(home, { automaticHauling: false });
+    state.loader.load('settings/population').populationPolicy.base.maximumRepairers = 3;
+    const configs = byRole(state.release(), 'repairer');
+    assert.equal(configs.length, 3);
+    assert.equal(configs[0].development, undefined);
+    assert.equal(configs[0].bodyProfile.maximumCost, 200);
+    const selected = state.loader.load('creep/bodySelection').selectCreepBody(home, configs[0], false);
+    assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
+    assert.equal(configs[1].bodyProfile, undefined); assert.equal(configs[2].bodyProfile, undefined);
+    home.energyAvailable = home.energyCapacityAvailable;
+    assert.equal(byRole(state.release(), 'repairer')[0].bodyProfile, undefined, 'a full pool retains the established mature body plan');
+});
+
+test('ordinary manual and spawning repairers occupy the floor without mutating their paid-for body or current target', () => {
+    for (const level of [4, 8]) for (const spawning of [false, true]) {
+        const home = room({ level, capacity: 1300 }); home.ramparts = [{ my: true }];
+        const resident = worker(home, { role: 'repairer', name: 'manual-native-name', work: 4, ttl: 1, spawning,
+            data: { sourceId: 'old-buffer', repairTarget: 'ongoing-wall' } });
+        delete resident.memory.name; delete resident.memory.spawnRoom;
+        resident.memory.bodyProfile = { workParts: 4, boostTier: 0 };
+        const before = JSON.stringify(resident.memory);
+        const state = makeWorld(home, { creeps: { [resident.name]: resident }, automaticHauling: false });
+        const configs = byRole(state.release(), 'repairer');
+        assert.equal(configs.length, 1); assert.ok(home.memory.creepConfig[resident.name]);
+        assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'repairer').length, 0);
+        assert.equal(JSON.stringify(resident.memory), before);
+    }
+});
+
+test('the same healthy growth repairer survives RCL8 catalog replacement with no development birth or duplicate', () => {
+    const home = room({ level: 7, capacity: 1300 }); home.ramparts = [{ my: true }];
+    const resident = worker(home, { role: 'repairer', name: `${home.name}_REPAIRER_RAMPART_0`, work: 1, ttl: 1 });
+    resident.name = `REPAIRER_${resident.memory.name}`; resident.memory.development = { workParts: 1 };
+    resident.memory.bodyProfile = { boostTier: 0 };
+    const state = makeWorld(home, { creeps: { [resident.name]: resident }, automaticHauling: false });
+    assert.equal(byRole(state.release(), 'repairer')[0].development.workParts, 1);
+    home.controller.level = home.level = 8;
+    const next = byRole(state.release(), 'repairer');
+    assert.equal(next.length, 1); assert.equal(next[0].name, resident.memory.name);
+    assert.equal(next[0].development, undefined); assert.equal(next[0].bodyProfile.boostTier, 0);
+    assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'repairer').length, 0);
+    delete state.game.creeps[resident.name]; state.release();
+    assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'repairer').length, 1, 'natural death replenishes the floor');
+});
+
+test('an unusable resident cannot block the permanent WORK-and-CARRY replacement slot', () => {
+    for (const damaged of ['work', 'carry']) {
+        const home = room({ level: 8, capacity: 1300 }); home.ramparts = [{ my: true }];
+        const name = `${home.name}_REPAIRER_RAMPART_0`, resident = worker(home, { role: 'repairer', name, work: damaged === 'work' ? 0 : 1 });
+        if (damaged === 'carry') withoutCarry(resident);
+        resident.name = `REPAIRER_${name}`;
+        const state = makeWorld(home, { creeps: { [resident.name]: resident }, automaticHauling: false });
+        const configs = byRole(state.release(), 'repairer');
+        assert.equal(configs.length, 1); assert.equal(configs[0].name, `${name}_REUSE_0`);
+        assert.equal(state.queue().filter(key => home.memory.creepConfig[key].role === 'repairer').length, 1);
+    }
 });

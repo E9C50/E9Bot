@@ -1,7 +1,7 @@
 import { getDistance } from "utils"
-import BaseRoleUpgrader from "./RoleBaseUpgrader"
 import { rolePolicy } from "settings/rolePolicy"
 import { repairCycleTarget, resetRepairCycle } from 'role/support/repairTarget'
+import { hasOwnedRamparts } from 'room/repairTargets'
 
 function maintenanceTurn(creep: Creep): boolean {
     const interval = Math.max(1, Math.floor(rolePolicy.repairer.cpuMaintenance.interval))
@@ -12,7 +12,8 @@ function maintenanceTurn(creep: Creep): boolean {
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
-        return room.storage != undefined && room.storage.store[RESOURCE_ENERGY] > rolePolicy.repairer.minimumStorageEnergy && room.wallsNeedRepair.length > 0
+        return hasOwnedRamparts(room) ||
+            room.storage != undefined && room.storage.store[RESOURCE_ENERGY] > rolePolicy.repairer.minimumStorageEnergy && room.wallsNeedRepair.length > 0
     },
     prepare(creep) {
         if (creep.room.level == rolePolicy.repairer.boostAtLevel) {
@@ -23,25 +24,61 @@ export default (data: CreepData): ICreepConfig => ({
     source(creep) {
         const creepData = data as RepairerData
         resetRepairCycle(creepData)
+        creep.memory.dontPullMe = false
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() == 0) {
             creep.memory.working = true
             return false
         }
 
-        const sourceTarget: StructureContainer | StructureStorage = Game.getObjectById(creepData.sourceId) as StructureContainer | StructureStorage
-
-        if (sourceTarget == undefined || sourceTarget.store[RESOURCE_ENERGY] == 0) {
-            creep.say("💤")
+        const configured = Game.getObjectById<StructureContainer | StructureStorage | Source>(creepData.sourceId)
+        let stock: StructureStorage | StructureContainer | undefined
+        if (creep.room.storage && creep.room.storage.store[RESOURCE_ENERGY] > 0) stock = creep.room.storage
+        else if (configured && 'store' in configured && configured.pos.roomName === creep.room.name &&
+            (configured.structureType === STRUCTURE_STORAGE || configured.structureType === STRUCTURE_CONTAINER) &&
+            (!('my' in configured) || configured.my !== false) && configured.store[RESOURCE_ENERGY] > 0) stock = configured
+        else {
+            let closest = Infinity
+            for (const container of creep.room.containers || []) {
+                if (container.store[RESOURCE_ENERGY] <= 0) continue
+                const distance = getDistance(creep.pos, container.pos)
+                if (distance < closest) { stock = container; closest = distance }
+            }
+        }
+        if (stock) {
+            creepData.sourceId = stock.id
+            if (getDistance(creep.pos, stock.pos) <= 1) creep.withdraw(stock, RESOURCE_ENERGY)
+            else creep.moveTo(stock)
             return true
         }
 
-        if (getDistance(creep.pos, sourceTarget.pos) <= 1) {
-            creep.withdraw(sourceTarget, RESOURCE_ENERGY)
-        } else {
-            creep.moveTo(sourceTarget)
+        let drop: Resource | undefined, distance = Infinity
+        for (const candidate of creep.room.droppedResource || []) {
+            if (candidate.resourceType !== RESOURCE_ENERGY || candidate.amount <= 0) continue
+            const candidateDistance = getDistance(creep.pos, candidate.pos)
+            if (candidateDistance < distance) { drop = candidate; distance = candidateDistance }
         }
-
+        if (drop) {
+            if (distance <= 1) creep.pickup(drop)
+            else creep.moveTo(drop)
+            return true
+        }
+        let source = configured && 'energy' in configured && configured.energy > 0 &&
+            configured.pos.roomName === creep.room.name ? configured : undefined
+        if (!source) {
+            distance = Infinity
+            for (const candidate of creep.room.sources || []) {
+                if (candidate.energy <= 0) continue
+                const candidateDistance = getDistance(creep.pos, candidate.pos)
+                if (candidateDistance < distance) { source = candidate; distance = candidateDistance }
+            }
+        }
+        if (source) {
+            creepData.sourceId = source.id
+            if (getDistance(creep.pos, source.pos) <= 1) creep.harvest(source)
+            else creep.moveTo(source)
+            return true
+        }
         return true
     },
     target(creep) {
@@ -58,20 +95,27 @@ export default (data: CreepData): ICreepConfig => ({
         let repairTarget = repairCycleTarget(creep, creepData)
         if (repairTarget == undefined) {
             const defenderCostMatrix = Memory.warMode?.[creep.room.name] ? creep.room.getDefenderCostMatrix() : undefined
-            let minimumHits = Infinity
-            // Keep the original list order for equal hits, without sorting the shared room cache.
-            for (const target of creep.room.wallsNeedRepair) {
-                if (target.hits >= target.hitsMax || target.pos.roomName !== creep.room.name ||
-                    ('my' in target && (target as OwnedStructure).my === false) ||
-                    (defenderCostMatrix !== undefined && defenderCostMatrix.get(target.pos.x, target.pos.y) === 255)) continue
-                if (target.hits < minimumHits) { repairTarget = target; minimumHits = target.hits }
+            const select = (targets: Structure[], selected?: Structure): Structure | undefined => {
+                let minimumHits = selected?.hits ?? Infinity
+                // Keep equal-hit list order without sorting or allocating filtered candidates.
+                for (const target of targets) {
+                    if (target.hits >= target.hitsMax || target.pos.roomName !== creep.room.name ||
+                        ('my' in target && (target as OwnedStructure).my === false) ||
+                        (defenderCostMatrix !== undefined && defenderCostMatrix.get(target.pos.x, target.pos.y) === 255)) continue
+                    if (target.hits < minimumHits) { selected = target; minimumHits = target.hits }
+                }
+                return selected
             }
+            repairTarget = select(creep.room.wallsNeedRepair)
+            // The minimum resident keeps strengthening barriers beyond the room's soft maintenance goal.
+            if (!repairTarget) repairTarget = select(creep.room.walls || [], select(creep.room.ramparts || []))
             creepData.repairTarget = repairTarget?.id || ''
         }
 
-        // 如果没有就去升级
+        // 所有墙已满或暂不可达时等待，不转去升级；掉血后继续维修。
         if (repairTarget == undefined) {
-            return BaseRoleUpgrader(creep.memory.data).target(creep)
+            creep.memory.dontPullMe = false
+            return true
         }
 
         const policy = rolePolicy.repairer.cpuMaintenance

@@ -14,6 +14,8 @@ export const rolePolicy = {
         emergencyRampartRange: 3
     },
     repairer: {
+        minimumRampartWorkers: 1,
+        rampartWorkerWorkParts: 1,
         minimumStorageEnergy: 10000,
         boostAtLevel: 8,
         cpuMaintenance: { minimumBucket: 1000, interval: 5, criticalHits: 100000 }

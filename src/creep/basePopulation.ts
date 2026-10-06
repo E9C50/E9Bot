@@ -6,6 +6,7 @@ import { isDevelopingRoom } from './development'
 import { releaseDevelopmentBaseConfig } from './developmentPopulation'
 import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
 import { sourceLinkPolicy } from 'settings/sourceLinks'
+import { releaseRepairerCreepConfigs } from './repairerPopulation'
 
 /** A zero-CARRY resident cannot hold the only Link-miner birth slot until natural death. */
 function linkedMinerName(room: Room, source: Source, name: string): string {
@@ -56,6 +57,7 @@ export function releaseBaseCreepConfig(): void {
             continue
         }
         const publishBuilder = localBuilderPublisher(room)
+        releaseRepairerCreepConfigs(room, false)
 
         if (roles[roleAdvEnum.MANAGER]({}).isNeed(room, '')) {
             addCreepConfig(
@@ -181,45 +183,6 @@ export function releaseBaseCreepConfig(): void {
                 publishBuilder(creepBuilderName0, creepBuilderMemory)
             }
 
-            // 按能量与房间等级计算修理工需求，再应用配置上限
-            const creepRepairerMemory: RepairerData = {
-                sourceId: room.storage.id,
-                repairTarget: '',
-            }
-            if (
-                roles[roleBaseEnum.REPAIRER](creepRepairerMemory).isNeed(
-                    room,
-                    ''
-                )
-            ) {
-                var repairerCount =
-                    Math.floor(
-                        room.storage.store[RESOURCE_ENERGY] /
-                            populationPolicy.base.energyPerRepairer
-                    ) + 1
-                if (
-                    room.controller &&
-                    room.controller.level <
-                        populationPolicy.base.singleRepairerBelowLevel
-                )
-                    repairerCount = 1
-
-                repairerCount = Math.min(
-                    repairerCount,
-                    populationPolicy.base.maximumRepairers
-                )
-
-                for (let i = 0; i < repairerCount; i++) {
-                    const creepRepairerName =
-                        room.name + '_REPAIRER_STORAGE' + i
-                    addCreepConfig(
-                        room,
-                        roleBaseEnum.REPAIRER,
-                        creepRepairerName,
-                        creepRepairerMemory
-                    )
-                }
-            }
         }
 
         // Source旁边的Container，发布对应Creep
@@ -286,25 +249,6 @@ export function releaseBaseCreepConfig(): void {
                 }
             }
 
-            const creepRepairerMemory: RepairerData = {
-                sourceId: container.id,
-                repairTarget: '',
-            }
-            if (
-                roles[roleBaseEnum.REPAIRER](creepRepairerMemory).isNeed(
-                    room,
-                    ''
-                )
-            ) {
-                const creepRepairerName =
-                    room.name + '_REPAIRER_CONTAINER_' + container.id
-                addCreepConfig(
-                    room,
-                    roleBaseEnum.REPAIRER,
-                    creepRepairerName,
-                    creepRepairerMemory
-                )
-            }
 
             if (room.level < 8) {
                 for (

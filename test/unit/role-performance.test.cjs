@@ -113,14 +113,14 @@ test('repairer reuses a living cached target without reading or scanning the roo
     assert.deepEqual(w.actions.map(action => action.type), ['repair', 'repair']);
 });
 
-test('war repairer chooses the weakest reachable wall in one pass and falls back to upgrading if every wall is blocked', () => {
+test('war repairer chooses the weakest reachable wall in one pass and waits if every wall is blocked or full', () => {
     const w = world('repairer', {}); w.memory.warMode.W1N1 = true;
     const blocked = w.structure('blocked', { x: 9, hits: 5 }), reachable = w.structure('reachable', { x: 11, hits: 10 });
     w.list('wallsNeedRepair', [blocked, reachable]);
     w.room.getDefenderCostMatrix = () => ({ get: x => x === 9 ? 255 : 0 });
     w.role.target(w.creep); assert.equal(w.data.repairTarget, 'reachable'); assert.equal(w.actions[0].id, 'reachable');
     reachable.hits = reachable.hitsMax; w.role.target(w.creep);
-    assert.equal(w.actions.at(-1).type, 'upgrade'); assert.equal(w.data.repairTarget, '');
+    assert.deepEqual(w.actions, [{ type: 'repair', id: 'reachable' }]); assert.equal(w.data.repairTarget, '');
 });
 
 test('harvester validates its ready Source once per phase and safely resets missing or out-of-range Sources', () => {

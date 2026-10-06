@@ -3,6 +3,7 @@ import { developmentPolicy } from 'settings/development'
 import { harvestWorkParts } from './bodyEffectiveness'
 import { getSourceMiningWorkTarget } from './developmentEconomy'
 import { hasSourceLinkTransport } from 'room/sourceLinks'
+import { hasOwnedRamparts } from 'room/repairTargets'
 
 /** An obsolete dedicated mine carrier can finish its delivery before yielding to Link transport. */
 function obsoleteLinkHauler(creep: Creep, home: Room): boolean {
@@ -26,6 +27,9 @@ export function retireDevelopmentCreep(creep: Creep): boolean {
     if (creep.memory.role === 'upgrader' || creep.memory.role === 'builder') return false
     const home = Game.rooms[creep.memory.spawnRoom]
     if (home?.controller?.my !== true) return false
+    // A surviving permanent Rampart worker bridges catalog refreshes and the RCL8 transition.
+    if (creep.memory.role === 'repairer' && hasOwnedRamparts(home) &&
+        creep.getActiveBodyparts(WORK) > 0 && creep.getActiveBodyparts(CARRY) > 0) return false
     const configs = home.memory.creepConfig || {}
     const developing = isDevelopingRoom(home)
     if (developing) {

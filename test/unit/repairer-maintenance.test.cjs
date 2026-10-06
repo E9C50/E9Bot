@@ -8,7 +8,7 @@ function world() {
         getObjectById: id => objects.get(id) || null };
     const memory = { warMode: {} };
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy',
-        STRUCTURE_WALL: 'constructedWall', STRUCTURE_RAMPART: 'rampart' }, modules: {
+        STRUCTURE_WALL: 'constructedWall', STRUCTURE_RAMPART: 'rampart', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container' }, modules: {
         utils: { getDistance: (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) },
         './RoleBaseUpgrader': () => ({ target(creep) { actions.push({ action: 'upgrade', name: creep.name }); return true; } }),
     } });
@@ -17,6 +17,7 @@ function world() {
     function room(name = 'W1N1') {
         if (candidates.has(name)) return candidates.get(name).room;
         const blocked = new Set(), list = [], value = { name, level: 8, enemies: [], memory: {}, blocked,
+            ramparts: [], walls: [], containers: [], sources: [], droppedResource: [],
             get wallsNeedRepair() { reads.set(name, (reads.get(name) || 0) + 1); return list; },
             getDefenderCostMatrix: () => ({ get: (x, y) => blocked.has(`${x},${y}`) ? 255 : 0 }) };
         candidates.set(name, { room: value, list });
@@ -25,7 +26,8 @@ function world() {
     function barrier(id, local, hits = 1000000, type = 'rampart', x = 11) {
         const value = { id, hits, hitsMax: 300000000, structureType: type, room: local, pos: { x, y: 10, roomName: local.name } };
         if (type === 'rampart') value.my = true;
-        objects.set(id, value); candidates.get(local.name).list.push(value); return value;
+        objects.set(id, value); candidates.get(local.name).list.push(value);
+        local[type === 'rampart' ? 'ramparts' : 'walls'].push(value); return value;
     }
     function unit(name = 'worker0', local = room(), target) {
         const data = { repairTarget: target?.id || '', sourceId: '' };
@@ -41,6 +43,14 @@ function world() {
                 actions.push({ action: 'withdraw', name, target: target.id, tick: game.time });
                 pending.push({ action: 'withdraw', creep, target }); return 0;
             },
+            pickup(target) {
+                actions.push({ action: 'pickup', name, target: target.id, tick: game.time });
+                pending.push({ action: 'pickup', creep, target }); return 0;
+            },
+            harvest(target) {
+                actions.push({ action: 'harvest', name, target: target.id, tick: game.time });
+                pending.push({ action: 'harvest', creep, target }); return 0;
+            },
         };
         return { creep, data, role: factory(data) };
     }
@@ -50,9 +60,14 @@ function world() {
             if (action === 'repair') {
                 const energy = Math.min(1, creep.store.energy, Math.ceil((target.hitsMax - target.hits) / 100));
                 if (energy > 0) { creep.store.energy -= energy; target.hits = Math.min(target.hitsMax, target.hits + energy * 100); }
-            } else {
+            } else if (action === 'withdraw') {
                 const energy = Math.min(target.store.energy, creep.store.getFreeCapacity());
                 target.store.energy -= energy; creep.store.energy += energy;
+            } else {
+                const available = action === 'pickup' ? target.amount : Math.min(2, target.energy);
+                const energy = Math.min(available, creep.store.getFreeCapacity());
+                if (action === 'pickup') target.amount -= energy; else target.energy -= energy;
+                creep.store.energy += energy;
             }
         }
     }
@@ -165,7 +180,7 @@ test('the exact critical-hit boundary repairs immediately on every turn and dist
 
 test('source withdrawal and the empty-energy phase transition are unaffected by low-bucket maintenance scheduling', () => {
     const w = world(), local = w.room(), high = w.barrier('high', local), unit = w.unit('worker0', local, high);
-    const storage = { id: 'storage', store: { energy: 10000 }, pos: { x: 11, y: 10, roomName: local.name } };
+    const storage = { id: 'storage', structureType: 'storage', store: { energy: 10000 }, pos: { x: 11, y: 10, roomName: local.name } };
     w.objects.set(storage.id, storage); unit.data.sourceId = storage.id;
     unit.role.source(unit.creep); assert.equal(w.actions.at(-1).action, 'withdraw');
     unit.creep.store.energy = 0;
@@ -188,7 +203,7 @@ test('repair intents consume the complete carried energy round before refilling 
     assert.equal(unit.role.target(unit.creep), false);
     assert.equal(unit.creep.memory.working, false);
     assert.equal(unit.data.repairTarget, '');
-    const storage = { id: 'storage', store: { energy: 1000 }, pos: { x: 11, y: 10, roomName: local.name } };
+    const storage = { id: 'storage', structureType: 'storage', store: { energy: 1000 }, pos: { x: 11, y: 10, roomName: local.name } };
     w.objects.set(storage.id, storage); unit.data.sourceId = storage.id;
     w.game.time++; unit.role.source(unit.creep); w.resolveIntents();
     assert.equal(unit.creep.store.energy, 100);
@@ -204,7 +219,7 @@ test('repair intents consume the complete carried energy round before refilling 
 
 test('partial and stalled refills do not preselect a repair target before the working phase resumes', () => {
     const w = world(), local = w.room(), original = w.barrier('old-round', local), unit = w.unit('worker0', local, original);
-    const storage = { id: 'storage', store: { energy: 25 }, pos: { x: 11, y: 10, roomName: local.name } };
+    const storage = { id: 'storage', structureType: 'storage', store: { energy: 25 }, pos: { x: 11, y: 10, roomName: local.name } };
     w.objects.set(storage.id, storage); unit.data.sourceId = storage.id;
     unit.creep.store.energy = 0; unit.creep.memory.working = false;
     unit.role.source(unit.creep); w.resolveIntents();
@@ -233,7 +248,7 @@ test('partial and stalled refills do not preselect a repair target before the wo
 test('every source entry clears a stale repair target before a full-body transition, withdrawal, movement or wait', () => {
     for (const phase of ['full', 'withdraw', 'distant', 'empty-source', 'missing-source']) {
         const w = world(), local = w.room(), target = w.barrier('stale-target', local), unit = w.unit('worker0', local, target);
-        const storage = { id: 'storage', store: { energy: 1000 }, pos: { x: phase === 'distant' ? 20 : 11, y: 10, roomName: local.name } };
+        const storage = { id: 'storage', structureType: 'storage', store: { energy: 1000 }, pos: { x: phase === 'distant' ? 20 : 11, y: 10, roomName: local.name } };
         w.objects.set(storage.id, storage); unit.data.sourceId = storage.id;
         unit.creep.memory.working = false;
         if (phase === 'full') unit.creep.store.energy = 100;
@@ -249,10 +264,16 @@ test('every source entry clears a stale repair target before a full-body transit
     }
 });
 
-test('when barriers are already complete the existing upgrader fallback is preserved', () => {
+test('when barriers are already full the resident waits with its energy and resumes after decay instead of upgrading', () => {
     const w = world(), local = w.room(), unit = w.unit('worker0', local);
+    const rampart = w.barrier('full', local); rampart.hits = rampart.hitsMax;
     unit.role.target(unit.creep);
-    assert.deepEqual(w.actions.map(value => value.action), ['upgrade']);
+    assert.deepEqual(w.actions, []); assert.equal(unit.creep.store.energy, 50);
+    assert.equal(unit.data.repairTarget, '');
+    rampart.hits--; w.game.time++; w.game.cpu.bucket = w.policy.minimumBucket;
+    unit.role.target(unit.creep);
+    assert.deepEqual(w.repairs().map(value => value.target), [rampart.id]);
+    assert.equal(w.actions.some(value => value.action === 'upgrade'), false);
 });
 
 test('non-barrier cached repair targets remain immediate even when their hits exceed the critical barrier limit', () => {
@@ -261,4 +282,105 @@ test('non-barrier cached repair targets remain immediate even when their hits ex
         pos: { x: 11, y: 10, roomName: local.name } };
     w.objects.set(container.id, container); const unit = w.unit('worker0', local, container);
     unit.role.target(unit.creep); assert.deepEqual(w.repairs().map(value => value.target), [container.id]);
+});
+
+test('owned ramparts retain repairer demand without Storage, energy reserves or a soft repair target', () => {
+    for (const supply of ['absent', 'empty', 'low', 'high']) {
+        const w = world(), local = w.room(), ram = w.barrier('owned', local), unit = w.unit('worker0', local);
+        ram.hits = ram.hitsMax; w.candidates.get(local.name).list.length = 0;
+        if (supply !== 'absent') local.storage = { store: { energy: { empty: 0, low: 1, high: 1000000 }[supply] } };
+        assert.equal(unit.role.isNeed(local, ''), true, supply);
+    }
+    const w = world(), local = w.room(), ram = w.barrier('foreign', local), unit = w.unit('worker0', local);
+    ram.my = false;
+    assert.equal(unit.role.isNeed(local, ''), false, 'foreign ramparts do not create a resident demand');
+});
+
+test('after reaching soft wall goals the next load continues repairing the weakest native barrier', () => {
+    const w = world(), local = w.room(), ram = w.barrier('ram', local, 10000000);
+    const wall = w.barrier('wall', local, 11000000, 'constructedWall'), unit = w.unit('worker0', local);
+    w.candidates.get(local.name).list.length = 0; w.game.cpu.bucket = w.policy.minimumBucket;
+    unit.role.target(unit.creep);
+    assert.equal(unit.data.repairTarget, ram.id);
+    ram.hits = 12000000; wall.hits = 11000000;
+    w.game.time++; unit.role.target(unit.creep);
+    assert.equal(unit.data.repairTarget, ram.id, 'native fallback targets keep the existing energy-cycle lock');
+    unit.creep.store.energy = 0; unit.role.target(unit.creep);
+    unit.creep.store.energy = 100; unit.creep.memory.working = true;
+    w.game.time++; unit.role.target(unit.creep);
+    assert.equal(unit.data.repairTarget, wall.id);
+    assert.equal(w.actions.some(value => value.action === 'upgrade'), false);
+});
+
+test('original emergency wall candidates take priority over fallback barriers above the soft goal', () => {
+    const w = world(), local = w.room(), urgent = w.barrier('urgent', local, 50), unit = w.unit('worker0', local);
+    w.barrier('fallback', local, 1); w.candidates.get(local.name).list.length = 1;
+    unit.role.target(unit.creep);
+    assert.equal(unit.data.repairTarget, urgent.id);
+});
+
+function stock(w, local, id, type = 'container', energy = 1000, x = 11) {
+    const value = { id, structureType: type, my: true, store: { energy }, pos: { x, y: 10, roomName: local.name } };
+    w.objects.set(id, value);
+    if (type === 'container') local.containers.push(value);
+    if (type === 'storage') local.storage = value;
+    return value;
+}
+
+test('repairer uses available Storage before a cached source Container and falls back when Storage is empty', () => {
+    const w = world(), local = w.room(), unit = w.unit('worker0', local);
+    const container = stock(w, local, 'mine'), storage = stock(w, local, 'storage', 'storage');
+    unit.creep.store.energy = 0; unit.creep.memory.working = false; unit.data.sourceId = container.id;
+    unit.role.source(unit.creep);
+    assert.equal(w.actions.at(-1).target, storage.id); assert.equal(unit.data.sourceId, storage.id);
+    storage.store.energy = 0; w.game.time++; unit.role.source(unit.creep);
+    assert.equal(w.actions.at(-1).target, container.id);
+    assert.equal(unit.creep.store.energy, 0, 'withdraw remains a native intent');
+});
+
+test('without Storage repairer retains a usable source Container, otherwise chooses the nearest nonempty Container', () => {
+    const w = world(), local = w.room(), unit = w.unit('worker0', local);
+    const close = stock(w, local, 'close'), cached = stock(w, local, 'cached', 'container', 1000, 13);
+    stock(w, local, 'empty', 'container', 0, 10);
+    unit.data.sourceId = cached.id; unit.creep.store.energy = 0;
+    unit.role.source(unit.creep);
+    assert.deepEqual(w.actions.at(-1), { action: 'move', name: unit.creep.name, target: cached.id, tick: w.game.time });
+    cached.store.energy = 0; w.game.time++; unit.role.source(unit.creep);
+    assert.equal(w.actions.at(-1).target, close.id); assert.equal(w.actions.at(-1).action, 'withdraw');
+});
+
+test('when store logistics are unavailable repairer collects only ground energy before harvesting', () => {
+    const w = world(), local = w.room(), unit = w.unit('worker0', local);
+    local.droppedResource.push({ id: 'mineral', resourceType: 'H', amount: 1000, pos: { x: 10, y: 10, roomName: local.name } },
+        { id: 'energy', resourceType: 'energy', amount: 80, pos: { x: 11, y: 10, roomName: local.name } });
+    local.sources.push({ id: 'source', energy: 3000, pos: { x: 10, y: 10, roomName: local.name } });
+    unit.creep.store.energy = 0; unit.creep.memory.working = false;
+    unit.role.source(unit.creep);
+    assert.equal(w.actions.at(-1).action, 'pickup'); assert.equal(w.actions.at(-1).target, 'energy');
+    assert.equal(unit.creep.store.energy, 0); w.resolveIntents();
+    assert.equal(unit.creep.store.energy, 80); assert.equal(local.droppedResource[1].amount, 0);
+});
+
+test('without containers or ground energy repairer self-harvests the same Source until its native carry is full', () => {
+    const w = world(), local = w.room(), unit = w.unit('worker0', local);
+    const source = { id: 'first', energy: 3000, pos: { x: 11, y: 10, roomName: local.name } };
+    local.sources.push(source); w.objects.set(source.id, source);
+    unit.creep.store.energy = 98; unit.creep.memory.working = false;
+    unit.role.source(unit.creep);
+    assert.equal(w.actions.at(-1).action, 'harvest'); assert.equal(unit.creep.memory.working, false);
+    assert.equal(unit.data.sourceId, source.id); w.resolveIntents();
+    assert.equal(unit.creep.store.energy, 100);
+    w.game.time++; assert.equal(unit.role.source(unit.creep), false); assert.equal(unit.creep.memory.working, true);
+    assert.equal(unit.data.repairTarget, '');
+});
+
+test('configured Links and Spawn energy are not repairer supply targets', () => {
+    for (const type of ['link', 'spawn']) {
+        const w = world(), local = w.room(), unit = w.unit('worker0', local);
+        const forbidden = stock(w, local, 'forbidden', type), safe = stock(w, local, 'safe');
+        unit.data.sourceId = forbidden.id; unit.creep.store.energy = 0;
+        unit.role.source(unit.creep);
+        assert.equal(w.actions.at(-1).target, safe.id, type);
+        assert.equal(w.actions.at(-1).action, 'withdraw', type);
+    }
 });

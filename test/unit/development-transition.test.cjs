@@ -552,3 +552,36 @@ test('population rebuilds manual tasks before automatic remotes and orders the c
     loader.load('creep/population').creepNumberController();
     assert.equal(calls.length, 7, 'growth integration keeps the original refresh interval');
 });
+
+test('healthy growth repairers remain alive for owned Ramparts across missing catalogs and RCL8', () => {
+    for (const level of [4, 8]) for (const energy of [0, 50]) {
+        const w = transitionWorld({ level });
+        w.home.ramparts = [{ my: true, hits: 300000000, hitsMax: 300000000 }];
+        const resident = w.unit('permanent-repairer', 'repairer', { energy });
+        for (const catalog of [undefined, {}, { unrelated: { role: 'filler' } }]) {
+            w.home.memory.creepConfig = catalog;
+            assert.equal(w.retire(resident), false, `RCL${level}/energy=${energy}`);
+        }
+        assert.deepEqual(w.calls, [], 'no recycle, move or unload is issued to the retained worker');
+    }
+});
+
+test('removed or foreign-only Ramparts restore ordinary growth repairer retirement', () => {
+    for (const ramparts of [[], [{ my: false }]]) {
+        const w = transitionWorld(); w.home.ramparts = [{ my: true }];
+        const resident = w.unit('permanent-repairer', 'repairer');
+        assert.equal(w.retire(resident), false);
+        w.home.ramparts = ramparts;
+        assert.equal(w.retire(resident), true);
+        assert.equal(w.calls.filter(call => call.kind === 'recycle').length, 1);
+    }
+});
+
+test('a permanently damaged growth repairer does not retain the Rampart worker slot', () => {
+    for (const damage of ['work', 'carry']) {
+        const w = transitionWorld(); w.home.ramparts = [{ my: true }];
+        const resident = w.unit('damaged-repairer', 'repairer', { [damage]: 0 });
+        assert.equal(w.retire(resident), true);
+        assert.equal(w.calls.filter(call => call.kind === 'recycle').length, 1);
+    }
+});
