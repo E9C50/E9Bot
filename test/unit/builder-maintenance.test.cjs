@@ -150,13 +150,56 @@ test('a stale repair target is discarded and a still damaged ordinary structure 
     assert.equal(unit.memory.data.repairTarget, road.id);
 });
 
-test('ordinary building damage preempts a cached noncritical rampart repair and preserves the configured barrier goal', () => {
+test('new ordinary damage waits for the current maintenance energy load to finish before taking priority', () => {
     const w = world(), rampart = w.damaged('ram', 'rampart', 250000, 10000000), unit = w.creep('builder', 50, { repairTarget: rampart.id });
     w.tick(unit); assert.equal(w.actions('repair')[0].target, rampart.id);
     const road = w.damaged('road'); w.game.time++; w.clear(); w.tick(unit);
+    assert.deepEqual(w.actions('repair'), [{ action: 'repair', name: unit.name, target: rampart.id }]);
+    unit.store.energy = 0; w.game.time++; w.tick(unit);
+    assert.equal(unit.memory.working, false); assert.equal(unit.memory.data.repairTarget, '');
+    const stock = w.structure('stock', 'container'); stock.store.energy = 1000; unit.memory.data.sourceId = stock.id;
+    w.game.time++; w.clear(); w.tick(unit);
+    assert.deepEqual(w.actions('withdraw'), [{ action: 'withdraw', name: unit.name, target: stock.id }]);
+    assert.equal(unit.store.energy, 0, 'the native withdrawal intent cannot immediately credit energy');
+    assert.equal(unit.memory.data.repairTarget, '', 'no repair target is selected during refilling');
+    unit.store.energy = 100; w.game.time++; w.clear(); w.tick(unit);
+    assert.equal(unit.memory.working, true); assert.equal(unit.memory.data.repairTarget, '');
+    w.game.time++; w.tick(unit);
     assert.deepEqual(w.actions('repair'), [{ action: 'repair', name: unit.name, target: road.id }]);
-    road.hits = road.hitsMax; w.game.time++; w.clear(); w.tick(unit);
-    assert.equal(w.actions('repair')[0].target, rampart.id, 'the room-selected barrier remains a valid maintenance job');
+});
+
+for (const level of [3, 8]) test(`RCL${level} maintenance keeps its target when a new critical rampart appears`, () => {
+    const w = world(level), unit = w.creep(), target = w.damaged('first', 'rampart', 250000, 10000000);
+    w.tick(unit); assert.equal(unit.memory.data.repairTarget, target.id);
+    w.damaged('new-critical', 'rampart', 1, 10000000);
+    for (let index = 0; index < 3; index++) {
+        w.game.time++; w.clear(); w.tick(unit);
+        assert.deepEqual(w.actions('repair'), [{ action: 'repair', name: unit.name, target: target.id }]);
+    }
+});
+
+test('a loaded maintenance builder finishes its load after its target leaves the configured repair list, then idles', () => {
+    const w = world(), unit = w.creep(), target = w.damaged('goal-reached', 'rampart', 250000, 10000000);
+    w.tick(unit); assert.equal(unit.memory.data.repairTarget, target.id);
+    w.lists.wallsNeedRepair.length = 0; target.hits = 250100;
+    const previousReads = { ...w.reads };
+    w.game.time++; w.clear(); w.execute();
+    assert.deepEqual(w.actions('repair'), [{ action: 'repair', name: unit.name, target: target.id }]);
+    assert.deepEqual(w.reads, previousReads, 'an active repair cycle does not scan the room lists');
+    unit.store.energy = 0; w.game.time++; w.clear(); w.execute();
+    assert.deepEqual(w.calls, []); assert.equal(unit.memory.working, false);
+    assert.equal(unit.memory.data.repairTarget, undefined);
+});
+
+test('refilling a builder clears its previous target before starting the next maintenance load', () => {
+    const w = world(), old = w.damaged('old', 'rampart', 200000, 10000000), next = w.damaged('next', 'road');
+    const stock = w.structure('stock', 'container'); stock.store.energy = 1000;
+    const unit = w.creep('builder', 100, { repairTarget: old.id, sourceId: stock.id }); unit.memory.working = false;
+    w.tick(unit);
+    assert.equal(unit.memory.data.repairTarget, ''); assert.equal(unit.memory.working, true);
+    assert.equal(w.actions('repair').length, 0);
+    w.game.time++; w.tick(unit);
+    assert.deepEqual(w.actions('repair'), [{ action: 'repair', name: unit.name, target: next.id }]);
 });
 
 test('a fully repaired cached target is replaced even when the shared room list still contains its old entry', () => {

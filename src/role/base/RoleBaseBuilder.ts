@@ -5,6 +5,7 @@ import { developmentPolicy } from 'settings/development'
 import { developmentWorkAllowed, isDevelopingRoom } from 'creep/development'
 import { controllerEnergyBuffer } from 'creep/developmentLogistics'
 import { idleBuilderIfNoWork, runBuilderMaintenance } from 'role/support/builderMaintenance'
+import { resetRepairCycle } from 'role/support/repairTarget'
 
 function sourceDuringDevelopment(creep: Creep, data: BuilderData): boolean {
     creep.memory.dontPullMe = false
@@ -84,6 +85,7 @@ export default (data: CreepData): ICreepConfig => ({
         // return true
     },
     source(creep) {
+        resetRepairCycle(data as BuilderData)
         if (idleBuilderIfNoWork(creep)) return true
         if (isDevelopingRoom(creep.room)) return sourceDuringDevelopment(creep, data as BuilderData)
         // 如果没有空余容量了，就开始工作
@@ -156,17 +158,14 @@ export default (data: CreepData): ICreepConfig => ({
             }
         }
 
-        // 优先修理附近生命值低于应急阈值的 Rampart
-        const repairTargets: Structure[] = creep.room.ramparts.filter(
-            rampart => rampart.hits < rolePolicy.builder.emergencyRampartHits
-                && getDistance(rampart.pos, creep.pos) < rolePolicy.builder.emergencyRampartRange
-        )
-        if (repairTargets.length > 0) {
-            creep.repair(repairTargets[0])
-            return true
+        let buildTargets: ConstructionSite[] = creep.room.constructionSites
+        // 建造时仍保护附近的低血 Rampart；纯维修阶段由能量轮次锁定目标。
+        if (buildTargets.length > 0) {
+            const emergency = creep.room.ramparts.find(rampart => rampart.hits < rolePolicy.builder.emergencyRampartHits &&
+                getDistance(rampart.pos, creep.pos) < rolePolicy.builder.emergencyRampartRange)
+            if (emergency) { creep.repair(emergency); return true }
         }
 
-        let buildTargets: ConstructionSite[] = creep.room.constructionSites
         if (populationPolicy.bootstrap.prioritizeFirstSpawn && creep.room.spawns.length == 0) {
             const spawnSites = buildTargets.filter(site => site.structureType == STRUCTURE_SPAWN)
             if (spawnSites.length > 0) buildTargets = spawnSites

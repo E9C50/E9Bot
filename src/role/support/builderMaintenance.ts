@@ -1,8 +1,8 @@
 import { rolePolicy } from 'settings/rolePolicy'
+import { repairCycleTarget, resetRepairCycle } from './repairTarget'
 
 interface RepairIndex {
     targets: Map<string, Structure>
-    ordinaryIds: Set<string>
     emergency?: Structure
     ordinary?: Structure
     barrier?: Structure
@@ -16,7 +16,7 @@ function repairIndex(room: Room): RepairIndex {
     }
     const previous = indexes.get(room)
     if (previous) return previous
-    const index: RepairIndex = { targets: new Map(), ordinaryIds: new Set() }
+    const index: RepairIndex = { targets: new Map() }
     const costs = Memory.warMode?.[room.name] ? room.getDefenderCostMatrix() : undefined
     const eligible = (target: Structure): boolean => target.hits < target.hitsMax &&
         (!('my' in target) || (target as OwnedStructure).my !== false) &&
@@ -31,7 +31,6 @@ function repairIndex(room: Room): RepairIndex {
     for (const target of room.structuresNeedRepair || []) {
         if (!eligible(target)) continue
         index.targets.set(target.id, target)
-        index.ordinaryIds.add(target.id)
         if (!index.ordinary || target.hits / target.hitsMax < index.ordinary.hits / index.ordinary.hitsMax) index.ordinary = target
     }
     indexes.set(room, index)
@@ -45,10 +44,12 @@ export function builderHasWork(room: Room): boolean {
 
 /** Idle workers hold their current tile and energy, while remaining movable by traffic. */
 export function idleBuilderIfNoWork(creep: Creep): boolean {
+    const data = creep.memory.data as BuilderData
+    if (!(creep.store[RESOURCE_ENERGY] > 0)) resetRepairCycle(data)
+    else if (repairCycleTarget(creep, data)) return false
     if (builderHasWork(creep.room)) return false
     creep.memory.dontPullMe = false
     if (!(creep.store[RESOURCE_ENERGY] > 0)) creep.memory.working = false
-    const data = creep.memory.data as BuilderData
     delete data.buildTarget
     delete data.repairTarget
     return true
@@ -57,16 +58,19 @@ export function idleBuilderIfNoWork(creep: Creep): boolean {
 /** No upgrade fallback: maintenance is followed by waiting until the next real job. */
 export function runBuilderMaintenance(creep: Creep): boolean {
     creep.memory.dontPullMe = false
-    const index = repairIndex(creep.room), data = creep.memory.data as BuilderData
-    const cached = data.repairTarget ? index.targets.get(data.repairTarget) : undefined
-    const ordinary = cached && index.ordinaryIds.has(cached.id) ? cached : index.ordinary
-    const critical = index.barrier && index.barrier.hits <= rolePolicy.repairer.cpuMaintenance.criticalHits ? index.barrier : undefined
-    const target = index.emergency || ordinary || critical || cached || index.barrier
+    const data = creep.memory.data as BuilderData
+    if (!(creep.store[RESOURCE_ENERGY] > 0)) {
+        resetRepairCycle(data); creep.memory.working = false; return false
+    }
+    let target = repairCycleTarget(creep, data)
+    if (!target) {
+        const index = repairIndex(creep.room)
+        target = index.emergency || index.ordinary || index.barrier
+    }
     if (!target) { delete data.repairTarget; return true }
     data.repairTarget = target.id
-    if (!(creep.store[RESOURCE_ENERGY] > 0)) { creep.memory.working = false; return false }
     const policy = rolePolicy.repairer.cpuMaintenance
-    if (!index.ordinaryIds.has(target.id) && target !== index.emergency) {
+    if (target.structureType === STRUCTURE_WALL || target.structureType === STRUCTURE_RAMPART) {
         if (Game.cpu?.bucket < policy.minimumBucket && !Memory.warMode?.[creep.room.name] && !creep.room.enemies?.length &&
             target.hits > policy.criticalHits) {
             const interval = Math.max(1, Math.floor(policy.interval))
