@@ -1443,3 +1443,54 @@ test('an unusable resident cannot block the permanent WORK-and-CARRY replacement
         assert.equal(state.queue().filter(key => home.memory.creepConfig[key].role === 'repairer').length, 1);
     }
 });
+
+test('a missing permanent repairer precedes ordinary builders and upgraders while surplus repairers retain normal priority', () => {
+    const home = legacyRoom(); home.ramparts = [{ my: true }]; home.controller.ticksToDowngrade = 1;
+    const state = makeWorld(home, { automaticHauling: false });
+    state.loader.load('settings/population').populationPolicy.base.maximumRepairers = 3;
+    const configs = state.release(), repairers = byRole(configs, 'repairer');
+    const priority = state.loader.load('settings/rolePolicy').rolePolicy.repairer.firstRampartWorkerPriority;
+    assert.equal(priority, 3.5);
+    assert.equal(repairers[0].spawnPriority, priority);
+    assert.equal(repairers[1].spawnPriority, 6); assert.equal(repairers[2].spawnPriority, 6);
+    const queue = state.queue(), rank = config => queue.findIndex(name => home.memory.creepConfig[name] === config);
+    assert.ok(rank(repairers[0]) < rank(byRole(configs, 'builder')[0]));
+    assert.ok(rank(repairers[0]) < rank(byRole(configs, 'upgrader')[0]));
+    state.loader.load('settings/rolePolicy').rolePolicy.repairer.firstRampartWorkerPriority = 3.25;
+    assert.equal(byRole(state.release(), 'repairer')[0].spawnPriority, 3.25, 'the first-worker priority is configurable');
+});
+
+test('the permanent worker priority preserves mining, first-carrier and first-upgrader recovery order', () => {
+    const home = room(); home.ramparts = [{ my: true }];
+    const state = makeWorld(home, { automaticHauling: false });
+    const next = () => home.memory.creepConfig[state.queue()[0]];
+    let configs = state.release();
+    const repairer = byRole(configs, 'repairer')[0];
+    assert.equal(repairer.spawnPriority, 3.5);
+    assert.equal(next().role, 'harvester');
+    assert.ok(byRole(configs, 'upgrader')[0].spawnPriority < repairer.spawnPriority);
+    const miner = worker(home, { role: 'harvester', work: 5, name: 'productive-mine' });
+    state.game.creeps[miner.name] = miner; configs = state.release();
+    assert.equal(next().role, 'filler', 'a first native Source carrier still overrides the consumer fleet');
+    const carrierConfig = next(), carrier = worker(home, { role: 'filler', work: 0, name: carrierConfig.name, data: carrierConfig.data });
+    carrier.name = state.demand.createCreepName('filler', carrierConfig.name); carrier.store = store(0, 2000);
+    carrier.getActiveBodyparts = part => part === 'carry' ? 40 : part === 'move' ? 20 : 0;
+    state.game.creeps[carrier.name] = carrier; state.release();
+    const ordered = state.queue().map(name => home.memory.creepConfig[name].role);
+    assert.ok(ordered.indexOf('upgrader') < ordered.indexOf('repairer'),
+        'the first affordable upgrading body remains ahead of the Rampart floor while outstanding production births stay first');
+});
+
+test('healthy and spawning permanent residents retain normal priority rather than scheduling a second urgent worker', () => {
+    for (const level of [4, 8]) for (const spawning of [false, true]) {
+        const home = room({ level, capacity: 1300 }); home.ramparts = [{ my: true }];
+        const resident = worker(home, { role: 'repairer', work: 1, name: 'permanent-resident', spawning });
+        resident.name = `REPAIRER_${resident.memory.name}`;
+        const state = makeWorld(home, { creeps: { [resident.name]: resident }, automaticHauling: false });
+        const configs = byRole(state.release(), 'repairer');
+        assert.equal(configs.length, 1); assert.equal(configs[0].spawnPriority, 6);
+        assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'repairer').length, 0);
+    }
+    const home = legacyRoom(), state = makeWorld(home, { automaticHauling: false });
+    assert.equal(byRole(state.release(), 'repairer')[0].spawnPriority, 6, 'legacy repair-only demand cannot receive the Rampart-floor priority');
+});

@@ -15,6 +15,7 @@ export const rolePolicy = {
     },
     repairer: {
         minimumRampartWorkers: 1,
+        firstRampartWorkerPriority: 3.5,
         rampartWorkerWorkParts: 1,
         minimumStorageEnergy: 10000,
         boostAtLevel: 8,

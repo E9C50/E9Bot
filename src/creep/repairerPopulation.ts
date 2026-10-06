@@ -36,6 +36,7 @@ export function releaseRepairerCreepConfigs(room: Room, developing: boolean): vo
         const key = addCreepConfig(room, 'repairer', name, { sourceId: source?.id || '', repairTarget: '' })
         const config = room.memory.creepConfig[key]
         if (!config) continue
+        if (!resident && index < minimum) config.spawnPriority = policy.firstRampartWorkerPriority
         if (resident?.memory.bodyProfile) config.bodyProfile = { ...resident.memory.bodyProfile }
         const minimumCost = BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE]
         if (developing) {
