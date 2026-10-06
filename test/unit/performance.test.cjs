@@ -130,6 +130,8 @@ test('disabled creep profiling allocates no values list for Game.creeps and perf
             }),
         },
         modules: {
+            // Measure the execution framework, with builder maintenance isolated.
+            'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
             role: { createRoleBehavior: (role, data) => ({
                 prepare() { calls.push(`${data.name}:prepare`); return true; },
                 source() { calls.push(`${data.name}:source`); }, target() { calls.push(`${data.name}:target`); },
@@ -167,6 +169,7 @@ function roleProfilingWorld(creeps, costs, warMode = {}) {
             return Reflect.get(target, key);
         } }),
     }, modules: {
+        'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
         role: { createRoleBehavior(role, data) {
             const cost = costs[data.name] || {};
             calls.push(`${data.name}:factory`); used += cost.factory || 0;

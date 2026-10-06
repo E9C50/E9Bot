@@ -1,10 +1,10 @@
 import { getClosestTarget, getDistance } from 'utils'
-import RoleBaseRepairer from './RoleBaseRepairer'
 import { rolePolicy } from 'settings/rolePolicy'
 import { populationPolicy } from 'settings/population'
 import { developmentPolicy } from 'settings/development'
 import { developmentWorkAllowed, isDevelopingRoom } from 'creep/development'
 import { controllerEnergyBuffer } from 'creep/developmentLogistics'
+import { idleBuilderIfNoWork, runBuilderMaintenance } from 'role/support/builderMaintenance'
 
 function sourceDuringDevelopment(creep: Creep, data: BuilderData): boolean {
     creep.memory.dontPullMe = false
@@ -63,7 +63,7 @@ function targetDuringDevelopment(creep: Creep, data: BuilderData): boolean {
         creep.room.memory.needUpdateCache = true; data.buildTarget = undefined
     }
     const target = getClosestTarget(creep.pos, targetsDuringDevelopment(creep.room))
-    if (target == undefined) return RoleBaseRepairer(creep.memory.data).target(creep)
+    if (target == undefined) return runBuilderMaintenance(creep)
     data.buildTarget = target.id
     if (getDistance(creep.pos, target.pos) > 3) creep.moveTo(target, { range: 3, ignoreCreeps: false })
     else {
@@ -78,11 +78,13 @@ export default (data: CreepData): ICreepConfig => ({
         return room.constructionSites.length > 0
     },
     prepare(creep) {
+        if (idleBuilderIfNoWork(creep)) return false
         if (isDevelopingRoom(creep.room)) return true
         return creep.goBoost()
         // return true
     },
     source(creep) {
+        if (idleBuilderIfNoWork(creep)) return true
         if (isDevelopingRoom(creep.room)) return sourceDuringDevelopment(creep, data as BuilderData)
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() == 0) {
@@ -136,6 +138,7 @@ export default (data: CreepData): ICreepConfig => ({
         return false
     },
     target(creep) {
+        if (idleBuilderIfNoWork(creep)) return true
         if (isDevelopingRoom(creep.room)) return targetDuringDevelopment(creep, data as BuilderData)
         // 如果没有能量了，就切换为采集状态
         if (creep.store[RESOURCE_ENERGY] == 0) {
@@ -174,9 +177,9 @@ export default (data: CreepData): ICreepConfig => ({
         //     return RoleBaseUpgrader(creep.memory.data).target(creep)
         // }
 
-        // 如果没有建筑工地也不需要升级，就去干修理的活
+        // 建造结束后维修，维修结束后原地等待下一次任务。
         if (buildTargets.length == 0) {
-            return RoleBaseRepairer(creep.memory.data).target(creep)
+            return runBuilderMaintenance(creep)
         }
 
         // 寻找最近的工地去修理，并且缓存

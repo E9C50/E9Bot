@@ -128,7 +128,7 @@ test('ordinary units do not read development state, while retained same-name leg
     assert.deepEqual(w.calls, []);
 });
 
-test('growth jobs retire only after a catalog refresh removes a nonessential tagged unit', () => {
+test('living builders survive missing catalogs, active demand and finished construction', () => {
     const w = transitionWorld({ level: 4 });
     const unit = w.unit('surplus-builder', 'builder');
     delete w.home.memory.creepConfig;
@@ -136,8 +136,8 @@ test('growth jobs retire only after a catalog refresh removes a nonessential tag
     w.home.memory.creepConfig = { [unit.name]: { development: { workParts: 1 } } };
     assert.equal(w.retire(unit), false, 'the growth quota still needs this unit');
     w.home.memory.creepConfig = {};
-    assert.equal(w.retire(unit), true);
-    assert.deepEqual(w.calls, [{ kind: 'recycle', name: unit.name }]);
+    assert.equal(w.retire(unit), false);
+    assert.deepEqual(w.calls, []);
 });
 
 test('a surplus development miner waits for a selected full-production successor to arrive before yielding its station', () => {
@@ -255,7 +255,7 @@ test('RCL8 filling continuity waits for a living legacy hauler with active CARRY
 test('retiring nonessential growth workers return carried energy before recycling', () => {
     const w = transitionWorld();
     w.home.storage = w.structure('storage', 'storage', 15, 15, 500, 1000);
-    const unit = w.unit('old-builder', 'builder', { energy: 50 });
+    const unit = w.unit('old-processer', 'processer', { energy: 50 });
     unit.transferCode = -9;
     assert.equal(w.retire(unit), true);
     assert.deepEqual(w.calls.map(call => call.kind), ['transfer', 'move']);
@@ -290,6 +290,25 @@ test('living development upgraders never return energy or recycle when budgets, 
         assert.equal(unit.memory.dontPullMe, true);
         assert.deepEqual(w.calls, []);
         Object.defineProperty(w.game.rooms, w.home.name, { get() { throw new Error('already-born upgraders do not consult retirement catalogs'); } });
+        assert.equal(w.retire(unit), false);
+    }
+});
+
+test('living local builders never return energy or recycle when catalogs or room stages change', () => {
+    for (const level of [1, 4, 8]) for (const energy of [0, 50]) {
+        const w = transitionWorld({ level });
+        const unit = w.unit('existing-builder', 'builder', { work: 4, energy });
+        unit.memory.dontPullMe = true;
+        for (const catalog of [undefined, {}, { [unit.name]: { role: 'builder', development: { workParts: 1 } } }]) {
+            w.home.memory.creepConfig = catalog;
+            assert.equal(w.retire(unit), false);
+        }
+        w.home.memory.fastUpgrade = false;
+        assert.equal(w.retire(unit), false);
+        assert.equal(unit.memory.dontPullMe, true);
+        assert.equal(unit.store.energy, energy);
+        assert.deepEqual(w.calls, []);
+        Object.defineProperty(w.game.rooms, w.home.name, { get() { throw new Error('paid-for builders must not consult retirement catalogs'); } });
         assert.equal(w.retire(unit), false);
     }
 });
@@ -382,14 +401,30 @@ test('execution permits automatic remote safety preparation during war while man
     assert.ok(w.calls.every(call => call.kind !== 'source' || call.name !== 'automatic'));
 });
 
-test('execution finishes local builder retirement before creating a new normal role action', () => {
+test('execution reuses surviving local builders through their ordinary role when construction resumes', () => {
     const w = transitionWorld();
-    w.unit('retiring-builder', 'builder');
+    const builder = w.unit('surviving-builder', 'builder');
+    w.home.constructionSites = [{ id: 'new-site', structureType: 'extension' }];
     w.unit('ordinary-filler', 'filler', { development: false });
     w.loader.load('creep/execution').creepWorkController();
-    assert.ok(w.calls.some(call => call.kind === 'recycle' && call.name === 'retiring-builder'));
-    assert.ok(w.calls.every(call => !['prepare', 'source', 'target'].includes(call.kind) || call.name !== 'retiring-builder'));
+    assert.ok(w.calls.some(call => call.kind === 'prepare' && call.name === builder.name));
+    assert.ok(w.calls.some(call => call.kind === 'source' && call.name === builder.name));
+    assert.ok(w.calls.every(call => !['recycle', 'transfer', 'move'].includes(call.kind) || call.name !== builder.name));
     assert.ok(w.calls.some(call => call.kind === 'source' && call.name === 'ordinary-filler'));
+});
+
+test('execution leaves finished builders at their current position without consuming or returning carried energy', () => {
+    for (const level of [4, 8]) for (const energy of [0, 50]) {
+        const w = transitionWorld({ level });
+        const builder = w.unit('idle-builder', 'builder', { energy });
+        builder.memory.working = true;
+        builder.memory.dontPullMe = true;
+        w.loader.load('creep/execution').creepWorkController();
+        assert.deepEqual(w.calls, [], 'idle units must not prepare boosts, collect, move, transfer or recycle');
+        assert.equal(builder.store.energy, energy);
+        assert.equal(builder.pos.x, 25); assert.equal(builder.pos.y, 25);
+        assert.equal(builder.memory.dontPullMe, false);
+    }
 });
 
 test('RCL8 execution continues old development upgraders with carried energy through the mature role', () => {

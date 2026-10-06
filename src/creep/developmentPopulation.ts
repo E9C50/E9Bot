@@ -309,19 +309,23 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
             (stored > policy.upgrading.storageReserve ? policy.building.maximumCreeps * policy.building.workPartsPerCreep : 0)))
         const builderWork = essentialSites.length > 0 ? policy.building.workPartsPerCreep : policy.building.roadOnlyWorkParts
         const builderCount = building ? Math.min(policy.building.maximumCreeps, Math.ceil(constructionWork / builderWork)) : 0
-        const builders = creeps.filter(creep => creep.memory.role === 'builder' && creep.room.name === room.name && workParts(creep) > 0)
-        const incumbents = builders.filter(creep => creep.memory.name && (creep.spawning ||
-            (creep.ticksToLive ?? 0) > replacementLead(room, creep, energySource.pos)))
+        const livingBuilders = creeps.filter(creep => creep.memory.role === 'builder' && creep.room.name === room.name)
+        const builders = livingBuilders.filter(creep => workParts(creep) > 0 && creep.getActiveBodyparts(CARRY) > 0)
+        // Idle constructors are reusable, including bodies near natural expiry.
+        // Do not pre-spawn another worker while a paid-for builder occupies its slot.
+        const incumbents = builders.filter(creep => creep.memory.name)
         const firstBootstrap = !room.storage && !sourceContainer && essentialSites.length > 0 && builders.length === 0
-        let nextIndex = 0
+        let nextIndex = 0, births = 0
         for (let index = 0; index < builderCount; index++) {
             let name = incumbents.shift()?.memory.name
             if (!name) {
-                const limit = builders.length + builderCount + policy.replacement.maximumReplacementsPerRoom
+                if (builders.length + births >= builderCount) break
+                const limit = livingBuilders.length + builderCount + policy.replacement.maximumReplacementsPerRoom
                 while (nextIndex < limit) {
                     const candidate = `${room.name}_DEVELOP_BUILDER_${nextIndex++}`
                     if (!Game.creeps[createCreepName('builder', candidate)]) { name = candidate; break }
                 }
+                if (name) births++
             }
             if (!name) break
             const bootstrap = firstBootstrap && index === 0

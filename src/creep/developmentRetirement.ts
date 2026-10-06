@@ -21,9 +21,9 @@ function obsoleteLinkHauler(creep: Creep, home: Room): boolean {
 /** Growth units yield to the normal population only after its essential production is working. */
 export function retireDevelopmentCreep(creep: Creep): boolean {
     if (creep.memory.development === undefined) return false
-    // Upgrading bodies have already been paid for. Oversupply and the RCL8
-    // transition stop future births; they never recycle a living upgrader.
-    if (creep.memory.role === 'upgrader') return false
+    // Paid-for upgrading and building bodies work until natural death. Catalogs
+    // and the RCL8 transition can stop births but cannot recycle these residents.
+    if (creep.memory.role === 'upgrader' || creep.memory.role === 'builder') return false
     const home = Game.rooms[creep.memory.spawnRoom]
     if (home?.controller?.my !== true) return false
     const configs = home.memory.creepConfig || {}

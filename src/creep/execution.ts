@@ -8,6 +8,7 @@ import { retireDevelopmentCreep } from './developmentRetirement'
 import { runCombatUnits } from 'combat/missions'
 import { requestTowerSupport } from 'combat/defense'
 import { runHaulerRelays, haulerRelayHandled } from './haulerRelay'
+import { idleBuilderIfNoWork } from 'role/support/builderMaintenance'
 
 function reportFailure(name: string, error: unknown): void {
     console.log(
@@ -47,6 +48,7 @@ export function creepWorkController(): void {
         const roleStarted = roleProfiling ? Game.cpu.getUsed() : 0
         try {
             if (!automaticRemote && retireDevelopmentCreep(creep)) continue
+            if (creep.memory.role === 'builder' && idleBuilderIfNoWork(creep)) continue
             // Some economy roles deliberately skip their legacy prepare boost hook.
             // Every newly spawned compound-dependent body completes its exact plan before leaving home.
             if (creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.goBoost()) continue

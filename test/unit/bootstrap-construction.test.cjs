@@ -59,7 +59,10 @@ function populationWorld(rooms, { warMode = {}, distances = {} } = {}) {
         modules: {
             'settings/creep': roles,
             role: roleFactories,
-            './demand': { addCreepConfig: (home, role, name, data) => demands.push({ home: home.name, role, name, data }) },
+            './demand': {
+                createCreepName: (role, name) => `${role.toUpperCase()}_${name}`,
+                addCreepConfig: (home, role, name, data) => demands.push({ home: home.name, role, name, data }),
+            },
             utils: { sha1String: text => text },
         },
     });

@@ -22,6 +22,28 @@ function linkedMinerName(room: Room, source: Source, name: string): string {
     while (Game.creeps[createCreepName(roleBaseEnum.HARVESTER, `${prefix}${index}`)]) index++
     return `${prefix}${index}`
 }
+
+/** Reuse paid-for local constructors without converting a normal body into a growth job. */
+function localBuilderPublisher(room: Room): (name: string, data: BuilderData) => void {
+    let available: Creep[] | undefined
+    const assigned = new Set<string>()
+    return (requestedName, data) => {
+        if (available === undefined) available = Object.values(Game.creeps).filter(creep =>
+            creep.room.name === room.name && creep.memory.spawnRoom === room.name && creep.memory.role === 'builder' &&
+            !!creep.memory.name && creep.getActiveBodyparts(WORK) > 0 && creep.getActiveBodyparts(CARRY) > 0)
+        const preferred = available.findIndex(creep => creep.memory.name === requestedName)
+        const resident = available.splice(preferred < 0 ? 0 : preferred, 1)[0]
+        let name = resident?.memory.name || requestedName
+        if (!resident && (Game.creeps[createCreepName('builder', name)] || assigned.has(name))) {
+            let index = 0
+            while (Game.creeps[createCreepName('builder', `${requestedName}_REUSE_${index}`)] ||
+                assigned.has(`${requestedName}_REUSE_${index}`)) index++
+            name = `${requestedName}_REUSE_${index}`
+        }
+        assigned.add(name)
+        addCreepConfig(room, 'builder', name, data)
+    }
+}
 /**
  * 检查房间信息，发布对应Creep需求
  */
@@ -33,6 +55,7 @@ export function releaseBaseCreepConfig(): void {
             releaseDevelopmentBaseConfig(room)
             continue
         }
+        const publishBuilder = localBuilderPublisher(room)
 
         if (roles[roleAdvEnum.MANAGER]({}).isNeed(room, '')) {
             addCreepConfig(
@@ -155,12 +178,7 @@ export function releaseBaseCreepConfig(): void {
                 roles[roleBaseEnum.BUILDER](creepBuilderMemory).isNeed(room, '')
             ) {
                 const creepBuilderName0 = room.name + '_BUILDER_STORAGE_0'
-                addCreepConfig(
-                    room,
-                    roleBaseEnum.BUILDER,
-                    creepBuilderName0,
-                    creepBuilderMemory
-                )
+                publishBuilder(creepBuilderName0, creepBuilderMemory)
             }
 
             // 按能量与房间等级计算修理工需求，再应用配置上限
@@ -256,12 +274,7 @@ export function releaseBaseCreepConfig(): void {
             ) {
                 const creepBuilderName =
                     room.name + '_BUILDER_CONTAINER_' + container.id
-                addCreepConfig(
-                    room,
-                    roleBaseEnum.BUILDER,
-                    creepBuilderName,
-                    creepBuilderMemory
-                )
+                publishBuilder(creepBuilderName, creepBuilderMemory)
 
                 if (
                     container.store[RESOURCE_ENERGY] >
@@ -269,12 +282,7 @@ export function releaseBaseCreepConfig(): void {
                 ) {
                     const creepBuilderName =
                         room.name + '_BUILDER_CONTAINER_' + container.id + '_1'
-                    addCreepConfig(
-                        room,
-                        roleBaseEnum.BUILDER,
-                        creepBuilderName,
-                        creepBuilderMemory
-                    )
+                    publishBuilder(creepBuilderName, creepBuilderMemory)
                 }
             }
 

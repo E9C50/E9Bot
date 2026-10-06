@@ -67,10 +67,12 @@ function world({ level = 2, capacity = 300, my = true, disabled = false } = {}) 
     };
 }
 
-test('development builder bypasses boost waiting while RCL8, opt-out and non-owned rooms retain it', () => {
-    const growing = world(); assert.equal(growing.behavior.prepare(growing.creep), true); assert.equal(growing.calls.length, 0);
+test('a builder with construction work bypasses development boost waiting while RCL8, opt-out and non-owned rooms retain it', () => {
+    const growing = world(); growing.site('pending', 'road', 40, 40);
+    assert.equal(growing.behavior.prepare(growing.creep), true); assert.equal(growing.calls.length, 0);
     for (const options of [{ level: 8 }, { disabled: true, level: 7 }, { my: false, level: 7 }]) {
         const w = world(options);
+        w.site('pending', 'road', 40, 40);
         Object.defineProperty(w.room, 'controllerLink', { get() { throw new Error('legacy builder read buffer'); } });
         assert.equal(w.behavior.prepare(w.creep), false);
         assert.equal(w.calls[0].method, 'goBoost');
@@ -147,6 +149,7 @@ test('development infrastructure construction is not diverted by nearby low-hit 
 
 test('development builder excludes even its cached controller buffer and withdraws from source logistics', () => {
     const w = world(); w.source(); w.creep.store = store(0);
+    w.site('pending', 'road', 40, 40);
     const buffer = w.structure('controller-buffer', 'container', 22, 25, 1000);
     const mine = w.structure('mine', 'container', 15, 16, 1000); w.data.sourceId = buffer.id;
     w.behavior.source(w.creep);
@@ -156,6 +159,7 @@ test('development builder excludes even its cached controller buffer and withdra
 
 test('development builder excludes a controller link and falls back to self-harvest without source stores', () => {
     const w = world(); const source = w.source('source', 15, 16); w.creep.store = store(0);
+    w.site('pending', 'road', 40, 40);
     const link = w.structure('controller-link', 'link', 23, 25, 1000); w.room.controllerLink = link; w.data.sourceId = link.id;
     w.behavior.source(w.creep);
     assert.equal(w.intents('withdraw').length, 0);
@@ -165,6 +169,7 @@ test('development builder excludes a controller link and falls back to self-harv
 
 test('Source.id development builder can self-harvest even with an empty storage present', () => {
     const w = world(); const source = w.source('source', 10, 10); w.structure('storage', 'storage', 16, 16, 0);
+    w.site('pending', 'road', 40, 40);
     w.creep.store = store(0); w.data.sourceId = source.id;
     w.behavior.source(w.creep);
     assert.equal(w.intents('harvest')[0].target, source.id);
@@ -173,6 +178,7 @@ test('Source.id development builder can self-harvest even with an empty storage 
 
 test('development builder handles depleted sources, partial retained loads and empty working state', () => {
     const w = world(); w.source('source', 10, 10, 0); w.creep.memory.working = false;
+    w.site('pending', 'road', 40, 40);
     assert.equal(w.behavior.source(w.creep), false);
     assert.equal(w.creep.memory.working, true, 'a partial load can still finish useful work while sources regenerate');
     w.creep.store = store(0); w.clear();

@@ -719,7 +719,7 @@ test('development adopts old local consumers and assigns retained upgraders thei
     assert.deepEqual(Object.keys(oldBuilder.memory.development), []);
     assert.deepEqual(Object.keys(oldUpgrader.memory.development), []);
     assert.equal(visitor.memory.development, undefined);
-    assert.ok(configs.every(config => config.name !== oldBuilder.memory.name), 'unselected adopted builders can retire');
+    assert.ok(configs.every(config => config.name !== oldBuilder.memory.name), 'idle builders do not create a replacement demand');
     assert.equal(byRole(configs, 'upgrader').find(config => config.name === oldUpgrader.memory.name).development.workParts, 20);
     assert.equal(byRole(configs, 'upgrader').length, 1, 'excess live WORK stops new births rather than throttling the paid body');
 });
@@ -1002,14 +1002,14 @@ function legacyRoom(level = 8) {
     return home;
 }
 
-function expectedLegacy(home, upgraderCount) {
+function expectedLegacy(home, upgraderCount, builderName = `${home.name}_BUILDER_STORAGE_0`) {
     const expected = [
         ['manager', `${home.name}_MANAGER`, {}], ['processer', `${home.name}_PROCESSER`, {}],
         ['miner', `${home.name}_MINER`, { sourceId: 'mineral' }],
         ['harvester', `${home.name}_HARVESTER_source0_0`, { sourceId: 'source0' }],
         ['harvester', `${home.name}_HARVESTER_source1_0`, { sourceId: 'source1' }],
         ['filler', `${home.name}_FILLER_STORAGE_0`, { sourceId: 'storage' }],
-        ['builder', `${home.name}_BUILDER_STORAGE_0`, { sourceId: 'storage', buildTarget: '' }],
+        ['builder', builderName, { sourceId: 'storage', buildTarget: '' }],
         ['repairer', `${home.name}_REPAIRER_STORAGE0`, { sourceId: 'storage', repairTarget: '' }],
     ];
     for (const id of ['source-container-a', 'source-container-b']) for (let index = 0; index < 2; index++) {
@@ -1024,7 +1024,6 @@ function blockDevelopmentReads(state) {
     Object.defineProperty(state.home.memory, 'developmentRemotes', { get: forbidden });
     Object.defineProperty(state.home, 'controllerLink', { get: forbidden });
     Object.defineProperty(state.policy, 'bodies', { get: forbidden });
-    Object.defineProperty(state.game, 'creeps', { get: forbidden });
 }
 
 test('RCL8 demand stays identical to legacy manager, mineral, hauling, building and repair needs', () => {
@@ -1036,7 +1035,7 @@ test('RCL8 demand stays identical to legacy manager, mineral, hauling, building 
     blockDevelopmentReads(state);
     const keys = Object.keys(home.memory);
     const configs = state.release();
-    assert.deepEqual(summary(configs), expectedLegacy(home, 0));
+    assert.deepEqual(summary(configs), expectedLegacy(home, 0, oldBuilder.memory.name));
     assert.ok(configs.every(config => !Object.hasOwn(config, 'development')));
     assert.deepEqual(Object.keys(home.memory), keys, 'RCL8 does not initialize development state');
     assert.equal(JSON.stringify([oldBuilder.memory, oldUpgrader.memory]), before, 'RCL8 does not adopt old consumers');
@@ -1201,4 +1200,110 @@ test('a shared container serving an unlinked Source still publishes ordinary tra
     assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[0]), true);
     assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[1]), false);
     assert.equal(byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-a').length, 2);
+});
+
+test('idle local builders resume new development sites even in their last tick without birthing another constructor', () => {
+    for (const spawning of [false, true]) {
+        const home = room({ capacity: 1300, level: 4 });
+        const builder = worker(home, { role: 'builder', work: 4, ttl: 1, spawning, name: 'paid-constructor' });
+        builder.name = `BUILDER_${builder.memory.name}`;
+        const state = makeWorld(home, { creeps: { [builder.name]: builder } });
+        assert.equal(byRole(state.release(), 'builder').length, 0, 'finished construction cannot maintain future births');
+        home.constructionSites = [{ id: 'new-extension', structureType: 'extension' }];
+        const builders = byRole(state.release(), 'builder');
+        assert.equal(builders.length, 1);
+        assert.equal(builders[0].name, builder.memory.name);
+        assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'builder').length, 0);
+    }
+});
+
+test('multiple paid-for development builders occupy all construction slots while idle extras remain alive', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    const creeps = {};
+    for (let index = 0; index < 3; index++) {
+        const builder = worker(home, { role: 'builder', work: 4, ttl: 1, name: `paid-${index}` });
+        builder.name = `BUILDER_${builder.memory.name}`; creeps[builder.name] = builder;
+    }
+    const state = makeWorld(home, { creeps });
+    home.constructionSites = [{ id: 'new-extension', structureType: 'extension' }];
+    assert.equal(byRole(state.release(), 'builder').length, 1);
+    assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'builder').length, 0);
+    assert.equal(Object.values(creeps).filter(creep => creep.memory.role === 'builder').length, 3);
+});
+
+test('unusable old development builder names cannot block a WORK-and-CARRY replacement', () => {
+    for (const damaged of ['work', 'carry']) {
+        const home = room({ capacity: 1300, level: 4 }), creeps = {};
+        home.constructionSites = [{ id: 'new-extension', structureType: 'extension' }];
+        for (let index = 0; index < 3; index++) {
+            const name = `${home.name}_DEVELOP_BUILDER_${index}`;
+            const old = worker(home, { role: 'builder', work: damaged === 'work' ? 0 : 4, name });
+            if (damaged === 'carry') withoutCarry(old);
+            old.name = `BUILDER_${name}`; creeps[old.name] = old;
+        }
+        const state = makeWorld(home, { creeps }), builders = byRole(state.release(), 'builder');
+        assert.equal(builders.length, 1);
+        assert.equal(builders[0].name, `${home.name}_DEVELOP_BUILDER_3`);
+        assert.ok(state.queue().some(name => home.memory.creepConfig[name].role === 'builder'));
+    }
+});
+
+test('development constructors remain reusable after natural RCL8 or disabled-growth transitions', () => {
+    for (const disabled of [false, true]) {
+        const home = legacyRoom(disabled ? 7 : 8);
+        if (disabled) home.memory.fastUpgrade = false;
+        const builder = worker(home, { role: 'builder', work: 4, ttl: 1, name: `${home.name}_DEVELOP_BUILDER_0` });
+        builder.name = `BUILDER_${builder.memory.name}`;
+        builder.memory.development = { workParts: 1 };
+        const before = JSON.stringify(builder.memory);
+        const state = makeWorld(home, { creeps: { [builder.name]: builder }, automaticHauling: false });
+        home.constructionSites = [];
+        assert.equal(byRole(state.release(), 'builder').length, 0);
+        home.constructionSites = [{ id: 'new-extension', structureType: 'extension' }];
+        const builders = byRole(state.release(), 'builder');
+        assert.equal(builders.length, 1);
+        assert.equal(builders[0].name, builder.memory.name);
+        assert.equal(builders[0].data.sourceId, home.storage.id);
+        assert.equal(builders[0].development, undefined);
+        assert.equal(builders[0].bodyProfile, undefined);
+        assert.equal(state.queue().filter(name => home.memory.creepConfig[name].role === 'builder').length, 0);
+        assert.equal(JSON.stringify(builder.memory), before, 'reusing demand cannot change an existing body or boost plan');
+    }
+});
+
+test('mature builders without live WORK or CARRY do not occupy the only useful construction birth', () => {
+    for (const damaged of ['work', 'carry']) {
+        const home = legacyRoom(), name = `${home.name}_BUILDER_STORAGE_0`;
+        const old = worker(home, { role: 'builder', work: damaged === 'work' ? 0 : 4, name });
+        if (damaged === 'carry') withoutCarry(old);
+        old.name = `BUILDER_${name}`;
+        const state = makeWorld(home, { creeps: { [old.name]: old }, automaticHauling: false });
+        const replacement = byRole(state.release(), 'builder');
+        assert.equal(replacement.length, 1);
+        assert.equal(replacement[0].name, `${name}_REUSE_0`);
+        assert.ok(state.queue().some(name => home.memory.creepConfig[name].role === 'builder'));
+    }
+});
+
+test('healthy ordinary mature builders keep the normal configuration without growth or boost conversion', () => {
+    const home = legacyRoom();
+    const resident = worker(home, { role: 'builder', work: 4, name: `${home.name}_BUILDER_STORAGE_0`, spawning: true });
+    resident.name = `BUILDER_${resident.memory.name}`;
+    const visitor = worker(home, { role: 'builder', work: 4, name: 'visitor' });
+    visitor.memory.spawnRoom = 'W2N1';
+    const before = JSON.stringify(resident.memory);
+    const state = makeWorld(home, { creeps: { [resident.name]: resident, visitor }, automaticHauling: false });
+    const builders = byRole(state.release(), 'builder');
+    assert.equal(builders.length, 1);
+    assert.equal(builders[0].name, resident.memory.name);
+    assert.equal(builders[0].development, undefined);
+    assert.equal(builders[0].bodyProfile, undefined);
+    assert.equal(JSON.stringify(resident.memory), before);
+});
+
+test('mature rooms without construction do not inspect existing builder bodies or publish any future constructor', () => {
+    const home = legacyRoom(); home.constructionSites = [];
+    const state = makeWorld(home, { automaticHauling: false });
+    Object.defineProperty(state.game, 'creeps', { get() { throw Error('idle mature rooms must not scan the empire population'); } });
+    assert.equal(byRole(state.release(), 'builder').length, 0);
 });

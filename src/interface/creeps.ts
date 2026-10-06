@@ -157,7 +157,7 @@ interface ManagerData { }
 interface ProcesserData { waiting: number }
 
 interface UpgraderData { sourceId: string; harvestingSourceId?: string }
-interface BuilderData { sourceId: string, buildTarget?: string }
+interface BuilderData { sourceId: string, buildTarget?: string, repairTarget?: string }
 interface RepairerData { sourceId: string, repairTarget?: string }
 
 interface ScoutData { targetFlag: string }

@@ -92,6 +92,8 @@ function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'emp
     const loader = createSourceLoader({
         globals: { Game: game, Memory: { warMode }, console: { log: message => errors.push(message) } },
         modules: {
+            // Framework factories run independently of real builder job discovery.
+            'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
             role: { createRoleBehavior },
             squard: teams,
             'combat/missions': { runCombatUnits() {} },
