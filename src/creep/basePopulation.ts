@@ -8,6 +8,7 @@ import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
 import { sourceLinkPolicy } from 'settings/sourceLinks'
 import { releaseRepairerCreepConfigs } from './repairerPopulation'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { releaseStorageFillerConfig } from './storageFillerPopulation'
 
 /** A zero-CARRY resident cannot hold the only Link-miner birth slot until natural death. */
 function linkedMinerName(room: Room, source: Source, name: string): string {
@@ -160,14 +161,7 @@ export function releaseBaseCreepConfig(): void {
             }
 
             // 发布一个填充者
-            const creepFillerMemory: FillerData = { sourceId: room.storage.id }
-            const creepFillerName0 = room.name + '_FILLER_STORAGE_0'
-            addCreepConfig(
-                room,
-                roleBaseEnum.FILLER,
-                creepFillerName0,
-                creepFillerMemory
-            )
+            releaseStorageFillerConfig(room)
 
             // 存储旁发布一个建造者
             const creepBuilderMemory: BuilderData = {

@@ -6,6 +6,7 @@ import { isDevelopmentRemoteData, DevelopmentRemoteData } from 'creep/developmen
 import { isDevelopingRoom } from 'creep/development'
 import { combatSpawnAllowed, recordCombatSpawn } from 'combat/spawning'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { hasUsableStorageFiller, isMatureStorageFiller } from 'creep/storageFillerLifecycle'
 
 export default class SpawnExtension extends StructureSpawn {
     public init(): void {
@@ -51,10 +52,13 @@ export default class SpawnExtension extends StructureSpawn {
             const creepMemory = this.room.memory.creepConfig[creepName]
             const bootstrapBuilder = creepMemory.role == roleAdvEnum.RBUILDER &&
                 (creepMemory.data as RemoteBuilderData).bootstrap === true
-            // The hub waits for its planned body; emergency carriers restart extension filling.
-            const forceSpawn = bootstrapBuilder || creepMemory.role == roleBaseEnum.FILLER || creepMemory.role == roleBaseEnum.HARVESTER
+            const matureStorageFiller = isMatureStorageFiller(this.room, creepMemory)
+            const emergencyStorageFiller = matureStorageFiller && !hasUsableStorageFiller(this.room)
+            // Working storage logistics funds a complete successor; an absent carrier needs a native emergency body.
+            const forceSpawn = bootstrapBuilder || creepMemory.role == roleBaseEnum.HARVESTER ||
+                creepMemory.role == roleBaseEnum.FILLER && (!matureStorageFiller || emergencyStorageFiller)
             // Bootstrap assistance must remain mobile and affordable before the target has a spawn.
-            const config = bootstrapBuilder ? { ...creepMemory, bodyProfile: {
+            const config = bootstrapBuilder || emergencyStorageFiller ? { ...creepMemory, bodyProfile: {
                 ...creepMemory.bodyProfile, boostTier: 0 as CreepBoostTier,
             } } : creepMemory
             const plan = selectCreepBody(this.room, config, forceSpawn)

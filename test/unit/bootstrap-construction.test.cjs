@@ -55,8 +55,9 @@ function populationWorld(rooms, { warMode = {}, distances = {} } = {}) {
     const roleFactories = Object.fromEntries(Object.values({ ...roles.roleBaseEnum, ...roles.roleAdvEnum }).map(role => [role,
         () => ({ isNeed: room => role === 'builder' && room.constructionSites.length > 0 })]));
     const loader = createSourceLoader({
-        globals: { Game: game, Memory: { warMode }, RESOURCE_ENERGY: 'energy', BODYPART_COST: bodyCosts },
+        globals: { ...nativeBodies.globals, Game: game, Memory: { warMode }, RESOURCE_ENERGY: 'energy', BODYPART_COST: bodyCosts },
         modules: {
+            ...nativeBodies.modules,
             'settings/creep': roles,
             role: roleFactories,
             './demand': {

@@ -6,6 +6,7 @@ import { controllerEnergyBuffer } from 'creep/developmentLogistics'
 import { loadDevelopmentHauler } from 'creep/developmentHauling'
 import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
+import { retireSupersededStorageFiller } from 'creep/storageFillerLifecycle'
 
 /** Controller Links receive energy from other Links, never from a local hauler. */
 function controllerDeliveryContainer(room: Room): StructureContainer | undefined {
@@ -138,7 +139,7 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         return true
     },
     prepare: function (creep: Creep): boolean {
-        return true
+        return !retireSupersededStorageFiller(creep)
     },
     source(creep) {
         if (isDevelopingRoom(creep.room)) return runDevelopingFiller(creep, data as FillerData)

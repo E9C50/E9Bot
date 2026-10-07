@@ -25,10 +25,12 @@ function world() {
         'creep/demand': { addCreepConfig(room, role, name, data, team) {
             room.memory.creepConfig[name] = { name, role, data, isTeam: team, spawnRoom: room.name }; return name;
         } },
+        'role': { isRoleSupported: role => ['integrate', 'repairer', 'scout', 'cAttacker', 'filler'].includes(role) },
         './intelligence': { combatSnapshot: room => ({ enemies: room.enemies, structures: room.structures, towers: [], friendlies: [] }),
             combatPower: enemy => ({ attack: enemy.attack || 0, ranged: 0, heal: 0, dismantle: 0 }),
             towerDamage: () => 600, isCombatHostile: object => object.owner?.username === 'enemy' || object.structureType === 'rampart' },
         './tactics': { executeCombatSquad: members => actions.push(['fight', members.map(member => member.name)]) },
+        './rally': { parkReadyCombatMembers: (task, members) => members.forEach(member => actions.push(['rally', member.name])) },
         './planning': { planCombatForce: () => plan },
         './support': { runCombatScout: creep => actions.push(['scout', creep.name]),
             runControllerAttack: creep => { actions.push(['controller', creep.name]); return creep.controllerOK !== false; },
@@ -91,6 +93,55 @@ test('force selection publishes exact-tier team configurations and waits for eve
     assert.ok(!w.actions.some(action => action[0] === 'fight' || action[0] === 'return'));
     w.game.creeps[names[1]].goBoost = () => true; w.runCombatUnits();
     assert.equal(w.actions.filter(action => action[0] === 'fight').length, 1);
+});
+
+test('ready fighters park while a missing teammate or another native boost intent is still pending', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const [first, second] = task.memberNames;
+    w.spawn(first); w.runCombatUnits();
+    assert.deepEqual(w.actions.filter(action => action[0] === 'rally'), [['rally', first]]);
+    const boosting = w.spawn(second, false);
+    boosting.goBoost = () => { w.actions.push(['boost-move', second]); return false; };
+    w.actions.length = 0;
+    w.runCombatUnits();
+    assert.deepEqual(w.actions.filter(action => action[0] === 'rally'), [['rally', first]]);
+    assert.deepEqual(w.actions.filter(action => action[0] === 'boost-move'), [['boost-move', second]]);
+    assert.equal(w.actions.some(action => action[0] === 'fight' || action[0] === 'return'), false);
+});
+
+test('a spawning prepared squad with a fatigued member parks healthy fighters before departure', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const [first, second] = task.memberNames;
+    w.spawn(first).fatigue = 1; w.spawn(second); w.runCombatUnits();
+    assert.equal(task.phase, 'spawning');
+    assert.equal(w.actions.some(action => action[0] === 'fight'), false);
+    assert.deepEqual(w.actions.filter(action => action[0] === 'rally'), [['rally', first], ['rally', second]]);
+    w.game.creeps[first].fatigue = 0;
+    w.tick(); w.publish();
+    w.runCombatUnits();
+    assert.equal(w.actions.filter(action => action[0] === 'fight').length, 1);
+});
+
+test('a deployed complete combat squad keeps tactical fatigue handling without receiving home parking intents', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    for (const name of task.memberNames) { const member = w.spawn(name); member.room = w.target; member.fatigue = 1; }
+    w.tick(); w.publish(); w.runCombatUnits();
+    assert.equal(task.phase, 'combat');
+    assert.equal(w.actions.filter(action => action[0] === 'fight').length, 1);
+    assert.equal(w.actions.some(action => action[0] === 'rally' || action[0] === 'return'), false);
+});
+
+test('three fully boosted legacy fighters with ready false still park while the fourth is spawning', () => {
+    const w = world(), template = { role: 'integrate', profile: { boostTier: 3 }, body: ['move'], boostPlan: { tier: 3, steps: [] }, energy: 50 };
+    w.setPlan({ formation: 'quad', members: Array(4).fill(template), energy: 200 });
+    const task = w.create(); w.runCombatTasks(); w.publish();
+    for (const name of task.memberNames.slice(0, 3)) {
+        const member = w.spawn(name); member.memory.ready = false;
+        member.memory.boostPlan = { tier: 3, completed: true, steps: [{ resource: 'XLHO2', type: 'boostHeal', parts: 18 }] };
+    }
+    w.runCombatUnits();
+    assert.deepEqual(w.actions.filter(action => action[0] === 'rally').map(action => action[1]), Array.from(task.memberNames.slice(0, 3)));
+    assert.equal(w.actions.some(action => action[0] === 'fight' || action[0] === 'return'), false);
 });
 
 test('a lost member invalidates the whole wave without silently refilling the same team forever', () => {
@@ -219,4 +270,134 @@ test('home defense stops pending reconnaissance and support demands at the spawn
     assert.equal(w.loader.load('combat/spawning').combatSpawnAllowed(config), false);
     w.tick(); w.publish(); assert.deepEqual(Object.keys(w.home.memory.creepConfig), []);
     assert.equal(task.scoutPending, true, 'the stable request can resume without multiplying scouts');
+});
+
+test('spawning diagnostics distinguish three ready fighters from the fourth behind an economic queue head', () => {
+    const w = world(), template = { role: 'integrate', profile: { boostTier: 3 }, body: ['move', 'ranged_attack', 'heal'],
+        boostPlan: { tier: 3, steps: [{ type: 'boostHeal', resource: 'XLHO2', parts: 1 }] }, energy: 450 };
+    w.setPlan({ formation: 'quad', members: Array(4).fill(template), energy: 1800 });
+    w.home.energyAvailable = 200;
+    const task = w.create(); w.runCombatTasks(); w.publish();
+    for (const name of task.memberNames.slice(0, 3)) {
+        const member = w.spawn(name); member.memory.ready = false;
+        member.memory.boostPlan = { tier: 3, steps: template.boostPlan.steps, completed: true };
+    }
+    w.home.memory.creepConfig.repairer = { role: 'repairer', spawnPriority: 6 };
+    w.home.memory.creepSpawnQueue = ['repairer', task.memberNames[3]];
+    w.tick();
+    const summary = JSON.parse(w.listCombatTasks())[0], details = JSON.parse(w.listCombatTasks(task.id));
+    assert.equal(task.phase, 'spawning'); assert.equal(task.spent, 0); assert.equal(task.wave, 1);
+    assert.equal(summary.spawnStatus.planned, 4); assert.equal(summary.spawnStatus.born, 3);
+    assert.equal(summary.spawnStatus.pending, 1); assert.equal(summary.spawnStatus.spawning, 0);
+    assert.equal(summary.spawnStatus.boosting, 0); assert.equal(summary.spawnStatus.ready, 3);
+    assert.deepEqual(summary.spawnStatus.nextFighter, { name: task.memberNames[3], energy: 450 });
+    assert.deepEqual(summary.spawnStatus.queueHead, { name: 'repairer', role: 'repairer' });
+    assert.equal(summary.spawnStatus.energyAvailable, 200); assert.equal(summary.spawnStatus.energyCapacity, 12900);
+    assert.deepEqual(details.spawnStatus, summary.spawnStatus);
+    assert.match(summary.reason, /已出生 3\/4/); assert.match(summary.reason, /200\/12900/);
+    assert.match(summary.reason, /下一名需 450/); assert.match(summary.reason, /队首 repairer/);
+});
+
+test('native incubation and incomplete boosts have distinct wait states and readiness clears the reason immediately in console', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const [first, second] = task.memberNames, incubating = w.spawn(first), ready = w.spawn(second);
+    incubating.spawning = true;
+    w.tick();
+    let summary = JSON.parse(w.listCombatTasks())[0];
+    assert.equal(summary.spawnStatus.born, 1); assert.equal(summary.spawnStatus.spawning, 1);
+    assert.equal(summary.spawnStatus.pending, 0); assert.equal(summary.spawnStatus.nextFighter, undefined);
+    assert.match(task.reason, /孵化中 1/);
+    incubating.spawning = false;
+    incubating.memory.boostPlan = { tier: 3, steps: [{ type: 'boostHeal', resource: 'XLHO2', parts: 1 }] };
+    const duringBoost = JSON.stringify(w.memory), live = JSON.parse(w.listCombatTasks(task.id));
+    assert.equal(live.spawnStatus.born, 2); assert.equal(live.spawnStatus.spawning, 0);
+    assert.match(live.reason, /孵化中 0/); assert.match(live.reason, /待强化 1/);
+    assert.equal(JSON.stringify(w.memory), duringBoost, 'live reasons do not rewrite stored task state');
+    w.tick();
+    summary = JSON.parse(w.listCombatTasks())[0];
+    assert.equal(task.phase, 'combat'); assert.equal(summary.spawnStatus.born, 2);
+    assert.equal(summary.spawnStatus.boosting, 1); assert.equal(summary.spawnStatus.ready, 1);
+    assert.match(task.reason, /待强化 1/);
+    incubating.memory.boostPlan.completed = true;
+    const before = JSON.stringify(w.memory);
+    assert.equal(JSON.parse(w.listCombatTasks(task.id)).reason, undefined);
+    assert.equal(JSON.parse(w.listCombatTasks())[0].spawnStatus.ready, 2);
+    assert.equal(JSON.stringify(w.memory), before, 'console diagnostics remain read-only');
+    w.tick();
+    assert.equal(task.reason, undefined); assert.equal(ready.memory.boostPlan.completed, true);
+});
+
+test('current generation spawn diagnostics ignore returning fighters and stale queue entries', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const first = w.spawn(task.memberNames[0]); first.memory.combatGeneration--;
+    w.home.memory.creepSpawnQueue = ['gone', first.name, task.memberNames[1]];
+    const summary = JSON.parse(w.listCombatTasks())[0];
+    assert.equal(summary.spawnStatus.born, 0); assert.equal(summary.spawnStatus.pending, 2);
+    assert.equal(summary.spawnStatus.ready, 0);
+    assert.equal(summary.spawnStatus.queueHead.name, task.memberNames[1]);
+});
+
+test('spawn diagnostics skip old combat generations and unsupported roles at the queue head without editing it', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const fighter = w.home.memory.creepConfig[task.memberNames[0]];
+    w.home.memory.creepConfig.oldFighter = { ...fighter, combatGeneration: task.generation - 1 };
+    w.home.memory.creepConfig.oldScout = { ...fighter, role: 'scout', combatJob: 'scout' };
+    w.home.memory.creepConfig.unsupported = { role: 'rAttacker' };
+    w.home.memory.creepSpawnQueue = ['oldFighter', 'oldScout', 'unsupported', task.memberNames[0]];
+    const before = JSON.stringify(w.memory), summary = JSON.parse(w.listCombatTasks())[0];
+    assert.equal(summary.spawnStatus.queueHead.name, task.memberNames[0]);
+    assert.equal(summary.spawnStatus.queueHead.role, 'integrate');
+    assert.equal(JSON.stringify(w.memory), before);
+});
+
+test('failed boosts are visibly different from normal boost preparation before the unit stage withdraws them', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const failed = w.spawn(task.memberNames[0]); w.spawn(task.memberNames[1]);
+    failed.memory.boostPlan = { tier: 3, failed: true, steps: [{ type: 'boostHeal', resource: 'XLHO2', parts: 1 }] };
+    w.tick();
+    const summary = JSON.parse(w.listCombatTasks())[0];
+    assert.equal(summary.spawnStatus.boostFailed, 1); assert.equal(summary.spawnStatus.ready, 1);
+    assert.match(summary.reason, /强化失败 1，等待撤回\/回收/);
+    assert.equal(task.phase, 'combat', 'diagnostics do not change boost handling or task transitions');
+});
+
+test('planning, cancellation and timeout remove obsolete birth diagnostics while preserving their own reasons', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    assert.match(task.reason, /^编队准备：/);
+    task.phase = 'planning';
+    w.game.cpu = { bucket: 1000, tickLimit: 500, getUsed: () => 10 };
+    w.tick(30);
+    assert.match(task.reason, /CPU/); assert.equal(JSON.parse(w.listCombatTasks(task.id)).spawnStatus, undefined);
+    w.cancelCombatTask(task.id);
+    assert.equal(task.reason, '用户取消'); assert.equal(JSON.parse(w.listCombatTasks())[0].spawnStatus, undefined);
+    const timeout = w.create({ id: 'timeout', timeoutTicks: 1 });
+    timeout.phase = 'spawning'; timeout.plan = task.plan; timeout.reason = '编队准备：旧等待';
+    w.tick(1);
+    assert.equal(timeout.phase, 'returning'); assert.equal(timeout.reason, '任务超时');
+    assert.equal(JSON.parse(w.listCombatTasks(timeout.id)).spawnStatus, undefined);
+});
+
+test('protection and threat-upgrade reasons replace birth waiting without being overwritten by diagnostics', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    w.target.controller.safeMode = 100;
+    w.tick();
+    assert.match(task.reason, /安全模式/); assert.match(JSON.parse(w.listCombatTasks(task.id)).reason, /安全模式/);
+    w.target.controller.safeMode = 0;
+    w.target.enemies.push({ attack: 1000, owner: { username: 'enemy' } });
+    w.tick();
+    assert.equal(task.phase, 'planning'); assert.match(task.reason, /敌情升级/);
+    assert.equal(JSON.parse(w.listCombatTasks(task.id)).spawnStatus, undefined);
+});
+
+test('expired protection reasons clear once a complete boosted squad can resume combat', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    task.memberNames.forEach(name => w.spawn(name)); w.tick();
+    w.target.controller.safeMode = 100; w.tick();
+    assert.match(task.reason, /安全模式/);
+    assert.equal(JSON.parse(w.listCombatTasks(task.id)).spawnStatus.ready, 2);
+    w.target.controller.safeMode = 0; w.tick(); w.publish();
+    const summary = JSON.parse(w.listCombatTasks(task.id));
+    assert.equal(task.phase, 'combat'); assert.equal(summary.reason, undefined);
+    assert.equal(summary.spawnStatus.ready, 2); assert.equal(summary.spawnStatus.pending, 0);
+    assert.equal(task.wave, 1); assert.equal(task.spent, 0);
 });

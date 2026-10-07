@@ -66,6 +66,9 @@ export interface CombatTask {
     category?: CombatIntel['category']
     intel?: CombatIntel
     plan?: CombatForcePlan
+    /** An open home-room assembly area, with distinct slots in formation order. */
+    rally?: { x: number; y: number; roomName: string; count: number; slots: Record<string, number>; pathFailures?: Record<string, number> }
+    rallyRetryAt?: number
     plannedThreat?: { output: number; healing: number; towerCount: number; armour?: number }
     names: string[]
     wave: number

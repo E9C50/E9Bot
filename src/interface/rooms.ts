@@ -59,6 +59,8 @@ interface RoomPosition {
 }
 
 interface RoomMemory {
+    /** Fixed storage-carrier slots: one worker and at most one successor during handover. */
+    storageFillerHandover?: { active: string; replacement?: string }
     /** Persistent resource evacuation; normal operations remain paused until cancellation or unclaim. */
     evacuation?: import('../room/evacuationState').RoomEvacuationTask
     /** Persisted console settings, independent of regularly refreshed population demands. */

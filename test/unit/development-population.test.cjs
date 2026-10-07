@@ -1320,7 +1320,9 @@ test('mature rooms without construction do not inspect existing builder bodies o
     const home = legacyRoom(); home.constructionSites = [];
     home.wallsNeedRepair = []; home.ramparts = [];
     const state = makeWorld(home, { automaticHauling: false });
-    Object.defineProperty(state.game, 'creeps', { get() { throw Error('idle mature rooms must not scan the empire population'); } });
+    state.game.creeps = new Proxy(state.game.creeps, {
+        ownKeys() { throw Error('idle mature rooms must not scan the empire population'); },
+    });
     assert.equal(byRole(state.release(), 'builder').length, 0);
 });
 

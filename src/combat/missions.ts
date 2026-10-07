@@ -1,4 +1,5 @@
 import { addCreepConfig } from 'creep/demand'
+import { isRoleSupported } from 'role'
 import { combatSnapshot, combatPower, towerDamage, isCombatHostile } from './intelligence'
 import { executeCombatSquad } from './tactics'
 import { runCombatScout, runControllerAttack, runCombatLoot, returnCombatUnit, countCombatLoot } from './support'
@@ -7,9 +8,13 @@ import { combatPolicy } from 'settings/combat'
 import { creepWhiteList } from 'settings/settings'
 import { scheduleObservation } from 'runtime/observerScheduling'
 import { isCpuProfilingEnabled, profileCpuTask } from 'runtime/profiling'
+import { parkReadyCombatMembers } from './rally'
+import { combatSpawnAllowed } from './spawning'
 import type { CombatTask, CombatTaskOptions, CombatIntel } from './types'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
+const SPAWN_WAIT_PREFIX = '编队准备：'
+const PROTECTION_WAIT_PREFIX = '等待安全模式/无敌效果结束，tick '
 function tasks(): Record<string, CombatTask> { return Memory.combatTasks || (Memory.combatTasks = {}) }
 function active(task: CombatTask): boolean { return !['returning', 'completed', 'cancelled'].includes(task.phase) }
 function quantity(store: StoreDefinition | undefined): number { return store?.getUsedCapacity() || 0 }
@@ -68,11 +73,91 @@ export function cancelCombatTask(id: string): string {
     return `任务 ${id} 已撤销孵化需求，现有单位携货返程并回收`
 }
 
+interface CombatSpawnStatus {
+    planned: number
+    born: number
+    spawning: number
+    pending: number
+    boosting: number
+    boostFailed: number
+    ready: number
+    energyAvailable: number
+    energyCapacity: number
+    nextFighter?: { name?: string; energy: number }
+    queueHead?: { name: string; role: CreepRoleConstant; taskId?: string }
+}
+
+/** Current-generation bodies only; native spawning and boost completion are separate states. */
+function spawningStatus(task: CombatTask): CombatSpawnStatus | undefined {
+    if (!['spawning', 'combat'].includes(task.phase) || !task.plan?.members.length) return undefined
+    const home = Game.rooms[task.homeRoom]
+    if (!home) return undefined
+    const current = (name: string): Creep | undefined => {
+        const creep = Game.creeps[name]
+        return creep?.memory.combatTaskId === task.id && creep.memory.combatJob === 'fighter' &&
+            creep.memory.combatGeneration === task.generation ? creep : undefined
+    }
+    const names = task.memberNames?.length ? task.memberNames : task.names.filter(name => current(name) ||
+        home.memory.creepConfig?.[name]?.combatTaskId === task.id &&
+        home.memory.creepConfig[name].combatJob === 'fighter' && home.memory.creepConfig[name].combatGeneration === task.generation)
+    const members = names.map(current).filter((creep): creep is Creep => creep !== undefined)
+    const born = members.filter(creep => !creep.spawning)
+    const ready = born.filter(creep => !creep.memory.boostPlan?.failed &&
+        (creep.memory.boostPlan?.completed === true || creep.memory.boostPlan?.steps.length === 0)).length
+    const spawning = members.length - born.length
+    const status: CombatSpawnStatus = { planned: task.plan.members.length, born: born.length, spawning,
+        pending: Math.max(0, task.plan.members.length - members.length), boosting: born.length - ready,
+        boostFailed: born.filter(creep => creep.memory.boostPlan?.failed).length, ready,
+        energyAvailable: home.energyAvailable || 0, energyCapacity: home.energyCapacityAvailable || 0 }
+    const next = task.plan.members.findIndex((_member, index) => !current(names[index]))
+    if (next >= 0) status.nextFighter = { name: names[next], energy: task.plan.members[next].energy }
+    const head = (home.memory.creepSpawnQueue || []).find(name => {
+        const config = home.memory.creepConfig?.[name]
+        return !Game.creeps[name] && config && isRoleSupported(config.role) && combatSpawnAllowed(config)
+    })
+    if (head) {
+        const config = home.memory.creepConfig[head]
+        status.queueHead = { name: head, role: config.role, taskId: config.combatTaskId }
+    }
+    return status
+}
+
+function waitingForSpawn(status: CombatSpawnStatus): boolean {
+    return status.pending > 0 || status.spawning > 0 || status.boosting > 0
+}
+
+function clearSpawnWaitReason(task: CombatTask): void {
+    if (task.reason?.startsWith(SPAWN_WAIT_PREFIX)) delete task.reason
+}
+
+function spawnWaitReason(status: CombatSpawnStatus): string {
+    let reason = `${SPAWN_WAIT_PREFIX}已出生 ${status.born}/${status.planned}，孵化中 ${status.spawning}，待出生 ${status.pending}，待强化 ${status.boosting}`
+    if (status.boostFailed > 0) reason += `；强化失败 ${status.boostFailed}，等待撤回/回收`
+    if (status.pending > 0) {
+        reason += `；出生能量 ${status.energyAvailable}/${status.energyCapacity}`
+        if (status.nextFighter) reason += `，下一名需 ${status.nextFighter.energy}`
+        if (status.queueHead) reason += `；队首 ${status.queueHead.role}（${status.queueHead.name}）`
+        else reason += '；等待孵化队列刷新'
+    }
+    return reason
+}
+
+function updateSpawnWaitReason(task: CombatTask): void {
+    const status = spawningStatus(task)
+    if (status && waitingForSpawn(status)) task.reason = spawnWaitReason(status)
+}
+
 export function listCombatTasks(id?: string): string {
     const all = tasks()
-    return JSON.stringify(id ? all[id] || { error: '任务不存在' } : Object.values(all).map(task => ({
+    const visible = (task: CombatTask): { reason?: string; spawnStatus?: CombatSpawnStatus } => {
+        const spawnStatus = spawningStatus(task)
+        const reason = task.reason?.startsWith(SPAWN_WAIT_PREFIX) ?
+            spawnStatus && waitingForSpawn(spawnStatus) ? spawnWaitReason(spawnStatus) : undefined : task.reason
+        return { reason, spawnStatus }
+    }
+    return JSON.stringify(id ? all[id] ? { ...all[id], ...visible(all[id]) } : { error: '任务不存在' } : Object.values(all).map(task => ({
         id: task.id, homeRoom: task.homeRoom, targetRoom: task.targetRoom, mode: task.mode, phase: task.phase,
-        reason: task.reason, wave: task.wave, spent: task.spent, category: task.category,
+        ...visible(task), wave: task.wave, spent: task.spent, category: task.category,
         intelAge: task.intel ? Game.time - task.intel.seenAt : undefined,
         formation: task.plan?.formation, boostTier: task.plan?.members[0]?.boostPlan.tier,
         live: task.names.filter(name => Game.creeps[name]).length,
@@ -158,6 +243,7 @@ export function runCombatTasks(): void {
     const all = tasks()
     for (const task of Object.values(all)) {
         try {
+            clearSpawnWaitReason(task)
             if (task.shard !== Game.shard.name || !active(task)) continue
             const home = Game.rooms[task.homeRoom]
             if (!home?.controller?.my) { finish(task, '起点房间已失去'); continue }
@@ -191,9 +277,10 @@ export function runCombatTasks(): void {
                 finish(task, '目标已属于自己或白名单玩家'); continue
             }
             if (Math.max(intel.safeModeUntil, intel.protectedUntil) > Game.time) {
-                task.reason = `等待安全模式/无敌效果结束，tick ${Math.max(intel.safeModeUntil, intel.protectedUntil)}`
+                task.reason = `${PROTECTION_WAIT_PREFIX}${Math.max(intel.safeModeUntil, intel.protectedUntil)}`
                 withdraw(task); continue
             }
+            if (task.reason?.startsWith(PROTECTION_WAIT_PREFIX)) delete task.reason
             if (task.phase === 'recon') task.phase = 'planning'
             const clear = intel.armedCount === 0 && intel.hostileCount === 0 && intel.objectives === 0
             if (task.mode === 'attack' && clear && ['planning', 'spawning', 'combat'].includes(task.phase)) {
@@ -251,6 +338,7 @@ export function runCombatTasks(): void {
                 if (lost || task.phase === 'combat' && fighters.length < (task.plan?.members.length || 1)) {
                     withdraw(task); task.phase = 'planning'; task.reason = '编队损失，存活成员撤回；重新核算配置'
                 }
+                updateSpawnWaitReason(task)
             }
             if (task.phase === 'controller' && target?.controller) {
                 const controller = target.controller
@@ -382,15 +470,20 @@ export function runCombatUnits(): void {
     }
     for (const [id, members] of groups) {
         const task = all[id]
-        if (members.some(creep => !prepared.has(creep.name))) continue
+        if (members.some(creep => !prepared.has(creep.name))) {
+            parkReadyCombatMembers(task, members.filter(creep => prepared.has(creep.name) && creep.room.name === task.homeRoom))
+            continue
+        }
+        if (task.phase === 'spawning' && members.some(creep => creep.fatigue > 0)) {
+            parkReadyCombatMembers(task, members.filter(creep => creep.room.name === task.homeRoom))
+            continue
+        }
         if (task.phase !== 'combat' || members.length !== task.plan?.members.length ||
             members.some(creep => !Game.rooms[task.homeRoom]?.memory.creepConfig?.[creep.name])) {
-            for (const member of members) {
-                if (task.phase === 'spawning' && Game.rooms[task.homeRoom]?.memory.creepConfig?.[member.name]) {
-                    const home = Game.rooms[task.homeRoom]
-                    if (home?.spawns[0]) member.moveTo(home.spawns[0], { range: 4, reusePath: 10 })
-                } else returnCombatUnit(member, task.homeRoom)
-            }
+            const waiting = members.filter(member => task.phase === 'spawning' &&
+                Game.rooms[task.homeRoom]?.memory.creepConfig?.[member.name])
+            parkReadyCombatMembers(task, waiting)
+            for (const member of members) if (!waiting.includes(member)) returnCombatUnit(member, task.homeRoom)
             continue
         }
         const protectedRoom = Math.max(task.intel?.safeModeUntil || 0, task.intel?.protectedUntil || 0) > Game.time

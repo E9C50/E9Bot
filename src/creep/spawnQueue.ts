@@ -1,6 +1,7 @@
 import { roleBaseEnum } from 'settings/creep'
 import { isRoleSupported } from 'role'
 import { isDevelopingRoom } from './development'
+import { hasUsableStorageFiller } from './storageFillerLifecycle'
 
 export function buildSpawnQueue(
     room: Room,
@@ -36,7 +37,9 @@ export function buildSpawnQueue(
     )
 
     // A full-size manager must not block the carrier needed to refill its spawn energy.
-    if (!isDevelopingRoom(room) && fillers.length === 0 && room.storage &&
+    const noStorageLogistics = fillers.length === 0 || room.controller?.level === 8 &&
+        room.controller.my === true && !hasUsableStorageFiller(room, creeps)
+    if (!isDevelopingRoom(room) && noStorageLogistics && room.storage &&
         room.storage.store[RESOURCE_ENERGY] > 0) {
         const storageCarrier = creepSpawnQueue.find(name => {
             const config = creepConfigCache[name]
