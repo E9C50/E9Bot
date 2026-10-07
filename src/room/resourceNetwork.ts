@@ -3,6 +3,11 @@ import { isRoomEvacuating } from './evacuationState'
 
 type Amounts = Record<string, number>
 export type ResourceJob = RoomMemory['terminalSendJob'][string]
+interface PlanningInventory {
+    available(room: Room, resource: ResourceConstant): number
+    projected(room: Room, resource: ResourceConstant): number
+    headroom(room: Room): number
+}
 let tick = -1, shard = ''
 let rooms: Room[] = []
 let incoming = new Map<string, Amounts>(), outgoing = new Map<string, Amounts>()
@@ -106,10 +111,39 @@ export function projectedResource(room: Room, resource: ResourceConstant): numbe
 function incomingTotal(room: Room): number {
     return Object.values(incoming.get(room.name) || {}).reduce((total, amount) => total + Math.max(0, amount), 0)
 }
-function receivingHeadroom(room: Room): number {
+function receivingSpace(room: Room): number {
     const delivered = Object.values(received.get(room.name) || {}).reduce((total, amount) => total + Math.max(0, amount), 0)
-    return Math.max(0, (room.storage?.store.getFreeCapacity() || 0) + (room.terminal?.store.getFreeCapacity() || 0) -
-        resourcePolicy.terminalFreeReserve - incomingTotal(room) - delivered)
+    return (room.storage?.store.getFreeCapacity() || 0) + (room.terminal?.store.getFreeCapacity() || 0) -
+        resourcePolicy.terminalFreeReserve - delivered
+}
+function receivingHeadroom(room: Room): number {
+    return Math.max(0, receivingSpace(room) - incomingTotal(room))
+}
+/** Only the synchronous balancing pass shares stock reads; job promises remain live. */
+function planningInventory(): PlanningInventory {
+    const stocks = new Map<Room, Map<ResourceConstant, { total: number, dispatchable: number }>>()
+    const space = new Map<Room, number>()
+    function stock(room: Room, resource: ResourceConstant): { total: number, dispatchable: number } {
+        let resources = stocks.get(room)
+        if (!resources) { resources = new Map(); stocks.set(room, resources) }
+        let value = resources.get(resource)
+        if (!value) {
+            const total = getRoomResourceAmount(room, resource)
+            const liquid = positive(room.storage?.store[resource]) + getTerminalResourceAmount(room, resource)
+            value = { total, dispatchable: Math.min(liquid, total - getResourceKeep(room, resource)) }
+            resources.set(resource, value)
+        }
+        return value
+    }
+    return {
+        available: (room, resource) => Math.max(0, stock(room, resource).dispatchable - getOutgoingResourceAmount(room.name, resource)),
+        projected: (room, resource) => stock(room, resource).total + getIncomingResourceAmount(room.name, resource) -
+            getOutgoingResourceAmount(room.name, resource),
+        headroom: room => {
+            if (!space.has(room)) space.set(room, receivingSpace(room))
+            return Math.max(0, space.get(room)! - incomingTotal(room))
+        },
+    }
 }
 export function updateResourceJob(room: Room, id: string, job?: ResourceJob): void {
     prepare()
@@ -125,9 +159,10 @@ export function updateResourceJob(room: Room, id: string, job?: ResourceJob): vo
         add(incoming, job.targetRoom, job.resourceType, job.amount)
     }
 }
-function queue(room: Room, target: Room, resource: ResourceConstant, amount: number, kind: NonNullable<ResourceJob['kind']>): number {
+function queue(room: Room, target: Room, resource: ResourceConstant, amount: number, kind: NonNullable<ResourceJob['kind']>, inventory?: PlanningInventory): number {
     if (room === target || !eligible(target)) return 0
-    amount = Math.floor(Math.min(amount, getAvailableResource(room, resource), receivingHeadroom(target)))
+    amount = Math.floor(Math.min(amount, inventory ? inventory.available(room, resource) : getAvailableResource(room, resource),
+        inventory ? inventory.headroom(target) : receivingHeadroom(target)))
     if (amount <= 0) return 0
     const id = `auto_${kind}_${room.name}_${target.name}_${resource}`
     const old = room.memory.terminalSendJob[id]
@@ -141,11 +176,12 @@ export function requestRoomResource(room: Room, resource: ResourceConstant, targ
     prepare()
     if (!eligible(room)) return 0
     let needed = Math.max(0, targetAmount - getRoomResourceAmount(room, resource) - getIncomingResourceAmount(room.name, resource))
-    const donors = rooms.filter(candidate => candidate !== room && getAvailableResource(candidate, resource) > 0)
-    donors.sort((a, b) => Number(isWarehouseRoom(b)) - Number(isWarehouseRoom(a)) ||
-        (a.terminal!.cooldown || 0) - (b.terminal!.cooldown || 0) ||
-        getAvailableResource(b, resource) - getAvailableResource(a, resource))
-    for (const donor of donors) {
+    if (needed <= 0) return getIncomingResourceAmount(room.name, resource)
+    const donors = rooms.filter(candidate => candidate !== room).map(candidate => ({ room: candidate,
+        available: getAvailableResource(candidate, resource), warehouse: isWarehouseRoom(candidate), cooldown: candidate.terminal!.cooldown || 0 }))
+        .filter(candidate => candidate.available > 0)
+        .sort((a, b) => Number(b.warehouse) - Number(a.warehouse) || a.cooldown - b.cooldown || b.available - a.available)
+    for (const { room: donor } of donors) {
         if (needed <= 0) break
         needed -= queue(donor, room, resource, needed, 'production')
     }
@@ -199,31 +235,35 @@ export function planResourceDistribution(): void {
         if (job.kind && job.kind !== 'production') updateResourceJob(room, id)
     }
     const warehouses = rooms.filter(isWarehouseRoom)
-    const ordinary = rooms.filter(room => !isWarehouseRoom(room))
+    const warehouseSet = new Set(warehouses)
+    const ordinary = rooms.filter(room => !warehouseSet.has(room))
+    const inventory = planningInventory()
     const required: ResourceConstant[] = [...t3Resources, ...basicMinerals, 'G', 'ops', 'power']
     for (const room of ordinary) for (const resource of required) {
         const target = ordinaryResourceTarget(resource)
-        let needed = Math.max(0, target - projectedResource(room, resource))
-        const donors = rooms.filter(candidate => candidate !== room && getAvailableResource(candidate, resource) > 0)
-            .sort((a, b) => Number(isWarehouseRoom(b)) - Number(isWarehouseRoom(a)) ||
-                getAvailableResource(b, resource) - getAvailableResource(a, resource))
-        for (const donor of donors) {
+        let needed = Math.max(0, target - inventory.projected(room, resource))
+        if (needed <= 0) continue
+        const donors = rooms.filter(candidate => candidate !== room).map(candidate => ({ room: candidate,
+            available: inventory.available(candidate, resource), warehouse: warehouseSet.has(candidate) }))
+            .filter(candidate => candidate.available > 0)
+            .sort((a, b) => Number(b.warehouse) - Number(a.warehouse) || b.available - a.available)
+        for (const { room: donor } of donors) {
             if (needed <= 0) break
-            needed -= queue(donor, room, resource, needed, 'refill')
+            needed -= queue(donor, room, resource, needed, 'refill', inventory)
         }
     }
     for (const room of ordinary) {
         const resources = new Set<string>([...Object.keys(room.storage!.store), ...Object.keys(room.terminal!.store)])
         for (const key of resources) {
             const resource = key as ResourceConstant
-            if (resource === 'energy' || getAvailableResource(room, resource) <= 0) continue
-            const targets = warehouses.filter(target => receivingHeadroom(target) > 0)
-                .sort((a, b) => projectedResource(a, resource) - projectedResource(b, resource))
-            let excess = getAvailableResource(room, resource), remaining = excess
-            let level = targets.length ? projectedResource(targets[0], resource) : 0, count = 1
+            if (resource === 'energy' || inventory.available(room, resource) <= 0) continue
+            const targets = warehouses.filter(target => inventory.headroom(target) > 0)
+                .sort((a, b) => inventory.projected(a, resource) - inventory.projected(b, resource))
+            let excess = inventory.available(room, resource), remaining = excess
+            let level = targets.length ? inventory.projected(targets[0], resource) : 0, count = 1
             // Raise the least stocked group first, avoiding an extra warehouse-to-warehouse hop.
             while (count < targets.length) {
-                const next = projectedResource(targets[count], resource)
+                const next = inventory.projected(targets[count], resource)
                 const cost = (next - level) * count
                 if (cost > remaining) break
                 remaining -= cost; level = next; count++
@@ -231,8 +271,8 @@ export function planResourceDistribution(): void {
             level += remaining / count
             for (const target of targets) {
                 if (excess <= 0) break
-                const share = Math.ceil(Math.max(0, level - projectedResource(target, resource)))
-                excess -= queue(room, target, resource, Math.min(excess, share), 'surplus')
+                const share = Math.ceil(Math.max(0, level - inventory.projected(target, resource)))
+                excess -= queue(room, target, resource, Math.min(excess, share), 'surplus', inventory)
             }
         }
     }
@@ -243,30 +283,30 @@ export function planResourceDistribution(): void {
     }
     for (const key of resources) {
         const resource = key as ResourceConstant
-        const ordered = [...warehouses].sort((a, b) => projectedResource(a, resource) - projectedResource(b, resource))
-        const average = ordered.reduce((total, room) => total + projectedResource(room, resource), 0) / ordered.length
+        const ordered = [...warehouses].sort((a, b) => inventory.projected(a, resource) - inventory.projected(b, resource))
+        const average = ordered.reduce((total, room) => total + inventory.projected(room, resource), 0) / ordered.length
         // Small commodity inventories must also converge instead of sitting below the bulk threshold forever.
         const tolerance = Math.max(1, Math.min(resourcePolicy.warehouseBalanceTolerance, Math.floor(average * 0.01)))
         for (const target of ordered) {
-            let needed = Math.floor(average - projectedResource(target, resource))
+            let needed = Math.floor(average - inventory.projected(target, resource))
             if (needed < tolerance) continue
             for (let index = ordered.length - 1; index >= 0 && needed > 0; index--) {
                 const donor = ordered[index]
-                const excess = Math.floor(projectedResource(donor, resource) - average)
+                const excess = Math.floor(inventory.projected(donor, resource) - average)
                 if (excess < tolerance) continue
-                needed -= queue(donor, target, resource, Math.min(needed, excess), 'balance')
+                needed -= queue(donor, target, resource, Math.min(needed, excess), 'balance', inventory)
             }
         }
     }
     // Energy support is independent of warehouse classification.
     for (const target of rooms) {
-        const stock = projectedResource(target, 'energy')
+        const stock = inventory.projected(target, 'energy')
         if (stock >= 350000) continue
         let needed = Math.min(50000, 350000 - stock)
-        for (const donor of [...rooms].sort((a, b) => projectedResource(b, 'energy') - projectedResource(a, 'energy'))) {
+        for (const donor of [...rooms].sort((a, b) => inventory.projected(b, 'energy') - inventory.projected(a, 'energy'))) {
             if (donor === target || needed <= 0) continue
-            const excess = projectedResource(donor, 'energy') - 450000
-            if (excess > 0) needed -= queue(donor, target, 'energy', Math.min(needed, excess), 'energy')
+            const excess = inventory.projected(donor, 'energy') - 450000
+            if (excess > 0) needed -= queue(donor, target, 'energy', Math.min(needed, excess), 'energy', inventory)
         }
     }
 }

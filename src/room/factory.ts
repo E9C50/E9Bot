@@ -7,6 +7,15 @@ import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from './evac
 type FactoryResource = Parameters<StructureFactory['produce']>[0]
 type Recipe = typeof COMMODITIES[FactoryResource]
 type Stock = StructureStorage | StructureTerminal
+type Component = [ResourceConstant, number]
+interface RecipeData { source: Recipe['components']; components: Component[]; inputAmount: number }
+interface PlanningStock {
+    capacity: number
+    local(resource: ResourceConstant): number
+    available(resource: ResourceConstant): number
+    global(resource: ResourceConstant): number
+    cycles(recipe: Recipe): number
+}
 
 export interface FactoryProductionState {
     resourceType: FactoryResource
@@ -37,14 +46,27 @@ let carrierTick = -1
 let roomCarriers = new Map<string, Creep[]>()
 let commodities: FactoryResource[] | undefined
 let commodityIntermediates: Set<string> | undefined
+let commodityTable: typeof COMMODITIES | undefined
+const recipeData = new WeakMap<Recipe, RecipeData>()
+const commoditiesByLevel = new Map<number, FactoryResource[]>()
+const reserveByLevel = new Map<number, Component[]>()
 let transferTick = -1
 let delivered = new Map<string, Record<string, number>>()
 
-function components(recipe: Recipe): [ResourceConstant, number][] {
-    return Object.entries(recipe.components) as [ResourceConstant, number][]
+function parsedRecipe(recipe: Recipe): RecipeData {
+    const source = recipe.components, previous = recipeData.get(recipe)
+    if (previous?.source === source) return previous
+    if (previous) reserveByLevel.clear()
+    const components = Object.entries(source) as Component[]
+    const result = { source, components, inputAmount: components.reduce((sum, [, amount]) => sum + amount, 0) }
+    recipeData.set(recipe, result)
+    return result
+}
+function components(recipe: Recipe): Component[] {
+    return parsedRecipe(recipe).components
 }
 function recipeInputAmount(recipe: Recipe): number {
-    return components(recipe).reduce((sum, [, amount]) => sum + amount, 0)
+    return parsedRecipe(recipe).inputAmount
 }
 function batchInputs(recipe: Recipe, cycles: number): Record<string, number> {
     const result: Record<string, number> = {}
@@ -99,48 +121,116 @@ function availableIngredient(room: Room, resource: ResourceConstant): number {
     return Math.max(0, localAmount(room, resource) - keep - (room.memory.productionReserve?.lab?.[resource] || 0) -
         getOutgoingResourceAmount(room.name, resource))
 }
-function possibleCycles(factory: StructureFactory, recipe: Recipe): number {
-    const capacity = factory.store.getCapacity() || 0
-    const inputAmount = recipeInputAmount(recipe)
+
+/** Scope stock to one synchronous planning pass; later calls still observe new reservations and native intents. */
+function planningStock(factory: StructureFactory): PlanningStock {
+    const room = factory.room, warehouse = isWarehouseRoom(room)
+    const amounts = new Map<ResourceConstant, number>(), available = new Map<ResourceConstant, number>()
+    const globals = new Map<ResourceConstant, number>(), cycles = new Map<Recipe, number>()
+    const cargo: Partial<Record<ResourceConstant, number>> = {}
+    for (const creep of carriers(room)) {
+        if (creep.room?.name !== room.name || creep.memory.factoryLogistics?.targetId !== factory.id) continue
+        for (const resource of Object.keys(creep.store) as ResourceConstant[])
+            cargo[resource] = (cargo[resource] || 0) + (creep.store[resource] || 0)
+    }
+    const stock: PlanningStock = {
+        capacity: factory.store.getCapacity() || 0,
+        local(resource) {
+            if (!amounts.has(resource)) amounts.set(resource, (room.storage?.store[resource] || 0) +
+                getTerminalResourceAmount(room, resource) + factoryAmount(factory, resource) + (cargo[resource] || 0))
+            return amounts.get(resource)!
+        },
+        available(resource) {
+            if (!available.has(resource)) {
+                const keep = resource === RESOURCE_ENERGY ? resourcePolicy.terminalEnergyReserve :
+                    warehouse ? 0 : Math.max(ordinaryResourceKeep(resource), room.memory.boostNeed?.[resource] || 0)
+                available.set(resource, Math.max(0, stock.local(resource) - keep -
+                    (room.memory.productionReserve?.lab?.[resource] || 0) - getOutgoingResourceAmount(room.name, resource)))
+            }
+            return available.get(resource)!
+        },
+        global(resource) {
+            if (!globals.has(resource)) globals.set(resource, getGlobalResourceAmount(resource))
+            return globals.get(resource)!
+        },
+        cycles(recipe) {
+            if (!cycles.has(recipe)) cycles.set(recipe, possibleCycles(factory, recipe, stock))
+            return cycles.get(recipe)!
+        },
+    }
+    return stock
+}
+
+function possibleCycles(factory: StructureFactory, recipe: Recipe, stock?: PlanningStock): number {
+    const capacity = stock?.capacity ?? (factory.store.getCapacity() || 0)
+    const data = parsedRecipe(recipe), inputAmount = data.inputAmount
     if (Math.max(inputAmount, recipe.amount) > capacity || inputAmount <= 0) return 0
-    const available = Math.min(...components(recipe).map(([resource, amount]) =>
-        Math.floor(availableIngredient(factory.room, resource) / amount)))
     const fit = Math.max(1, Math.floor((capacity - Math.max(outputHeadroom, recipe.amount)) / inputAmount))
-    return Math.max(0, Math.min(available, fit, maximumBatchCycles, Math.ceil(batchProductionTicks / recipe.cooldown)))
+    let result = Math.min(fit, maximumBatchCycles, Math.ceil(batchProductionTicks / recipe.cooldown))
+    for (const [resource, amount] of data.components) {
+        result = Math.min(result, Math.floor((stock ? stock.available(resource) : availableIngredient(factory.room, resource)) / amount))
+        if (result <= 0) return 0
+    }
+    return Math.max(0, result)
 }
 function commodityResources(): FactoryResource[] {
+    if (commodityTable !== COMMODITIES) {
+        commodityTable = COMMODITIES
+        commodities = undefined; commodityIntermediates = undefined
+        commoditiesByLevel.clear(); reserveByLevel.clear()
+    }
     if (commodities) return commodities
     const excluded = new Set<string>([RESOURCE_ENERGY, RESOURCE_BATTERY, RESOURCE_GHODIUM,
         ...basicMinerals, ...Object.values(compressedMinerals)])
     commodities = (Object.keys(COMMODITIES) as FactoryResource[]).filter(resource => !excluded.has(resource))
     return commodities
 }
-function chooseCommodity(factory: StructureFactory): FactoryResource | undefined {
-    return commodityResources().filter(resource => canProduceFactoryRecipe(factory, resource) &&
-        possibleCycles(factory, COMMODITIES[resource]) > 0).sort((a, b) =>
-        (COMMODITIES[b].level || 0) - (COMMODITIES[a].level || 0) ||
-        getGlobalResourceAmount(a) / COMMODITIES[a].amount - getGlobalResourceAmount(b) / COMMODITIES[b].amount ||
-        a.localeCompare(b))[0]
+function levelCommodities(level: number | undefined): readonly FactoryResource[] {
+    const resources = commodityResources(), key = level || 0, previous = commoditiesByLevel.get(key)
+    if (previous) return previous
+    const result = resources.filter(resource => !COMMODITIES[resource].level || COMMODITIES[resource].level === level)
+        .sort((a, b) => (COMMODITIES[b].level || 0) - (COMMODITIES[a].level || 0))
+    commoditiesByLevel.set(key, result)
+    return result
 }
-function makePlan(factory: StructureFactory, resource: FactoryResource, mode: FactoryProductionState['mode']): FactoryProductionState {
+function chooseCommodity(factory: StructureFactory, stock: PlanningStock): FactoryResource | undefined {
+    let selected: FactoryResource | undefined
+    for (const resource of levelCommodities(factory.level)) {
+        const recipe = COMMODITIES[resource]
+        if (selected && (COMMODITIES[selected].level || 0) > (recipe.level || 0)) break
+        if (!canProduceFactoryRecipe(factory, resource) || stock.cycles(recipe) <= 0) continue
+        if (!selected) { selected = resource; continue }
+        const difference = stock.global(resource) / recipe.amount - stock.global(selected) / COMMODITIES[selected].amount
+        if (difference < 0 || difference === 0 && resource.localeCompare(selected) < 0) selected = resource
+    }
+    return selected
+}
+function makePlan(factory: StructureFactory, resource: FactoryResource, mode: FactoryProductionState['mode'], stock: PlanningStock): FactoryProductionState {
     const recipe = COMMODITIES[resource]
-    const remaining = possibleCycles(factory, recipe)
+    const remaining = stock.cycles(recipe)
     return { resourceType: resource, mode, remaining, createdAt: Game.time,
         inputs: batchInputs(recipe, remaining) }
 }
-function updateReserve(factory: StructureFactory): void {
+function reserveComponents(level: number | undefined): readonly Component[] {
+    const resources = levelCommodities(level), key = level || 0, previous = reserveByLevel.get(key)
+    if (previous) return previous
+    const intermediates = commodityIntermediates || (commodityIntermediates =
+        new Set<string>([...commodityResources(), ...Object.values(compressedMinerals)]))
+    const amounts = new Map<ResourceConstant, number>()
+    for (const resource of resources) for (const [component, amount] of components(COMMODITIES[resource])) {
+        if (intermediates.has(component)) amounts.set(component, Math.max(amounts.get(component) || 0, amount))
+    }
+    const result = [...amounts] as Component[]
+    reserveByLevel.set(key, result)
+    return result
+}
+function updateReserve(factory: StructureFactory, stock?: PlanningStock): void {
     const room = factory.room, state = room.memory.factoryProduction
     const reserve: Record<string, number> = { ...state?.inputs }
     // Keep one batch of existing commodity precursors for this factory's next recipe,
     // including while its power effect is being refreshed. Export everything beyond it.
-    const intermediates = commodityIntermediates || (commodityIntermediates =
-        new Set<string>([...commodityResources(), ...Object.values(compressedMinerals)]))
-    for (const resource of commodityResources()) {
-        const recipe = COMMODITIES[resource]
-        if (!matchingLevel(factory, recipe)) continue
-        for (const [component, amount] of components(recipe)) if (intermediates.has(component))
-            reserve[component] = Math.max(reserve[component] || 0, Math.min(localAmount(room, component), amount))
-    }
+    for (const [component, amount] of reserveComponents(factory.level))
+        reserve[component] = Math.max(reserve[component] || 0, Math.min(stock ? stock.local(component) : localAmount(room, component), amount))
     room.memory.productionReserve ||= {}
     room.memory.productionReserve.factory = reserve
 }
@@ -154,24 +244,25 @@ export function planFactoryProduction(factory: StructureFactory): void {
         if (room.memory.productionReserve) delete room.memory.productionReserve.factory
         return
     }
+    const stock = planningStock(factory)
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||
-        possibleCycles(factory, COMMODITIES[state.resourceType]) === 0)) state = undefined
+        stock.cycles(COMMODITIES[state.resourceType]) === 0)) state = undefined
     // A newly available commodity preempts mineral compression immediately.
-    const commodity = !state || state.mode === 'compression' ? chooseCommodity(factory) : undefined
-    if (commodity) state = makePlan(factory, commodity, 'commodity')
+    const commodity = !state || state.mode === 'compression' ? chooseCommodity(factory, stock) : undefined
+    if (commodity) state = makePlan(factory, commodity, 'commodity', stock)
     if (!state) {
         const mineral = room.mineral?.mineralType
         const compressed = mineral && compressedMinerals[mineral] as FactoryResource | undefined
-        if (compressed && canProduceFactoryRecipe(factory, compressed) && possibleCycles(factory, COMMODITIES[compressed]) > 0)
-            state = makePlan(factory, compressed, 'compression')
+        if (compressed && canProduceFactoryRecipe(factory, compressed) && stock.cycles(COMMODITIES[compressed]) > 0)
+            state = makePlan(factory, compressed, 'compression', stock)
     }
     if (state) {
-        state.remaining = Math.min(state.remaining, possibleCycles(factory, COMMODITIES[state.resourceType]))
+        state.remaining = Math.min(state.remaining, stock.cycles(COMMODITIES[state.resourceType]))
         state.inputs = batchInputs(COMMODITIES[state.resourceType], state.remaining)
         room.memory.factoryProduction = state
     } else delete room.memory.factoryProduction
-    updateReserve(factory)
+    updateReserve(factory, stock)
 }
 
 export function runFactoryProduction(factory: StructureFactory): void {

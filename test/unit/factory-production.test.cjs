@@ -93,6 +93,111 @@ function world(options = {}) {
     return { production, loader, room, factory, storage, terminal, game, actions, creep, nextTick };
 }
 
+function measuredPlanning(available = true) {
+    const w = world({ storage: { energy: 100000, shared: available ? 1000 : 0, utrium_bar: 100 } });
+    const metrics = { components: 0, ingredientReads: 0, globalReads: 0, capacityReads: 0 };
+    const catalog = {};
+    for (let index = 0; index < 25; index++) catalog[`commodity${String(index).padStart(2, '0')}`] = {
+        amount: 20, cooldown: 10, components: new Proxy({ shared: 10, energy: 20, utrium_bar: 2 }, {
+            ownKeys(target) { metrics.components++; return Reflect.ownKeys(target); },
+        }),
+    };
+    w.loader.globals.COMMODITIES = catalog;
+    for (const object of [w.storage, w.terminal, w.factory]) object.store = new Proxy(object.store, {
+        get(target, key) {
+            if (['shared', 'energy', 'utrium_bar'].includes(key)) metrics.ingredientReads++;
+            if (typeof key === 'string' && key.startsWith('commodity')) metrics.globalReads++;
+            if (object === w.factory && key === 'getCapacity') metrics.capacityReads++;
+            return target[key];
+        },
+    });
+    return { ...w, metrics, resetMetrics() { for (const key in metrics) metrics[key] = 0; } };
+}
+
+test('factory planning parses static recipes once and reads each shared ingredient and global candidate only once per pass', () => {
+    const w = measuredPlanning();
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'commodity00', 'equal global stock keeps the original lexical tie break');
+    assert.deepEqual(w.metrics, { components: 25, ingredientReads: 9, globalReads: 75, capacityReads: 1 });
+    w.resetMetrics(); w.game.time++;
+    w.production.planFactoryProduction(w.factory);
+    assert.deepEqual(w.metrics, { components: 0, ingredientReads: 9, globalReads: 0, capacityReads: 1 }, 'a stable batch retains its recipe without scanning candidates');
+});
+
+test('an unavailable shared reagent short-circuits factory candidates while keeping precursor reserves current', () => {
+    const w = measuredPlanning(false);
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 2);
+    assert.deepEqual(w.metrics, { components: 25, ingredientReads: 6, globalReads: 0, capacityReads: 1 });
+    w.resetMetrics(); w.game.time++;
+    w.production.planFactoryProduction(w.factory);
+    assert.deepEqual(w.metrics, { components: 0, ingredientReads: 6, globalReads: 0, capacityReads: 1 });
+    w.storage.store.utrium_bar = 1;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 1, 'cached requirements never cache actual inventory');
+});
+
+test('factory recipe tables and changed component objects refresh both batch inputs and precursor requirements', () => {
+    const w = world({ storage: { energy: 100000, silicon: 100, utrium_bar: 100, keanium_bar: 100 } });
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'wire');
+    const changed = { ...recipes, wire: { ...recipes.wire, components: { silicon: 30, utrium_bar: 50, energy: 40 } } };
+    w.loader.globals.COMMODITIES = changed;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.inputs.utrium_bar, 50);
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 50);
+    changed.wire.components = { silicon: 10, utrium_bar: 20, energy: 40 };
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.inputs.utrium_bar, 20);
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 20);
+    w.storage.store.mist = 100;
+    w.loader.globals.COMMODITIES = { condensate: recipes.condensate };
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'condensate');
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, undefined);
+});
+
+test('factory selection preserves higher-level preference then minimum global stock per produced unit', () => {
+    for (const [switchAmount, compositeAmount, expected] of [[50, 20, 'composite'], [5, 40, 'switch'], [5, 20, 'composite']]) {
+        const w = world({ level: 1, effects: [{ effect: 19, level: 1, ticksRemaining: 20 }], storage: {
+            energy: 100000, silicon: 1000, wire: 80, oxidant: 80, utrium_bar: 400, zynthium_bar: 400,
+            switch: switchAmount, composite: compositeAmount,
+        } });
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.resourceType, expected);
+        assert.equal(w.room.memory.factoryProduction.mode, 'commodity');
+    }
+});
+
+test('separate same-tick factory planning calls observe new lab, boost and outgoing reservations', () => {
+    const outgoing = {}, w = world({ outgoing, storage: { energy: 100000, silicon: 1000, utrium_bar: 1000 } });
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'wire');
+    w.room.memory.productionReserve.lab = { utrium_bar: 1000 };
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    w.room.memory.productionReserve.lab = {};
+    w.room.memory.boostNeed.utrium_bar = 1000;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    w.room.memory.boostNeed.utrium_bar = 0; outgoing.utrium_bar = 1000;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    outgoing.utrium_bar = 0;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'wire');
+});
+
+test('factory reserve refresh after successful production excludes ingredients consumed by its pending native intent', () => {
+    const w = world({ storage: { energy: 100000 }, factory: { silicon: 20, utrium_bar: 100, energy: 40 } });
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 100);
+    w.production.runFactoryProduction(w.factory);
+    assert.equal(w.factory.store.utrium_bar, 100, 'native stores still contain pre-intent stock');
+    assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 0, 'reservation already observes scheduled consumption');
+});
+
 test('factory prioritizes a locally feasible commodity over compression and immediately preempts compression', () => {
     const w = world({ storage: { energy: 100000, U: 15000 } });
     w.production.planFactoryProduction(w.factory);

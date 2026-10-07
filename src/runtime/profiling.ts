@@ -24,6 +24,7 @@ interface CpuProfileAggregate {
     max: number
     ema: number
     lastTick: number
+    lastAccess: number
     rollingTotal: number
     samples: number[]
     observed: number[]
@@ -39,6 +40,7 @@ export interface CpuProfileWindow {
 
 // 只保存有界的每 tick 合计环形数组，不写 Memory，不保存逐次调用样本。
 const aggregates = new Map<string, CpuProfileAggregate>()
+let accessSequence = 0
 let windowSize = 0
 let windowStart: number | undefined
 let windowEnd: number | undefined
@@ -101,15 +103,22 @@ export function recordCpuSample(name: string, used: number): void {
     advanceWindow(true)
     if (windowEnd == undefined) return
     const previous = aggregates.get(name)
-    aggregates.delete(name)
-    // Map 更新顺序作为最近使用顺序；新增/降低容量时淘汰最久未更新的项。
-    while (aggregates.size >= maximumEntries) aggregates.delete(aggregates.keys().next().value!)
     const alpha = Math.max(0, Math.min(1, policy.emaAlpha))
     const aggregate: CpuProfileAggregate = previous || {
         name,
-        count: 0, total: 0, max: 0, ema: used, lastTick: Game.time,
+        count: 0, total: 0, max: 0, ema: used, lastTick: Game.time, lastAccess: 0,
         rollingTotal: 0, samples: new Array<number>(windowSize).fill(0),
         observed: new Array<number>(windowSize).fill(0),
+    }
+    aggregate.lastAccess = ++accessSequence
+    if (previous == undefined) aggregates.set(name, aggregate)
+    // Repeated roles update in place; scan the bounded directory only for a new
+    // label at capacity or a lowered cap. Sequence order preserves same-tick LRU.
+    while (aggregates.size > maximumEntries) {
+        let oldest: CpuProfileAggregate | undefined
+        for (const candidate of aggregates.values())
+            if (oldest == undefined || candidate.lastAccess < oldest.lastAccess) oldest = candidate
+        aggregates.delete(oldest!.name)
     }
     // 复用常见模块与角色的聚合对象，减少每 tick 数百次临时分配。
     aggregate.count++
@@ -120,7 +129,6 @@ export function recordCpuSample(name: string, used: number): void {
     aggregate.rollingTotal += used
     aggregate.samples[windowSlot] += used
     aggregate.observed[windowSlot] = 1
-    aggregates.set(name, aggregate)
 }
 
 /** 关闭时直接执行任务，不读取 CPU；失败任务仍计入聚合并保留原异常。 */
@@ -202,6 +210,7 @@ export function finishCpuProfilingTick(): void {
 
 export function resetCpuProfile(): void {
     aggregates.clear()
+    accessSequence = 0
     windowSize = 0; windowStart = undefined; windowEnd = undefined; windowShard = undefined
     windowSlot = 0; lastLogTick = undefined
 }

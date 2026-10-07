@@ -158,3 +158,94 @@ test('resource job indexes scan each existing job once, regardless of the number
     assert.equal(reads, 100, 'one read per job for the shared incoming/outgoing indexes');
     assert.equal(w.getIncomingResourceAmount(target.name, 'r39'), 100);
 });
+
+test('a fulfilled production request never scans donor inventories', () => {
+    const w = world(1), target = w.room('target', { XUH2O: 20000 });
+    const donor = w.room('warehouse', { XUH2O: 100000 }, { warehouse: true });
+    let reads = 0;
+    donor.labs = [{ store: new Proxy({}, { get() { reads++; return 0; } }) }];
+    for (let i = 0; i < 20; i++) assert.equal(w.requestRoomResource(target, 'XUH2O', 20000), 0);
+    assert.equal(reads, 0);
+    assert.deepEqual(donor.memory.terminalSendJob, {});
+});
+
+test('global balancing reads each room/resource inventory once and preserves ordinary floors', () => {
+    const w = world(), required = [...w.t3Resources, ...w.basicMinerals, 'G', 'ops', 'power'];
+    const ordinary = Array.from({ length: 8 }, (_, i) => w.room('ordinary' + i,
+        Object.fromEntries(required.map(resource => [resource, w.ordinaryResourceTarget(resource)]))));
+    const warehouses = Array.from({ length: 3 }, (_, i) => w.room('warehouse' + i,
+        i === 0 ? Object.fromEntries(required.map(resource => [resource, 60000])) : {}, { warehouse: true }));
+    const reads = new Map();
+    for (const room of [...ordinary, ...warehouses]) room.labs = Array.from({ length: 10 }, (_, i) => ({
+        store: new Proxy({}, { get(_, resource) {
+            const key = room.name + ':' + i + ':' + String(resource);
+            reads.set(key, (reads.get(key) || 0) + 1); return 0;
+        } }),
+    }));
+    w.planResourceDistribution();
+    assert.equal(Math.max(...reads.values()), 1, 'sorting and queuing must reuse this pass\'s stock snapshot');
+    assert.ok(reads.size <= 11 * 10 * (required.length + 1));
+    for (const room of ordinary) for (const resource of required)
+        assert.equal(w.getIncomingResourceAmount(room.name, resource), 0, room.name + ':' + resource);
+    for (const room of warehouses) for (const resource of required)
+        assert.equal(w.projectedResource(room, resource), 20000, room.name + ':' + resource);
+});
+
+test('the planning snapshot deducts new promises before refilling the next room', () => {
+    const w = world(), donor = w.room('warehouse', { XUH2O: 25000 }, { warehouse: true });
+    const a = w.room('a'), b = w.room('b');
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(a.name, 'XUH2O'), 20000);
+    assert.equal(w.getIncomingResourceAmount(b.name, 'XUH2O'), 5000);
+    assert.equal(w.getOutgoingResourceAmount(donor.name, 'XUH2O'), 25000);
+});
+
+test('the planning snapshot shares headroom across resources and does not persist outside the pass', () => {
+    const w = world(), donor = w.room('warehouse', { XUH2O: 10000, XUHO2: 10000 }, { warehouse: true });
+    const target = w.room('target');
+    target.storage.store = store({}, 1000);
+    target.terminal.store = store({ energy: 50000 }, 60000);
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'XUH2O'), 1000);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'XUHO2'), 0);
+    assert.equal(Object.values(donor.memory.terminalSendJob).reduce((total, job) => total + job.amount, 0), 1000);
+
+    for (const id of Object.keys(donor.memory.terminalSendJob)) w.updateResourceJob(donor, id);
+    donor.storage.store.XUH2O = 0; donor.terminal.store.XUH2O = 4000;
+    w.recordTerminalWithdrawal(donor, 'XUH2O', 1000);
+    donor.memory.boostNeed.XUH2O = 4000;
+    assert.equal(w.getAvailableResource(donor, 'XUH2O'), 0, 'new boost reservations are read in the same tick');
+    donor.memory.boostNeed.XUH2O = 0;
+    assert.equal(w.getAvailableResource(donor, 'XUH2O'), 3000, 'new stock and accepted withdrawals are read in the same tick');
+    donor.memory.productionReserve = { lab: { XUH2O: 2000 } };
+    assert.equal(w.getAvailableResource(donor, 'XUH2O'), 2000);
+    w.recordResourceSend(donor, 'external', 'XUH2O', 1000, 100);
+    assert.equal(w.getRoomResourceAmount(donor, 'XUH2O'), 3000);
+    assert.equal(w.getAvailableResource(donor, 'XUH2O'), 1000);
+});
+
+test('full affordable shipments avoid repeated transaction-cost searches during cooldown and dispatch', () => {
+    const w = world(1), donor = w.room('donor', { H: 200000 }, { cooldown: 1, terminal: { energy: 60000, H: 100000 } });
+    donor.memory.terminalSendJob.a = { targetRoom: 'external', resourceType: 'H', amount: 100000 };
+    let queries = 0;
+    w.game.market.calcTransactionCost = amount => { queries++; return Math.ceil(amount * 0.1); };
+    w.processTerminalResource(donor);
+    assert.equal(queries, 2, 'one capacity/fuel check plus the staged fee');
+    assert.equal(donor.memory.terminalAmount.H, 100000);
+    assert.equal(donor.memory.terminalAmount.energy, 60000);
+    donor.terminal.cooldown = 0; queries = 0;
+    w.processTerminalResource(donor);
+    assert.equal(queries, 5, 'staging and dispatch do not binary-search a full affordable batch');
+    assert.deepEqual(w.sends, [{ from: 'donor', resource: 'H', amount: 100000, target: 'external' }]);
+    assert.equal(w.getTerminalResourceAmount(donor, 'energy'), 50000);
+});
+
+test('partial shipment searches still find the largest integer allowed by fuel and terminal capacity', () => {
+    const w = world(1), donor = w.room('donor', { H: 200000 }, { terminalCapacity: 150000 });
+    donor.memory.terminalSendJob.a = { targetRoom: 'external', resourceType: 'H', amount: 100000 };
+    w.processTerminalResource(donor);
+    assert.equal(donor.memory.terminalAmount.H, 81818, '50k energy + 8182 fee + 81818 cargo + 10k headroom');
+    assert.equal(donor.memory.terminalAmount.energy, 58182);
+    assert.equal(w.affordableSendAmount(donor, 'H', 'external', 100000, 54321), 43210);
+    assert.equal(w.affordableSendAmount(donor, 'energy', 'external', 100000, 54321), 3928);
+});

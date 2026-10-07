@@ -20,6 +20,7 @@ export function resourceTransactionCost(room: Room, target: string, amount: numb
 export function affordableSendAmount(room: Room, resource: ResourceConstant, target: string, maximum: number, energy: number): number {
     let low = 0, high = Math.max(0, Math.floor(maximum))
     const budget = Math.max(0, energy - resourcePolicy.terminalEnergyReserve)
+    if (high > 0 && resourceTransactionCost(room, target, high) + (resource === 'energy' ? high : 0) <= budget) return high
     while (low < high) {
         const middle = Math.ceil((low + high) / 2)
         const cost = resourceTransactionCost(room, target, middle) + (resource === 'energy' ? middle : 0)
@@ -43,11 +44,16 @@ function readyBatch(room: Room, job: ResourceJob, target?: Room): number {
     if (target?.terminal) maximum = Math.min(maximum, getEvacuationIncomingCapacity(target))
     let low = 0, high = Math.max(0, Math.floor(maximum))
     const roomEnergy = (room.storage?.store.energy || 0) + getTerminalResourceAmount(room, 'energy')
+    const fits = (amount: number): boolean => {
+        const fee = resourceTransactionCost(room, job.targetRoom, amount)
+        const energy = resourcePolicy.terminalEnergyReserve + fee + (job.resourceType === 'energy' ? amount : 0)
+        const used = energy + (job.resourceType === 'energy' ? 0 : amount) + resourcePolicy.terminalFreeReserve
+        return used <= capacity && energy <= roomEnergy
+    }
+    if (high > 0 && fits(high)) return high
     while (low < high) {
-        const middle = Math.ceil((low + high) / 2), fee = resourceTransactionCost(room, job.targetRoom, middle)
-        const energy = resourcePolicy.terminalEnergyReserve + fee + (job.resourceType === 'energy' ? middle : 0)
-        const used = energy + (job.resourceType === 'energy' ? 0 : middle) + resourcePolicy.terminalFreeReserve
-        if (used <= capacity && energy <= roomEnergy) low = middle
+        const middle = Math.ceil((low + high) / 2)
+        if (fits(middle)) low = middle
         else high = middle - 1
     }
     return low

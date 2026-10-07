@@ -2,14 +2,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
-function world() {
+function world(extraGlobals = {}) {
     let used = 0, reads = 0;
     const logs = [];
     const logger = { failCpu: false };
     const game = { time: 1, shard: { name: 'shard3' }, cpu: {
         getUsed() { reads++; return used; },
     } };
-    const loader = createSourceLoader({ globals: { Game: game, console: {
+    const loader = createSourceLoader({ globals: { ...extraGlobals, Game: game, console: {
         log(message) {
             if (logger.failCpu && String(message).startsWith('[CPU]')) throw new Error('CPU logger unavailable');
             logs.push(String(message));
@@ -176,6 +176,41 @@ test('already measured detail samples share the window without extra CPU reads a
     w.api.finishCpuProfilingTick();
     assert.equal(w.reads(), 0); assert.equal(w.entry('role:builder').current, 4);
     assert.equal(w.entry('role:builder').rollingMax, 4); assert.equal(w.entry('invalid'), undefined);
+});
+
+test('6300 same-role samples update in place without Map reordering or losing any tick observation', () => {
+    const operations = { set: 0, delete: 0 };
+    class SampleMap extends Map {
+        set(key, value) { operations.set++; return super.set(key, value); }
+        delete(key) { operations.delete++; return super.delete(key); }
+    }
+    const w = world({ Map: SampleMap });
+    for (let tick = 1; tick <= 100; tick++) {
+        w.tick(tick);
+        for (let creep = 0; creep < 63; creep++) w.api.recordCpuSample('creep:filler', 0.25);
+    }
+    assert.deepEqual(operations, { set: 1, delete: 0 }, 'only initial label registration mutates Map membership');
+    const entry = w.entry('creep:filler');
+    assert.equal(entry.count, 6300); assert.equal(entry.total, 1575);
+    assert.equal(entry.max, 0.25); assert.equal(entry.ema, 0.25);
+    assert.equal(entry.current, 15.75); assert.equal(entry.rollingMax, 15.75);
+    assert.equal(entry.rollingAverage, 15.75); assert.equal(entry.sampledAverage, 15.75);
+    assert.equal(entry.windowTicks, 100); assert.equal(entry.sampledTicks, 100);
+    assert.equal(w.reads(), 0, 'already measured role samples add no native CPU reads');
+});
+
+test('same-tick LRU uses each access and a lowered cap retains the sampled existing label', () => {
+    const w = world(); w.policy.maximumEntries = 2; w.policy.emaAlpha = 0.5;
+    for (const [name, amount] of [['a', 1], ['b', 2], ['a', 3], ['c', 4]]) w.api.recordCpuSample(name, amount);
+    assert.deepEqual(Array.from(w.api.getCpuProfile(100), entry => entry.name).sort(), ['a', 'c']);
+    assert.equal(w.entry('a').count, 2); assert.equal(w.entry('a').total, 4); assert.equal(w.entry('a').ema, 2);
+    w.policy.maximumEntries = 1;
+    w.api.recordCpuSample('a', 5);
+    assert.deepEqual(Array.from(w.api.getCpuProfile(100), entry => entry.name), ['a']);
+    assert.equal(w.entry('a').count, 3); assert.equal(w.entry('a').total, 9); assert.equal(w.entry('a').ema, 3.5);
+    w.api.recordCpuSample('b', 7);
+    assert.equal(w.entry('a'), undefined);
+    assert.equal(w.entry('b').count, 1); assert.equal(w.entry('b').current, 7, 'evicted labels cannot resurrect their old samples');
 });
 
 test('window storage follows aggregation eviction and reset without resurrecting evicted module samples', () => {
