@@ -73,11 +73,22 @@ export default class LabExtension extends StructureLab {
             }
         }
         const capacity = this.store.getFreeCapacity(product)
+        const plan = config.productionPlan
         if (lab1.store[firstType] < amount || lab2.store[secondType] < amount ||
-            capacity === null || capacity < amount || config.reactionAmount !== undefined && config.reactionAmount < amount) return
+            capacity === null || capacity < amount || config.reactionAmount !== undefined && config.reactionAmount < amount ||
+            plan !== undefined && plan.target === product && plan.remaining !== undefined && plan.remaining < amount) return
 
         const result = this.runReaction(lab1, lab2)
-        if (config.reactionAmount !== undefined && result === OK) config.reactionAmount -= amount
+        if (result !== OK) return
+        if (config.reactionAmount !== undefined) config.reactionAmount -= amount
+        if (plan !== undefined && plan.target === product && plan.remaining !== undefined) {
+            plan.remaining -= amount
+            if (plan.remaining === 0) {
+                config.labReactionConfig = undefined
+                config.reactionAmount = 0
+                if (this.room.memory.productionReserve) delete this.room.memory.productionReserve.lab
+            }
+        }
     }
 
     private labInJobExists(): boolean {

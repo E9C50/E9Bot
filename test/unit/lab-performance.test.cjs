@@ -123,6 +123,37 @@ test('batch quotas debit operated Lab consumption only on successful reactions',
     lab.doWork(); assert.equal(reactions, 2, 'a remaining five units cannot fund another operated 15-unit reaction');
 });
 
+test('final batch remaining only counts successful target output and bounds pending intents across Labs', () => {
+    const state = world(), room = state.createRoom('W1N1');
+    state.game.getObjectById = id => id === 'lab0' ? reagent('A') : reagent('B');
+    room.memory.productionReserve = { lab: { A: 100 }, factory: { B: 20 } };
+    room.memory.roomLabConfig.productionPlan = { target: 'other', targetAmount: 20, local: false, remaining: 20 };
+    room.memory.roomLabConfig.reactionAmount = 100;
+    const output = state.createLab(room, 'output'); output.cooldown = 0;
+    output.runReaction = () => 0;
+    output.doWork();
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 20, 'intermediate reactions do not debit the final batch');
+    room.memory.roomLabConfig.productionPlan.target = 'product';
+    output.effects = [{ effect: 5, level: 5, ticksRemaining: 100 }];
+    output.runReaction = () => -6;
+    output.doWork();
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 20);
+    output.runReaction = () => 0;
+    output.doWork();
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 5, 'native operated amount is 15');
+    let reactions = 0;
+    for (let index = 0; index < 8; index++) {
+        const lab = state.createLab(room, `final-${index}`); lab.cooldown = 0;
+        lab.runReaction = () => { reactions++; return 0; };
+        lab.doWork();
+    }
+    assert.equal(reactions, 1, 'another output cannot spend already accepted final-product intents');
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 0);
+    assert.equal(room.memory.roomLabConfig.labReactionConfig, undefined);
+    assert.equal(room.memory.productionReserve.lab, undefined);
+    assert.equal(room.memory.productionReserve.factory.B, 20);
+});
+
 test('eleven ten-lab rooms resolve each reaction pair once while preserving all output intents', () => {
     const state = world(), objects = {}, outputs = [];
     let lookups = 0, reactions = 0;

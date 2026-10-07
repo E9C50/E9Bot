@@ -217,6 +217,14 @@ function pendingAmount(room: Room, resource: ResourceConstant, direction: 'fill'
         return sum + (matches ? task.amount : 0)
     }, transferIntent)
 }
+function factoryReceivingCapacity(factory: StructureFactory, except: string): number {
+    const transferred = transferTick === Game.time ? Object.values(delivered.get(factory.id) || {}).reduce((sum, amount) => sum + amount, 0) : 0
+    const pending = carriers(factory.room).reduce((sum, creep) => {
+        const task = creep.memory.factoryLogistics
+        return sum + (creep.name !== except && task?.targetId === factory.id ? task.amount : 0)
+    }, transferred)
+    return Math.max(0, factory.store.getFreeCapacity() - pending)
+}
 function destination(creep: Creep, stationary: boolean): Stock | undefined {
     return stocks(creep.room).reverse().find(stock => receivingCapacity(creep.room, stock) > 0 && (!stationary || near(creep, stock)))
 }
@@ -241,7 +249,10 @@ function executeTask(creep: Creep, stationary: boolean): boolean {
     }
     const held = creep.store[task.resourceType] || 0
     if (held <= 0) { delete creep.memory.factoryLogistics; creep.memory.working = false; return false }
-    const amount = Math.min(held, receivingCapacity(creep.room, target as Stock | StructureFactory), task.amount)
+    const capacity = target.id === task.factoryId
+        ? factoryReceivingCapacity(target as StructureFactory, creep.name)
+        : receivingCapacity(creep.room, target as Stock | StructureFactory)
+    const amount = Math.min(held, capacity, task.amount)
     if (amount <= 0) { delete creep.memory.factoryLogistics; return false }
     if (creep.transfer(target, task.resourceType, amount) === OK) {
         if (target.structureType === STRUCTURE_TERMINAL) reserveEvacuationIncoming(creep.room, amount)
@@ -275,25 +286,36 @@ export function runFactoryLogistics(creep: Creep, stationary = false): boolean {
     }
     if (creep.store.getUsedCapacity() > 0 || stationary && !near(creep, factory)) return false
     const state = room.memory.factoryProduction, inputs = state?.inputs || {}
-    const deposit = destination(creep, stationary)
-    // Clear finished goods and obsolete ingredients before filling a new batch.
-    if (deposit) for (const resource of Object.keys(factory.store) as ResourceConstant[]) {
-        const amount = Math.min(creep.store.getFreeCapacity(), receivingCapacity(room, deposit),
-            factoryAmount(factory, resource) - (inputs[resource] || 0) - pendingAmount(room, resource, 'drain', creep.name))
-        if (amount <= 0) continue
-        creep.memory.factoryLogistics = { factoryId: factory.id, sourceId: factory.id, targetId: deposit.id,
-            resourceType: resource, amount, phase: 'withdraw' }
-        return executeTask(creep, stationary)
-    }
-    if (!state || factory.store.getFreeCapacity() <= 0) return false
-    for (const resource of Object.keys(inputs) as ResourceConstant[]) {
-        const deficit = inputs[resource] - factoryAmount(factory, resource) - pendingAmount(room, resource, 'fill', creep.name)
+    const recipe = state && COMMODITIES[state.resourceType]
+    const needed = (Object.keys(inputs) as ResourceConstant[]).map(resource => {
+        const current = factoryAmount(factory, resource) + pendingAmount(room, resource, 'fill', creep.name)
+        return { resource, deficit: inputs[resource] - current,
+            nextCycle: Math.max(0, Math.min(inputs[resource], recipe?.components[resource] || 0) - current) }
+    })
+    const nextCycleCapacity = needed.reduce((sum, item) => sum + item.nextCycle, 0)
+    const capacity = factoryReceivingCapacity(factory, creep.name)
+    // Complete one reaction before filling the rest of the batch. Extra fuel already
+    // in the factory can be used immediately instead of being hauled out first.
+    for (const { resource, deficit, nextCycle } of needed.sort((a, b) => Number(b.nextCycle > 0) - Number(a.nextCycle > 0))) {
         if (deficit <= 0) continue
         const stock = stocks(room).find(item => sourceAmount(room, item, resource) > 0 && (!stationary || near(creep, item)))
         if (!stock) continue
-        const amount = Math.min(deficit, sourceAmount(room, stock, resource), creep.store.getFreeCapacity(), factory.store.getFreeCapacity())
+        const otherInputs = nextCycleCapacity - nextCycle
+        const amount = Math.min(deficit, sourceAmount(room, stock, resource), creep.store.getFreeCapacity(), capacity - otherInputs)
         if (amount <= 0) continue
         creep.memory.factoryLogistics = { factoryId: factory.id, sourceId: stock.id, targetId: factory.id,
+            resourceType: resource, amount, phase: 'withdraw' }
+        return executeTask(creep, stationary)
+    }
+    const deposit = destination(creep, stationary)
+    if (deposit) for (const resource of Object.keys(factory.store) as ResourceConstant[]) {
+        // Drain finished goods and obsolete inputs normally, but keep useful excess
+        // components unless they occupy capacity needed by the next reaction.
+        const excessLimit = inputs[resource] ? Math.max(0, nextCycleCapacity - capacity) : Infinity
+        const amount = Math.min(creep.store.getFreeCapacity(), receivingCapacity(room, deposit), excessLimit,
+            factoryAmount(factory, resource) - (inputs[resource] || 0) - pendingAmount(room, resource, 'drain', creep.name))
+        if (amount <= 0) continue
+        creep.memory.factoryLogistics = { factoryId: factory.id, sourceId: factory.id, targetId: deposit.id,
             resourceType: resource, amount, phase: 'withdraw' }
         return executeTask(creep, stationary)
     }

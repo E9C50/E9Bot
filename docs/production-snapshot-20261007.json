@@ -1,0 +1,4626 @@
+{
+  "capturedAt": "2026-10-07T11:48:59.681Z",
+  "shard": "shard3",
+  "tick": 83488027,
+  "cpu": {
+    "bucket": 403,
+    "limit": 20,
+    "used": 17.137441100000615
+  },
+  "version": {
+    "branch": "default",
+    "configuredBranch": "default",
+    "activeWorld": true,
+    "onlineHash": "8bfba4b4636093810d624bd6d4fb1969b1c74f78a25be840a0ce6ee14a5e59fa",
+    "localHash": "8bfba4b4636093810d624bd6d4fb1969b1c74f78a25be840a0ce6ee14a5e59fa",
+    "matchesLocal": true,
+    "markers": {
+      "productionReserve": true,
+      "factoryProduction": true,
+      "reactionAmount": true,
+      "terminalEnergyReserve": false
+    }
+  },
+  "rooms": [
+    {
+      "name": "E35N1",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb631d867df5e542075e8",
+          "type": "mineral",
+          "x": 12,
+          "y": 39,
+          "mineralType": "L",
+          "mineralAmount": 60180
+        },
+        {
+          "id": "67654caf0d069eb00787ba0d",
+          "type": "storage",
+          "x": 37,
+          "y": 29,
+          "store": {
+            "energy": 371893,
+            "X": 13000,
+            "LO": 10949,
+            "L": 10000,
+            "OH": 11325,
+            "UHO2": 10000,
+            "LHO2": 11960,
+            "H": 8970,
+            "UH2O": 10880,
+            "UH": 11078,
+            "UO": 10000,
+            "KH": 10000,
+            "ZH": 10069,
+            "GO": 10665,
+            "KO": 11462,
+            "GHO2": 11850,
+            "KH2O": 10000,
+            "KHO2": 11020,
+            "LH2O": 10600,
+            "ZO": 10000,
+            "XGHO2": 20000,
+            "XLHO2": 20000,
+            "XKHO2": 20000,
+            "XZHO2": 20000,
+            "G": 10000,
+            "XKH2O": 20000,
+            "XUH2O": 20000,
+            "XGH2O": 20000,
+            "ops": 5000,
+            "K": 10000,
+            "GH": 11265,
+            "O": 10000,
+            "GH2O": 11160,
+            "U": 10000,
+            "Z": 10000,
+            "ZK": 10000,
+            "XLH2O": 20000,
+            "LH": 10000,
+            "ZHO2": 10000,
+            "UL": 10000,
+            "ZH2O": 10000,
+            "XZH2O": 20000,
+            "XUHO2": 20000
+          }
+        },
+        {
+          "id": "676fbe605634d4fba708e8a3",
+          "type": "terminal",
+          "x": 38,
+          "y": 30,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "6772d5a9705eb106f3f6b6f3",
+          "type": "lab",
+          "x": 39,
+          "y": 31,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6772db44a9fdd11b218e1818",
+          "type": "lab",
+          "x": 39,
+          "y": 32,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6772e38dffc55d6ec4c1ca6b",
+          "type": "lab",
+          "x": 40,
+          "y": 32,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67750918ed2535ca3b29607c",
+          "type": "factory",
+          "x": 39,
+          "y": 29,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "67750c6c561eb18cbb31ca66",
+          "type": "lab",
+          "x": 40,
+          "y": 30,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67751985022c605f35e72808",
+          "type": "lab",
+          "x": 41,
+          "y": 31,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67751a5ab2decb5788a6a85c",
+          "type": "lab",
+          "x": 41,
+          "y": 30,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6779ce1da61d5d3e4c685188",
+          "type": "lab",
+          "x": 40,
+          "y": 33,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6779d0967464d83425b00276",
+          "type": "lab",
+          "x": 42,
+          "y": 31,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6779d9b719beb252760b3a44",
+          "type": "lab",
+          "x": 41,
+          "y": 33,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6779ef44e0f1def6bdb1e6dd",
+          "type": "lab",
+          "x": 42,
+          "y": 32,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "6772e38dffc55d6ec4c1ca6b",
+        "sourceLab2": "67751985022c605f35e72808",
+        "productionPlan": {
+          "target": "XZH2O",
+          "targetAmount": 25010,
+          "local": false
+        },
+        "reactionAmount": 5010,
+        "labReactionConfig": "XZH2O"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "ZH2O": 5010,
+          "X": 5010
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "6772e38dffc55d6ec4c1ca6b",
+            "resourceType": "ZH2O"
+          },
+          {
+            "labId": "67751985022c605f35e72808",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "extension": true
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "MANAGER_ACCF5BE4F7",
+          "x": 38,
+          "y": 29,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_ACCF5BE4F7",
+            "name": "E35N1_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E35N1",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 37,
+              "y": 28,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "PROCESSER_678DEF9DEF",
+          "x": 37,
+          "y": 28,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_678DEF9DEF",
+            "name": "E35N1_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": true,
+            "ready": false,
+            "spawnRoom": "E35N1",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 38,
+              "y": 27,
+              "time": 7
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_ACCF5BE4F7": {
+          "displayName": "MANAGER_ACCF5BE4F7",
+          "name": "E35N1_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E35N1",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_678DEF9DEF": {
+          "displayName": "PROCESSER_678DEF9DEF",
+          "name": "E35N1_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E35N1",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E35N3",
+      "level": 8,
+      "powerEnabled": true,
+      "structures": [
+        {
+          "id": "5bbcb631d867df5e542075e6",
+          "type": "mineral",
+          "x": 37,
+          "y": 26,
+          "mineralType": "K",
+          "mineralAmount": 3400,
+          "effects": {
+            "0": {
+              "effect": 14,
+              "power": 14,
+              "level": 2,
+              "endTime": 67223793
+            }
+          }
+        },
+        {
+          "id": "6766751ec75141f7a4f3cc1b",
+          "type": "storage",
+          "x": 11,
+          "y": 33,
+          "store": {
+            "energy": 397167,
+            "GO": 10855,
+            "UH": 10286,
+            "KO": 10828,
+            "ZH": 10736,
+            "K": 10000,
+            "XGHO2": 20000,
+            "XKHO2": 20000,
+            "XUH2O": 20000,
+            "XLHO2": 20000,
+            "XZHO2": 20000,
+            "XKH2O": 20000,
+            "XGH2O": 20000,
+            "G": 10000,
+            "XLH2O": 20000,
+            "ops": 5000,
+            "L": 9440,
+            "U": 10000,
+            "Z": 10000,
+            "H": 10000,
+            "O": 10000,
+            "ZK": 11275,
+            "UL": 10000,
+            "GH": 10000,
+            "OH": 10000,
+            "GH2O": 10000,
+            "X": 11095,
+            "UHO2": 10000,
+            "LHO2": 11070,
+            "UO": 10000,
+            "GHO2": 10000,
+            "KH2O": 10000,
+            "KHO2": 10000,
+            "UH2O": 10000,
+            "XUHO2": 20000,
+            "KH": 10000,
+            "LO": 10736,
+            "ZO": 10000,
+            "LH": 10000,
+            "XZH2O": 20000,
+            "LH2O": 10645,
+            "ZH2O": 10195,
+            "ZHO2": 12000
+          },
+          "effects": {
+            "0": {
+              "effect": 4,
+              "power": 4,
+              "level": 5,
+              "endTime": 67241451
+            }
+          }
+        },
+        {
+          "id": "676ca0fa8a672fee11d01ed3",
+          "type": "lab",
+          "x": 8,
+          "y": 34,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67229803
+            }
+          }
+        },
+        {
+          "id": "676d1609be3d3b4c13c6f5d0",
+          "type": "terminal",
+          "x": 12,
+          "y": 32,
+          "store": {
+            "energy": 50000
+          },
+          "effects": {
+            "0": {
+              "effect": 8,
+              "power": 8,
+              "level": 5,
+              "endTime": 67241752
+            }
+          }
+        },
+        {
+          "id": "676d42a2be3d3b4e49c7008a",
+          "type": "lab",
+          "x": 7,
+          "y": 34,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67229997
+            }
+          }
+        },
+        {
+          "id": "676d6559ffc55d3fdec0562b",
+          "type": "lab",
+          "x": 7,
+          "y": 35,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230065
+            }
+          }
+        },
+        {
+          "id": "677408ed7f00a955284c40ab",
+          "type": "lab",
+          "x": 9,
+          "y": 35,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230263
+            }
+          }
+        },
+        {
+          "id": "67740dfa022c603ceae6dbef",
+          "type": "factory",
+          "x": 10,
+          "y": 32,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "67740f7a8167692be7ebc41b",
+          "type": "lab",
+          "x": 9,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230342
+            }
+          }
+        },
+        {
+          "id": "67741517e37a5bcedc3cee6f",
+          "type": "lab",
+          "x": 8,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230392
+            }
+          }
+        },
+        {
+          "id": "6779d382349ff9c5ed658ddd",
+          "type": "lab",
+          "x": 8,
+          "y": 37,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230465
+            }
+          }
+        },
+        {
+          "id": "6779d6481726634545be84f0",
+          "type": "lab",
+          "x": 7,
+          "y": 37,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67229855
+            }
+          }
+        },
+        {
+          "id": "6779da013dfb156454d20f9e",
+          "type": "lab",
+          "x": 6,
+          "y": 35,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230123
+            }
+          }
+        },
+        {
+          "id": "6779e07390ce5e4a5ac71609",
+          "type": "lab",
+          "x": 6,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 67230193
+            }
+          }
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "676d6559ffc55d3fdec0562b",
+        "sourceLab2": "67741517e37a5bcedc3cee6f",
+        "productionPlan": {
+          "target": "XZH2O",
+          "targetAmount": 26055,
+          "local": false
+        },
+        "reactionAmount": 6055,
+        "labReactionConfig": "XZH2O"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "ZH2O": 6055,
+          "X": 6055
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "676d6559ffc55d3fdec0562b",
+            "resourceType": "ZH2O"
+          },
+          {
+            "labId": "67741517e37a5bcedc3cee6f",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "extension": false
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "MANAGER_D6CBA90267",
+          "x": 11,
+          "y": 32,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_D6CBA90267",
+            "name": "E35N3_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E35N3",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 12,
+              "y": 31,
+              "time": 125
+            }
+          }
+        },
+        {
+          "name": "PROCESSER_E28F00ADD7",
+          "x": 10,
+          "y": 33,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_E28F00ADD7",
+            "name": "E35N3_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E35N3",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 9,
+              "y": 34,
+              "time": 0
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_D6CBA90267": {
+          "displayName": "MANAGER_D6CBA90267",
+          "name": "E35N3_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E35N3",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_E28F00ADD7": {
+          "displayName": "PROCESSER_E28F00ADD7",
+          "name": "E35N3_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E35N3",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E36N2",
+      "level": 8,
+      "powerEnabled": true,
+      "structures": [
+        {
+          "id": "5bbcb638d867df5e5420762f",
+          "type": "mineral",
+          "x": 7,
+          "y": 42,
+          "mineralType": "U",
+          "mineralAmount": 0,
+          "effects": {
+            "0": {
+              "effect": 14,
+              "power": 14,
+              "level": 4,
+              "endTime": 83457647
+            }
+          }
+        },
+        {
+          "id": "67821e2ccafc6626db237507",
+          "type": "storage",
+          "x": 41,
+          "y": 16,
+          "store": {
+            "energy": 350673,
+            "L": 10530,
+            "UH": 11969,
+            "ZH": 11517,
+            "KO": 10835,
+            "ops": 3000,
+            "XLHO2": 20000,
+            "XZHO2": 22445,
+            "XKHO2": 20640,
+            "XGHO2": 20000,
+            "XGH2O": 20000,
+            "GO": 10190,
+            "G": 11290,
+            "XUH2O": 23040,
+            "U": 10000,
+            "XKH2O": 20080,
+            "XLH2O": 20000,
+            "X": 10000,
+            "K": 10000,
+            "H": 10000,
+            "GH": 10000,
+            "O": 10000,
+            "LO": 10580,
+            "OH": 10000,
+            "GH2O": 10591,
+            "Z": 10000,
+            "ZK": 10000,
+            "KH": 11355,
+            "LH": 10000,
+            "UO": 10000,
+            "UL": 10000,
+            "ZO": 10778,
+            "LH2O": 10000,
+            "ZHO2": 10000,
+            "ZH2O": 10000,
+            "GHO2": 10000,
+            "XZH2O": 20592,
+            "UH2O": 11420,
+            "LHO2": 10000,
+            "KHO2": 10000,
+            "KH2O": 10080,
+            "UHO2": 10000,
+            "XUHO2": 20000
+          },
+          "effects": {
+            "0": {
+              "effect": 4,
+              "power": 4,
+              "level": 4,
+              "endTime": 65992859
+            }
+          }
+        },
+        {
+          "id": "6783fd5319c6174c223b887d",
+          "type": "lab",
+          "x": 35,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230688
+            }
+          }
+        },
+        {
+          "id": "6783fe7e3dfb15330ed4c366",
+          "type": "lab",
+          "x": 34,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67229884
+            }
+          }
+        },
+        {
+          "id": "67840110829cf40510aa728a",
+          "type": "lab",
+          "x": 33,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67229941
+            }
+          }
+        },
+        {
+          "id": "67840295d7c33600d6024e78",
+          "type": "lab",
+          "x": 35,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67229993
+            }
+          }
+        },
+        {
+          "id": "67840463a73653ccf28249db",
+          "type": "lab",
+          "x": 33,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230053
+            }
+          }
+        },
+        {
+          "id": "67840547972f99653d7c499d",
+          "type": "lab",
+          "x": 34,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230105
+            }
+          }
+        },
+        {
+          "id": "6788dde60f0d6b67ded1b570",
+          "type": "terminal",
+          "x": 42,
+          "y": 17,
+          "store": {
+            "energy": 50406,
+            "XZHO2": 800
+          }
+        },
+        {
+          "id": "6788e45fd7c336a18e0397dc",
+          "type": "factory",
+          "x": 40,
+          "y": 17,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "6788f8df4a6443fd31c25969",
+          "type": "lab",
+          "x": 32,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230170
+            }
+          }
+        },
+        {
+          "id": "67890570be3d3b7034ce3b2d",
+          "type": "lab",
+          "x": 32,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230243
+            }
+          }
+        },
+        {
+          "id": "6789108b25ac609eb282ce73",
+          "type": "lab",
+          "x": 34,
+          "y": 24,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230294
+            }
+          }
+        },
+        {
+          "id": "678924f27c6744acc38a351a",
+          "type": "lab",
+          "x": 33,
+          "y": 24,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 4,
+              "endTime": 67230345
+            }
+          }
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "67840463a73653ccf28249db",
+        "sourceLab2": "67840547972f99653d7c499d",
+        "productionPlan": {
+          "target": "XUHO2",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XUHO2"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "UHO2": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "67840463a73653ccf28249db",
+            "resourceType": "UHO2"
+          },
+          {
+            "labId": "67840547972f99653d7c499d",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "extension": false
+      },
+      "terminalAmounts": {
+        "energy": 50406,
+        "XZHO2": 3245
+      },
+      "sendJobs": {
+        "auto_surplus_E36N2_E38N6_L": {
+          "targetRoom": "E38N6",
+          "resourceType": "L",
+          "amount": 530,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_XZHO2": {
+          "targetRoom": "E38N6",
+          "resourceType": "XZHO2",
+          "amount": 3245,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_XKHO2": {
+          "targetRoom": "E38N6",
+          "resourceType": "XKHO2",
+          "amount": 640,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_G": {
+          "targetRoom": "E38N6",
+          "resourceType": "G",
+          "amount": 1290,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_XUH2O": {
+          "targetRoom": "E38N6",
+          "resourceType": "XUH2O",
+          "amount": 3040,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_XKH2O": {
+          "targetRoom": "E38N6",
+          "resourceType": "XKH2O",
+          "amount": 80,
+          "kind": "surplus",
+          "createdAt": 83488020
+        },
+        "auto_surplus_E36N2_E38N6_XZH2O": {
+          "targetRoom": "E38N6",
+          "resourceType": "XZH2O",
+          "amount": 592,
+          "kind": "surplus",
+          "createdAt": 83488020
+        }
+      },
+      "workers": [
+        {
+          "name": "PROCESSER_CDDB3A13F1",
+          "x": 41,
+          "y": 15,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_CDDB3A13F1",
+            "name": "E36N2_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E36N2",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 41,
+              "y": 14,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "MANAGER_2B9E7B9B94",
+          "x": 43,
+          "y": 16,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_2B9E7B9B94",
+            "name": "E36N2_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E36N2",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_2B9E7B9B94": {
+          "displayName": "MANAGER_2B9E7B9B94",
+          "name": "E36N2_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E36N2",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_CDDB3A13F1": {
+          "displayName": "PROCESSER_CDDB3A13F1",
+          "name": "E36N2_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E36N2",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E34N3",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb62ad867df5e5420759e",
+          "type": "mineral",
+          "x": 17,
+          "y": 29,
+          "mineralType": "Z",
+          "mineralAmount": 13520
+        },
+        {
+          "id": "677f29a301d2d15f9bbce982",
+          "type": "storage",
+          "x": 18,
+          "y": 18,
+          "store": {
+            "energy": 367976,
+            "UH": 11551,
+            "ZH": 10000,
+            "KO": 11655,
+            "GO": 10285,
+            "L": 8295,
+            "XKH2O": 20000,
+            "XZHO2": 20000,
+            "Z": 10000,
+            "XGH2O": 20000,
+            "XUH2O": 20000,
+            "XLHO2": 20000,
+            "G": 10000,
+            "XKHO2": 20000,
+            "ops": 5000,
+            "XGHO2": 20000,
+            "K": 10000,
+            "H": 10000,
+            "ZK": 10930,
+            "GH": 10000,
+            "O": 10000,
+            "KH": 11250,
+            "OH": 11860,
+            "GH2O": 10000,
+            "LO": 10733,
+            "ZO": 10465,
+            "U": 10000,
+            "UO": 10000,
+            "UL": 11275,
+            "X": 10000,
+            "LH": 10995,
+            "XLH2O": 20000,
+            "LH2O": 10000,
+            "ZHO2": 10205,
+            "ZH2O": 10000,
+            "GHO2": 10000,
+            "XZH2O": 20000,
+            "UH2O": 10080,
+            "LHO2": 10000,
+            "KHO2": 10000,
+            "KH2O": 10000,
+            "UHO2": 10000,
+            "XUHO2": 20000,
+            "zynthium_bar": 80
+          }
+        },
+        {
+          "id": "678326e95634d4e7a00dd9ee",
+          "type": "terminal",
+          "x": 19,
+          "y": 19,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "678736e9a9fdd1d8ce939fc1",
+          "type": "lab",
+          "x": 14,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6787410a8f4a0af43adca791",
+          "type": "lab",
+          "x": 13,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678751a625ac601a4182587c",
+          "type": "lab",
+          "x": 15,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67875b61349ff95aa3692840",
+          "type": "lab",
+          "x": 13,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67875d4b4acb4c5405cf254f",
+          "type": "lab",
+          "x": 15,
+          "y": 24,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67876a173c7bf145a33521c6",
+          "type": "lab",
+          "x": 14,
+          "y": 24,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6787fb8dcafc6654a524f91a",
+          "type": "factory",
+          "x": 17,
+          "y": 19,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "67880793a20f757e86a42f76",
+          "type": "lab",
+          "x": 14,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67880fcd972f9943527d60e7",
+          "type": "lab",
+          "x": 15,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678810be8a672ff808d7aaea",
+          "type": "lab",
+          "x": 16,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6788395f67ffe7b6738008ee",
+          "type": "lab",
+          "x": 16,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "678736e9a9fdd1d8ce939fc1",
+        "sourceLab2": "678751a625ac601a4182587c",
+        "productionPlan": {
+          "target": "XZH2O",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XZH2O"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 20,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "ZH2O": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "678736e9a9fdd1d8ce939fc1",
+            "resourceType": "ZH2O"
+          },
+          {
+            "labId": "678751a625ac601a4182587c",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "extension": false
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "PROCESSER_164430BCE7",
+          "x": 20,
+          "y": 17,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_164430BCE7",
+            "name": "E34N3_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E34N3",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 20,
+              "y": 17,
+              "time": 1
+            }
+          }
+        },
+        {
+          "name": "MANAGER_C4506A3EA7",
+          "x": 18,
+          "y": 19,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_C4506A3EA7",
+            "name": "E34N3_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E34N3",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 19,
+              "y": 18,
+              "time": 0
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_C4506A3EA7": {
+          "displayName": "MANAGER_C4506A3EA7",
+          "name": "E34N3_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E34N3",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_164430BCE7": {
+          "displayName": "PROCESSER_164430BCE7",
+          "name": "E34N3_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E34N3",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E37N7",
+      "level": 8,
+      "powerEnabled": true,
+      "structures": [
+        {
+          "id": "5bbcb641d867df5e54207684",
+          "type": "mineral",
+          "x": 28,
+          "y": 18,
+          "mineralType": "X",
+          "mineralAmount": 0,
+          "effects": {
+            "0": {
+              "effect": 14,
+              "power": 14,
+              "level": 1,
+              "endTime": 83480599
+            }
+          }
+        },
+        {
+          "id": "678d8cac8189e4079b6c0ce9",
+          "type": "lab",
+          "x": 24,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678db6ad453d8b3f3dd05325",
+          "type": "storage",
+          "x": 18,
+          "y": 19,
+          "store": {
+            "energy": 350936,
+            "X": 10000,
+            "XZHO2": 20000,
+            "XGH2O": 20000,
+            "XGHO2": 20000,
+            "XKHO2": 20000,
+            "XLH2O": 20000,
+            "XLHO2": 20000,
+            "XUH2O": 20000,
+            "ops": 3000,
+            "G": 10000,
+            "L": 8840,
+            "K": 10000,
+            "H": 9525,
+            "Z": 10000,
+            "O": 8840,
+            "ZK": 10690,
+            "GH": 10555,
+            "OH": 10000,
+            "GO": 10665,
+            "UH": 10550,
+            "ZH": 11978,
+            "KO": 10102,
+            "U": 10000,
+            "GH2O": 10000,
+            "KH": 10000,
+            "XKH2O": 20000,
+            "UL": 10730,
+            "LH": 10000,
+            "LO": 10850,
+            "XZH2O": 20000,
+            "ZO": 10440,
+            "LH2O": 10000,
+            "ZHO2": 11120,
+            "ZH2O": 10000,
+            "GHO2": 10000,
+            "UH2O": 11905,
+            "LHO2": 11230,
+            "KHO2": 12000,
+            "KH2O": 10000,
+            "UO": 10000,
+            "UHO2": 11600,
+            "XUHO2": 20000
+          }
+        },
+        {
+          "id": "678dd076361ace317c71d97a",
+          "type": "lab",
+          "x": 24,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678e18ad56bb7c7fe792c80f",
+          "type": "lab",
+          "x": 25,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678e5e757a46e21927bdd8db",
+          "type": "lab",
+          "x": 25,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678e8d34bcbda7b0d08af0cf",
+          "type": "lab",
+          "x": 26,
+          "y": 23,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "678ebbe7c8f42755a6a10324",
+          "type": "lab",
+          "x": 26,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "679151dfab2ea72a22172db5",
+          "type": "terminal",
+          "x": 19,
+          "y": 20,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "6791772b12304ae67dfa5d38",
+          "type": "factory",
+          "x": 17,
+          "y": 20,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "679199e5fb43ad242d3fbf03",
+          "type": "lab",
+          "x": 27,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6791a97ce3513fe9d154e53d",
+          "type": "lab",
+          "x": 27,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6791beac857d412f654c0114",
+          "type": "lab",
+          "x": 25,
+          "y": 20,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "6791ca7856bb7c1cf793c8aa",
+          "type": "lab",
+          "x": 26,
+          "y": 20,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "678e18ad56bb7c7fe792c80f",
+        "sourceLab2": "678ebbe7c8f42755a6a10324",
+        "productionPlan": {
+          "target": "XUHO2",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XUHO2"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "UHO2": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "678e18ad56bb7c7fe792c80f",
+            "resourceType": "UHO2"
+          },
+          {
+            "labId": "678ebbe7c8f42755a6a10324",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "extension": false,
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "MANAGER_7791FF1CFA",
+          "x": 18,
+          "y": 20,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_7791FF1CFA",
+            "name": "E37N7_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E37N7",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 19,
+              "y": 19,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "PROCESSER_603DE66297",
+          "x": 19,
+          "y": 19,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_603DE66297",
+            "name": "E37N7_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": true,
+            "ready": false,
+            "spawnRoom": "E37N7",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 20,
+              "y": 20,
+              "time": 7
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_7791FF1CFA": {
+          "displayName": "MANAGER_7791FF1CFA",
+          "name": "E37N7_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E37N7",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_603DE66297": {
+          "displayName": "PROCESSER_603DE66297",
+          "name": "E37N7_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E37N7",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E41N8",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb662d867df5e542077c7",
+          "type": "mineral",
+          "x": 35,
+          "y": 43,
+          "mineralType": "H",
+          "mineralAmount": 0,
+          "effects": {
+            "0": {
+              "effect": 14,
+              "power": 14,
+              "level": 2,
+              "endTime": 66727730
+            }
+          }
+        },
+        {
+          "id": "6797d53fe5e03e7b3c87e9a1",
+          "type": "factory",
+          "x": 7,
+          "y": 4,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "6797eea6c4e50a6d751c6ac8",
+          "type": "lab",
+          "x": 4,
+          "y": 3,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66727952
+            }
+          }
+        },
+        {
+          "id": "6797eec35478c446dae9bfdd",
+          "type": "lab",
+          "x": 4,
+          "y": 5,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728126
+            }
+          }
+        },
+        {
+          "id": "6797f578302d525ce925913d",
+          "type": "lab",
+          "x": 4,
+          "y": 2,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728179
+            }
+          }
+        },
+        {
+          "id": "6797f57bb8c19f84860cbe1d",
+          "type": "lab",
+          "x": 3,
+          "y": 4,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728273
+            }
+          }
+        },
+        {
+          "id": "6797f82c0878e81be2f21990",
+          "type": "storage",
+          "x": 6,
+          "y": 3,
+          "store": {
+            "energy": 378142,
+            "H": 10000,
+            "K": 10000,
+            "XGHO2": 20000,
+            "XKHO2": 20000,
+            "XLH2O": 20000,
+            "XLHO2": 20000,
+            "XUH2O": 20000,
+            "XZHO2": 20000,
+            "X": 10000,
+            "Z": 10000,
+            "U": 10000,
+            "O": 10000,
+            "L": 10000,
+            "ops": 3000,
+            "UH": 10132,
+            "ZH": 11919,
+            "KO": 10000,
+            "GO": 10665,
+            "LH": 10615,
+            "ZK": 10090,
+            "ZO": 10000,
+            "OH": 10000,
+            "G": 10000,
+            "LH2O": 10000,
+            "XZH2O": 20000,
+            "LO": 10000,
+            "GH": 10000,
+            "UO": 10000,
+            "KH": 10000,
+            "XKH2O": 20000,
+            "UL": 11355,
+            "ZH2O": 10000,
+            "ZHO2": 10000,
+            "GH2O": 10000,
+            "XGH2O": 20000,
+            "mist": 150,
+            "KHO2": 10465,
+            "GHO2": 10000,
+            "LHO2": 11915,
+            "KH2O": 10000,
+            "UH2O": 11505,
+            "UHO2": 10000,
+            "XUHO2": 20000
+          }
+        },
+        {
+          "id": "6797f9fc1b3c2c3e7a789fab",
+          "type": "lab",
+          "x": 2,
+          "y": 3,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728362
+            }
+          }
+        },
+        {
+          "id": "6797fb08c116e25050e7dca4",
+          "type": "lab",
+          "x": 3,
+          "y": 2,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728441
+            }
+          }
+        },
+        {
+          "id": "6797fcd2fe428959c6925fd2",
+          "type": "lab",
+          "x": 2,
+          "y": 5,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728538
+            }
+          }
+        },
+        {
+          "id": "6797ffc20878e83478f21b74",
+          "type": "lab",
+          "x": 1,
+          "y": 2,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66727667
+            }
+          }
+        },
+        {
+          "id": "6798023cb292dd1baf23df10",
+          "type": "lab",
+          "x": 1,
+          "y": 5,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66727723
+            }
+          }
+        },
+        {
+          "id": "6798076d2c03982a016505e7",
+          "type": "lab",
+          "x": 1,
+          "y": 4,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0,
+          "effects": {
+            "0": {
+              "effect": 5,
+              "power": 5,
+              "level": 5,
+              "endTime": 66728053
+            }
+          }
+        },
+        {
+          "id": "67b09df3dfbf2e8811ae00e5",
+          "type": "terminal",
+          "x": 5,
+          "y": 4,
+          "store": {
+            "energy": 50000
+          }
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "6797f9fc1b3c2c3e7a789fab",
+        "sourceLab2": "6797f57bb8c19f84860cbe1d",
+        "productionPlan": {
+          "target": "XKH2O",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XKH2O"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "KH2O": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "6797f9fc1b3c2c3e7a789fab",
+            "resourceType": "KH2O"
+          },
+          {
+            "labId": "6797f57bb8c19f84860cbe1d",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnPower": true,
+        "powerSpawnEnergy": false,
+        "extension": false
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "MANAGER_68F8470C0A",
+          "x": 6,
+          "y": 4,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_68F8470C0A",
+            "name": "E41N8_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E41N8",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 5,
+              "y": 3,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "PROCESSER_2C06C2AEFA",
+          "x": 5,
+          "y": 3,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_2C06C2AEFA",
+            "name": "E41N8_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": true,
+            "ready": false,
+            "spawnRoom": "E41N8",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 4,
+              "y": 4,
+              "time": 0
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_68F8470C0A": {
+          "displayName": "MANAGER_68F8470C0A",
+          "name": "E41N8_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E41N8",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_2C06C2AEFA": {
+          "displayName": "PROCESSER_2C06C2AEFA",
+          "name": "E41N8_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E41N8",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E41N7",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb662d867df5e542077c8",
+          "type": "mineral",
+          "x": 36,
+          "y": 4,
+          "mineralType": "O",
+          "mineralAmount": 1100
+        },
+        {
+          "id": "67a0975fab01827343847f06",
+          "type": "lab",
+          "x": 4,
+          "y": 19,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a09bfc98cf6ccfa0bd4185",
+          "type": "lab",
+          "x": 3,
+          "y": 20,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a09dc6135bf0d57dbbab03",
+          "type": "lab",
+          "x": 4,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a09f61955c2f558dbb7c77",
+          "type": "lab",
+          "x": 2,
+          "y": 19,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0a57506a288f3e1482932",
+          "type": "lab",
+          "x": 1,
+          "y": 19,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0a8240f046199ac12e385",
+          "type": "lab",
+          "x": 3,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0a953bda302ec60b70e1e",
+          "type": "lab",
+          "x": 4,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0ab5506a2885fda482af4",
+          "type": "lab",
+          "x": 2,
+          "y": 21,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0ade5819c3c24cb78aba9",
+          "type": "storage",
+          "x": 5,
+          "y": 16,
+          "store": {
+            "energy": 385103,
+            "XKH2O": 20000,
+            "XZHO2": 20000,
+            "K": 10000,
+            "LH2O": 11455,
+            "LH": 10000,
+            "ZHO2": 11000,
+            "ZO": 10000,
+            "XGHO2": 20000,
+            "GO": 10380,
+            "XLHO2": 20000,
+            "LO": 11691,
+            "XKHO2": 20000,
+            "KO": 11871,
+            "KH": 10000,
+            "XUH2O": 20000,
+            "UH": 11738,
+            "ops": 3000,
+            "G": 10000,
+            "X": 10000,
+            "L": 10000,
+            "Z": 10000,
+            "U": 10000,
+            "O": 10000,
+            "H": 10000,
+            "GHO2": 10000,
+            "XLH2O": 20000,
+            "OH": 10000,
+            "ZH": 11476,
+            "ZK": 10000,
+            "UL": 10000,
+            "ZH2O": 11425,
+            "XZH2O": 20000,
+            "XGH2O": 20000,
+            "GH": 10000,
+            "GH2O": 10000,
+            "UH2O": 10000,
+            "LHO2": 11620,
+            "KHO2": 11920,
+            "KH2O": 10000,
+            "UO": 10000,
+            "UHO2": 10655,
+            "XUHO2": 20000
+          }
+        },
+        {
+          "id": "67a0af6954e254a86bd92bbe",
+          "type": "lab",
+          "x": 1,
+          "y": 20,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0b32f11461719123006e5",
+          "type": "lab",
+          "x": 1,
+          "y": 22,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67a0ce0fedbbe5799a8d7534",
+          "type": "terminal",
+          "x": 4,
+          "y": 17,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "67a0dd750640ab702f8bda92",
+          "type": "factory",
+          "x": 6,
+          "y": 17,
+          "store": {},
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab2": "67a09bfc98cf6ccfa0bd4185",
+        "sourceLab1": "67a0ab5506a2885fda482af4",
+        "productionPlan": {
+          "target": "XUHO2",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XUHO2"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "UHO2": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "67a0ab5506a2885fda482af4",
+            "resourceType": "UHO2"
+          },
+          {
+            "labId": "67a09bfc98cf6ccfa0bd4185",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "extension": false,
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "PROCESSER_6E95DC6954",
+          "x": 6,
+          "y": 16,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_6E95DC6954",
+            "name": "E41N7_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": true,
+            "ready": false,
+            "spawnRoom": "E41N7",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            }
+          }
+        },
+        {
+          "name": "MANAGER_241190D3F8",
+          "x": 3,
+          "y": 16,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_241190D3F8",
+            "name": "E41N7_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E41N7",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_241190D3F8": {
+          "displayName": "MANAGER_241190D3F8",
+          "name": "E41N7_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E41N7",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_6E95DC6954": {
+          "displayName": "PROCESSER_6E95DC6954",
+          "name": "E41N7_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E41N7",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E39N6",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb657d867df5e5420775d",
+          "type": "mineral",
+          "x": 24,
+          "y": 12,
+          "mineralType": "K",
+          "mineralAmount": 0
+        },
+        {
+          "id": "67ab9965e6a72a09bf2f9ba7",
+          "type": "terminal",
+          "x": 32,
+          "y": 38,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "67ab9ae4620a60fee45955e6",
+          "type": "storage",
+          "x": 31,
+          "y": 39,
+          "store": {
+            "energy": 365171,
+            "O": 10000,
+            "K": 10000,
+            "UH": 11221,
+            "ZH": 11638,
+            "KO": 10170,
+            "GO": 10665,
+            "XLH2O": 20000,
+            "LH2O": 11000,
+            "LH": 10080,
+            "XZHO2": 20000,
+            "ZHO2": 10000,
+            "ZO": 10000,
+            "XZH2O": 20000,
+            "ZH2O": 10000,
+            "XGHO2": 20000,
+            "GHO2": 10000,
+            "XLHO2": 20000,
+            "LHO2": 10000,
+            "LO": 11370,
+            "XKHO2": 20000,
+            "KHO2": 10000,
+            "XKH2O": 20000,
+            "KH2O": 10000,
+            "KH": 10000,
+            "XUH2O": 20000,
+            "UH2O": 10000,
+            "ops": 3000,
+            "G": 10000,
+            "X": 10010,
+            "L": 10000,
+            "Z": 10000,
+            "U": 10000,
+            "H": 10000,
+            "OH": 12000,
+            "ZK": 10000,
+            "UL": 10000,
+            "GH": 10465,
+            "GH2O": 10000,
+            "XGH2O": 20000,
+            "UO": 10000,
+            "UHO2": 10000,
+            "XUHO2": 20000
+          }
+        },
+        {
+          "id": "67aba61d7a5a7526d7bfc355",
+          "type": "factory",
+          "x": 30,
+          "y": 38,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "67abaaedb8b245b5d3639ab4",
+          "type": "lab",
+          "x": 36,
+          "y": 40,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67abad4bfc0d36ddeb3dbd1e",
+          "type": "lab",
+          "x": 36,
+          "y": 42,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67abaf69f8827445429519bf",
+          "type": "lab",
+          "x": 37,
+          "y": 40,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67abb18056538e3aa26559eb",
+          "type": "lab",
+          "x": 37,
+          "y": 41,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67abb58e0f046157ef16129c",
+          "type": "lab",
+          "x": 38,
+          "y": 41,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67abb8db81eb0010f618af02",
+          "type": "lab",
+          "x": 38,
+          "y": 42,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67aeca854e7ae7194e7b8fca",
+          "type": "lab",
+          "x": 35,
+          "y": 41,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67aed16ecc5fd73646a7d595",
+          "type": "lab",
+          "x": 35,
+          "y": 42,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67aee0c4a78b38fc9e548587",
+          "type": "lab",
+          "x": 36,
+          "y": 43,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67aef25927544522dc2a26e0",
+          "type": "lab",
+          "x": 37,
+          "y": 43,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "67abad4bfc0d36ddeb3dbd1e",
+        "sourceLab2": "67abb18056538e3aa26559eb",
+        "productionPlan": {
+          "target": "XKH2O",
+          "targetAmount": 25368,
+          "local": false
+        },
+        "reactionAmount": 5370,
+        "labReactionConfig": "XKH2O"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "KH2O": 5370,
+          "X": 5370
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "67abad4bfc0d36ddeb3dbd1e",
+            "resourceType": "KH2O"
+          },
+          {
+            "labId": "67abb18056538e3aa26559eb",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [
+          "67ab736d7f2ee80d65a275a2"
+        ],
+        "labOut": [],
+        "labInEnergy": [],
+        "extension": false,
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "nukerEnergy": false,
+        "nukerMineral": false
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "PROCESSER_C1C753ED51",
+          "x": 30,
+          "y": 39,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_C1C753ED51",
+            "name": "E39N6_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E39N6",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 33,
+              "y": 38,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "MANAGER_DDD506DB41",
+          "x": 31,
+          "y": 41,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_DDD506DB41",
+            "name": "E39N6_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E39N6",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_DDD506DB41": {
+          "displayName": "MANAGER_DDD506DB41",
+          "name": "E39N6_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E39N6",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_C1C753ED51": {
+          "displayName": "PROCESSER_C1C753ED51",
+          "name": "E39N6_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E39N6",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E38N5",
+      "level": 8,
+      "powerEnabled": false,
+      "structures": [
+        {
+          "id": "5bbcb64dd867df5e542076f2",
+          "type": "mineral",
+          "x": 14,
+          "y": 34,
+          "mineralType": "X",
+          "mineralAmount": 0
+        },
+        {
+          "id": "67b3688f107178ca7af6acca",
+          "type": "lab",
+          "x": 36,
+          "y": 44,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b36e6637c34b512ec7ff67",
+          "type": "lab",
+          "x": 36,
+          "y": 45,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b36f79cc352e36b31e4769",
+          "type": "lab",
+          "x": 36,
+          "y": 47,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b3770e6634ad90d44abbeb",
+          "type": "lab",
+          "x": 37,
+          "y": 46,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b37af7cc352ee74c1e4a92",
+          "type": "lab",
+          "x": 37,
+          "y": 44,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b381088527539dc5c5dd60",
+          "type": "lab",
+          "x": 38,
+          "y": 45,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b3884d74087b3485b8ab5f",
+          "type": "lab",
+          "x": 38,
+          "y": 47,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b38fa11d2164244bcd020e",
+          "type": "lab",
+          "x": 39,
+          "y": 44,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b39b053ad8b522e888d11b",
+          "type": "lab",
+          "x": 39,
+          "y": 46,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b3a61acdb9670d03b50911",
+          "type": "lab",
+          "x": 39,
+          "y": 47,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67b3b0d66f48c57c7edb42be",
+          "type": "factory",
+          "x": 40,
+          "y": 41,
+          "store": {},
+          "cooldown": 0
+        },
+        {
+          "id": "67ba5aec1e43e3ca3cc6c9f0",
+          "type": "terminal",
+          "x": 38,
+          "y": 41,
+          "store": {
+            "energy": 50000
+          }
+        },
+        {
+          "id": "67bb6ab0bd141e3fd692fac7",
+          "type": "storage",
+          "x": 39,
+          "y": 40,
+          "store": {
+            "energy": 382627,
+            "X": 13000,
+            "XLH2O": 20000,
+            "LH2O": 10000,
+            "XGH2O": 20000,
+            "ZO": 10000,
+            "ZH": 10138,
+            "XGHO2": 20000,
+            "GO": 10380,
+            "XLHO2": 20000,
+            "LO": 11621,
+            "KO": 10788,
+            "XKH2O": 20000,
+            "KH": 10000,
+            "ops": 3000,
+            "L": 10000,
+            "Z": 9000,
+            "U": 10000,
+            "H": 10000,
+            "K": 10000,
+            "O": 10000,
+            "LH": 11600,
+            "OH": 10000,
+            "ZK": 11650,
+            "UL": 10000,
+            "G": 10000,
+            "ZHO2": 11960,
+            "XZHO2": 20000,
+            "ZH2O": 10000,
+            "XZH2O": 20000,
+            "UH": 11199,
+            "UHO2": 10000,
+            "UO": 10000,
+            "XUHO2": 20000,
+            "GH": 10000,
+            "GH2O": 11250,
+            "GHO2": 10000,
+            "UH2O": 10000,
+            "XUH2O": 20000,
+            "LHO2": 11315,
+            "KHO2": 10000,
+            "XKHO2": 20000,
+            "KH2O": 10000
+          }
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "67b3770e6634ad90d44abbeb",
+        "sourceLab2": "67b381088527539dc5c5dd60",
+        "productionPlan": {
+          "target": "XUHO2",
+          "targetAmount": 23000,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XUHO2"
+      },
+      "reserves": {
+        "factory": {
+          "utrium_bar": 0,
+          "lemergium_bar": 0,
+          "zynthium_bar": 0,
+          "keanium_bar": 0
+        },
+        "lab": {
+          "UHO2": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "67b3770e6634ad90d44abbeb",
+            "resourceType": "UHO2"
+          },
+          {
+            "labId": "67b381088527539dc5c5dd60",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "extension": false,
+        "nukerEnergy": false,
+        "nukerMineral": false
+      },
+      "terminalAmounts": {
+        "energy": 50000
+      },
+      "sendJobs": {},
+      "workers": [
+        {
+          "name": "PROCESSER_DF91770E62",
+          "x": 38,
+          "y": 40,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_DF91770E62",
+            "name": "E38N5_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E38N5",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 37,
+              "y": 41,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "MANAGER_FE0D73549B",
+          "x": 39,
+          "y": 41,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_FE0D73549B",
+            "name": "E38N5_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E38N5",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 40,
+              "y": 42,
+              "time": 1
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_FE0D73549B": {
+          "displayName": "MANAGER_FE0D73549B",
+          "name": "E38N5_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E38N5",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_DF91770E62": {
+          "displayName": "PROCESSER_DF91770E62",
+          "name": "E38N5_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E38N5",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    },
+    {
+      "name": "E38N6",
+      "level": 8,
+      "powerEnabled": true,
+      "structures": [
+        {
+          "id": "5bbcb64dd867df5e542076f1",
+          "type": "mineral",
+          "x": 26,
+          "y": 24,
+          "mineralType": "O",
+          "mineralAmount": 48376,
+          "effects": {
+            "0": {
+              "effect": 14,
+              "power": 14,
+              "level": 4,
+              "endTime": 83488057
+            }
+          }
+        },
+        {
+          "id": "67c125e310269457a95fd791",
+          "type": "terminal",
+          "x": 32,
+          "y": 34,
+          "store": {
+            "energy": 63534,
+            "ZK": 5000,
+            "KO": 5000,
+            "ops": 98,
+            "X": 395,
+            "L": 150,
+            "Z": 5500,
+            "K": 2425,
+            "U": 1820,
+            "O": 1060,
+            "H": 20,
+            "XKH2O": 6155,
+            "XKHO2": 12270,
+            "XUH2O": 4355,
+            "zynthium_bar": 20,
+            "XZH2O": 6095
+          },
+          "effects": {
+            "0": {
+              "effect": 8,
+              "power": 8,
+              "level": 5,
+              "endTime": 83488578
+            }
+          }
+        },
+        {
+          "id": "67c127e5677a957198593df1",
+          "type": "storage",
+          "x": 33,
+          "y": 35,
+          "store": {
+            "energy": 340007,
+            "XGH2O": 275062,
+            "GO": 305837,
+            "KO": 316503,
+            "ZH": 266141,
+            "UH": 99643,
+            "OH": 16809,
+            "ZK": 89424,
+            "Z": 299111,
+            "XLH2O": 626298,
+            "LH2O": 15988,
+            "LH": 19472,
+            "UL": 31121,
+            "XZHO2": 485980,
+            "ZHO2": 10465,
+            "XGHO2": 145637,
+            "XLHO2": 54645,
+            "LO": 151365,
+            "KH": 19180,
+            "ops": 304955,
+            "X": 295775,
+            "L": 303821,
+            "K": 296552,
+            "U": 340052,
+            "O": 300662,
+            "H": 307385,
+            "G": 375313,
+            "UHO2": 25882,
+            "UO": 228451,
+            "XUHO2": 30057,
+            "ZO": 19709,
+            "GH": 16481,
+            "GH2O": 18758,
+            "GHO2": 20422,
+            "ZH2O": 10093,
+            "XKH2O": 26500,
+            "XKHO2": 95697,
+            "XUH2O": 34804,
+            "battery": 4526,
+            "purifier": 55960,
+            "lemergium_bar": 3678,
+            "condensate": 3649,
+            "concentrate": 4396,
+            "zynthium_bar": 3951,
+            "oxidant": 2452,
+            "ghodium_melt": 2491,
+            "utrium_bar": 5434,
+            "liquid": 1735,
+            "extract": 76,
+            "keanium_bar": 122,
+            "spirit": 1,
+            "LHO2": 15416,
+            "KH2O": 16559,
+            "KHO2": 12490,
+            "UH2O": 13871,
+            "composite": 2743,
+            "XZH2O": 20424,
+            "mist": 53598,
+            "cell": 39050,
+            "crystal": 1779,
+            "alloy": 1600,
+            "reductant": 1937,
+            "metal": 88,
+            "tube": 122,
+            "phlegm": 502,
+            "silicon": 8,
+            "switch": 20
+          },
+          "effects": {
+            "0": {
+              "effect": 4,
+              "power": 4,
+              "level": 5,
+              "endTime": 83488998
+            }
+          }
+        },
+        {
+          "id": "67c129553e0a80fc395ac4f8",
+          "type": "lab",
+          "x": 31,
+          "y": 35,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c12c5d8a0e99a2737e929a",
+          "type": "lab",
+          "x": 32,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c12c6e158a7703a29684e0",
+          "type": "lab",
+          "x": 30,
+          "y": 35,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c12e151cefcc3cb9da375c",
+          "type": "lab",
+          "x": 30,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c133d55249b2d3136fe3fc",
+          "type": "factory",
+          "x": 34,
+          "y": 34,
+          "store": {
+            "energy": 24457
+          },
+          "cooldown": 0
+        },
+        {
+          "id": "67c13545158a772266968741",
+          "type": "lab",
+          "x": 29,
+          "y": 36,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c1360525bbf94de251867f",
+          "type": "lab",
+          "x": 31,
+          "y": 37,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c13a00b391613a8002662a",
+          "type": "lab",
+          "x": 32,
+          "y": 37,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c13d5431f25079a9bb6229",
+          "type": "lab",
+          "x": 29,
+          "y": 37,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c1442ba4e4263624cab864",
+          "type": "lab",
+          "x": 30,
+          "y": 38,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        },
+        {
+          "id": "67c144726529aa062747a6d6",
+          "type": "lab",
+          "x": 31,
+          "y": 38,
+          "store": {
+            "energy": 2000
+          },
+          "mineralAmount": 0,
+          "cooldown": 0
+        }
+      ],
+      "lab": {
+        "singleLabConfig": {},
+        "sourceLab1": "67c12e151cefcc3cb9da375c",
+        "sourceLab2": "67c1360525bbf94de251867f",
+        "productionPlan": {
+          "target": "XZH2O",
+          "targetAmount": 30111,
+          "local": false
+        },
+        "reactionAmount": 3000,
+        "labReactionConfig": "XZH2O"
+      },
+      "factory": {
+        "resourceType": "condensate",
+        "mode": "commodity",
+        "remaining": 6,
+        "createdAt": 83487788,
+        "inputs": {
+          "keanium_bar": 120,
+          "mist": 600,
+          "energy": 240
+        }
+      },
+      "reserves": {
+        "factory": {
+          "keanium_bar": 120,
+          "mist": 600,
+          "energy": 240,
+          "utrium_bar": 20,
+          "lemergium_bar": 20,
+          "zynthium_bar": 20
+        },
+        "lab": {
+          "ZH2O": 3000,
+          "X": 3000
+        }
+      },
+      "boostNeed": {},
+      "fillJobs": {
+        "labInMineral": [
+          {
+            "labId": "67c12e151cefcc3cb9da375c",
+            "resourceType": "ZH2O"
+          },
+          {
+            "labId": "67c1360525bbf94de251867f",
+            "resourceType": "X"
+          }
+        ],
+        "tower": [],
+        "labOut": [],
+        "labInEnergy": [],
+        "extension": false,
+        "powerSpawnEnergy": false,
+        "powerSpawnPower": true,
+        "nukerEnergy": false,
+        "nukerMineral": false
+      },
+      "terminalAmounts": {
+        "energy": 62960,
+        "Z": 100000,
+        "K": 5000,
+        "L": 5000,
+        "O": 5000,
+        "H": 5000,
+        "U": 5000,
+        "X": 5000,
+        "ops": 5000,
+        "ZK": 5000,
+        "GO": 5000,
+        "KO": 5000
+      },
+      "sendJobs": {
+        "E38N6_E39S2_Z": {
+          "targetRoom": "E39S2",
+          "resourceType": "Z",
+          "amount": 440584
+        },
+        "E38N6_E31N2_X": {
+          "targetRoom": "E31N2",
+          "resourceType": "X",
+          "amount": 10000
+        },
+        "E38N6_E31N2_K": {
+          "targetRoom": "E31N2",
+          "resourceType": "K",
+          "amount": 10000
+        },
+        "E38N6_E31N2_U": {
+          "targetRoom": "E31N2",
+          "resourceType": "U",
+          "amount": 10000
+        },
+        "E38N6_E31N2_O": {
+          "targetRoom": "E31N2",
+          "resourceType": "O",
+          "amount": 10000
+        },
+        "auto_production_E38N6_E35N3_X": {
+          "targetRoom": "E35N3",
+          "resourceType": "X",
+          "amount": 4960,
+          "kind": "production",
+          "createdAt": 83487793
+        },
+        "auto_production_E38N6_E36N2_X": {
+          "targetRoom": "E36N2",
+          "resourceType": "X",
+          "amount": 3000,
+          "kind": "production",
+          "createdAt": 83487793
+        },
+        "auto_production_E38N6_E41N8_X": {
+          "targetRoom": "E41N8",
+          "resourceType": "X",
+          "amount": 3000,
+          "kind": "production",
+          "createdAt": 83487793
+        },
+        "auto_production_E38N6_E41N7_X": {
+          "targetRoom": "E41N7",
+          "resourceType": "X",
+          "amount": 3000,
+          "kind": "production",
+          "createdAt": 83487794
+        },
+        "auto_production_E38N6_E34N3_X": {
+          "targetRoom": "E34N3",
+          "resourceType": "X",
+          "amount": 3000,
+          "kind": "production",
+          "createdAt": 83487796
+        },
+        "auto_production_E38N6_E39N6_X": {
+          "targetRoom": "E39N6",
+          "resourceType": "X",
+          "amount": 5360,
+          "kind": "production",
+          "createdAt": 83487796
+        },
+        "auto_production_E38N6_E37N7_X": {
+          "targetRoom": "E37N7",
+          "resourceType": "X",
+          "amount": 3000,
+          "kind": "production",
+          "createdAt": 83487797
+        },
+        "auto_production_E38N6_E35N1_X": {
+          "targetRoom": "E35N1",
+          "resourceType": "X",
+          "amount": 2010,
+          "kind": "production",
+          "createdAt": 83487901
+        },
+        "auto_refill_E38N6_E34N3_L": {
+          "targetRoom": "E34N3",
+          "resourceType": "L",
+          "amount": 1705,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E35N1_H": {
+          "targetRoom": "E35N1",
+          "resourceType": "H",
+          "amount": 1030,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E35N3_L": {
+          "targetRoom": "E35N3",
+          "resourceType": "L",
+          "amount": 560,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E36N2_ops": {
+          "targetRoom": "E36N2",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E37N7_H": {
+          "targetRoom": "E37N7",
+          "resourceType": "H",
+          "amount": 475,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E37N7_O": {
+          "targetRoom": "E37N7",
+          "resourceType": "O",
+          "amount": 1160,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E37N7_L": {
+          "targetRoom": "E37N7",
+          "resourceType": "L",
+          "amount": 1160,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E37N7_ops": {
+          "targetRoom": "E37N7",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E38N5_ops": {
+          "targetRoom": "E38N5",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E39N6_ops": {
+          "targetRoom": "E39N6",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E41N7_ops": {
+          "targetRoom": "E41N7",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        },
+        "auto_refill_E38N6_E41N8_ops": {
+          "targetRoom": "E41N8",
+          "resourceType": "ops",
+          "amount": 2000,
+          "kind": "refill",
+          "createdAt": 83488020
+        }
+      },
+      "workers": [
+        {
+          "name": "PROCESSER_FFE52D60DB",
+          "x": 32,
+          "y": 35,
+          "store": {},
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move",
+            "move"
+          ],
+          "memory": {
+            "displayName": "PROCESSER_FFE52D60DB",
+            "name": "E38N6_PROCESSER",
+            "role": "processer",
+            "isTeam": false,
+            "working": false,
+            "ready": false,
+            "spawnRoom": "E38N6",
+            "spawnPriority": 3,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": false,
+            "lastPos": {
+              "x": 33,
+              "y": 36,
+              "time": 0
+            }
+          }
+        },
+        {
+          "name": "MANAGER_90A9C5DFD3",
+          "x": 33,
+          "y": 34,
+          "store": {
+            "XKH2O": 800
+          },
+          "body": [
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "carry",
+            "move"
+          ],
+          "memory": {
+            "displayName": "MANAGER_90A9C5DFD3",
+            "name": "E38N6_MANAGER",
+            "role": "manager",
+            "isTeam": false,
+            "working": true,
+            "ready": true,
+            "spawnRoom": "E38N6",
+            "spawnPriority": 0,
+            "data": {},
+            "boostPlan": {
+              "tier": 0,
+              "steps": []
+            },
+            "dontPullMe": true,
+            "lastPos": {
+              "x": 34,
+              "y": 35,
+              "time": 0
+            }
+          }
+        }
+      ],
+      "workerConfigs": {
+        "MANAGER_90A9C5DFD3": {
+          "displayName": "MANAGER_90A9C5DFD3",
+          "name": "E38N6_MANAGER",
+          "role": "manager",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E38N6",
+          "spawnPriority": 0,
+          "data": {}
+        },
+        "PROCESSER_FFE52D60DB": {
+          "displayName": "PROCESSER_FFE52D60DB",
+          "name": "E38N6_PROCESSER",
+          "role": "processer",
+          "isTeam": false,
+          "working": false,
+          "ready": false,
+          "spawnRoom": "E38N6",
+          "spawnPriority": 3,
+          "data": {}
+        }
+      }
+    }
+  ]
+}

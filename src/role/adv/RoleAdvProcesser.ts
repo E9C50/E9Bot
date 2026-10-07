@@ -68,19 +68,16 @@ export default (data: CreepData): ICreepConfig => ({
                         if (takeAmount === 0) { fillJobs.labInMineral.shift(); return true }
                     }
                 }
-                if (stock === creep.room.terminal) {
-                    const amount = Math.min(takeAmount ?? Infinity, creep.store.getFreeCapacity(), getTerminalResourceAmount(creep.room, resourceType))
-                    if (amount <= 0) return true
-                    const result = creep.withdraw(stock, resourceType, amount)
-                    if (result === OK) {
-                        recordTerminalWithdrawal(creep.room, resourceType, amount)
-                        creep.memory.working = true
-                    } else if (result === ERR_NOT_IN_RANGE) creep.moveTo(stock)
-                    return true
-                }
-                if (creep.takeFromTarget(stock, resourceType, takeAmount)) {
+                // A reaction batch can exceed this worker's capacity; only successful native
+                // withdrawals may switch it to delivery, for storage as well as terminal stock.
+                const available = stock === creep.room.terminal ? getTerminalResourceAmount(creep.room, resourceType) : stock.store[resourceType] || 0
+                const amount = Math.min(takeAmount ?? Infinity, creep.store.getFreeCapacity(), available)
+                if (amount <= 0) return true
+                const result = creep.withdraw(stock, resourceType, amount)
+                if (result === OK) {
+                    if (stock === creep.room.terminal) recordTerminalWithdrawal(creep.room, resourceType, amount)
                     creep.memory.working = true
-                }
+                } else if (result === ERR_NOT_IN_RANGE) creep.moveTo(stock)
                 return true
             } else {
                 const labId = fillJobs.labInMineral[0].labId
@@ -114,13 +111,17 @@ export default (data: CreepData): ICreepConfig => ({
     target(creep) {
         const fillJobs = creep.room.memory.roomFillJob
         if (creep.memory.factoryLogistics && runFactoryLogistics(creep)) return true
+        if (creep.store.getUsedCapacity() === 0) {
+            creep.memory.working = false
+            return true
+        }
 
         // 如果lab需要物资，判断是否已经携带，如果携带就送过去
         if (fillJobs.labInMineral) {
             const labInMineral = creep.room.memory.roomFillJob.labInMineral
             for (let index in labInMineral) {
                 const targetLab = Game.getObjectById(labInMineral[index].labId) as StructureLab
-                if (targetLab == undefined || creep.store[labInMineral[index].resourceType] == 0) continue
+                if (targetLab == undefined || !(creep.store[labInMineral[index].resourceType] > 0)) continue
                 if ((targetLab.mineralType == undefined || targetLab.mineralType === labInMineral[index].resourceType) &&
                     (targetLab.store.getFreeCapacity(labInMineral[index].resourceType) || 0) > 0) {
                     if (creep.transferToTarget(targetLab, labInMineral[index].resourceType)) {

@@ -9,6 +9,7 @@ const recipes = {
     energy: { amount: 500, cooldown: 10, components: { battery: 50 } },
     battery: { amount: 50, cooldown: 10, components: { energy: 600 } },
     wire: { amount: 20, cooldown: 8, components: { silicon: 20, utrium_bar: 100, energy: 40 } },
+    condensate: { amount: 20, cooldown: 8, components: { keanium_bar: 20, mist: 100, energy: 40 } },
     switch: { amount: 5, cooldown: 70, level: 1, components: { wire: 40, oxidant: 40, utrium_bar: 20, energy: 95 } },
     composite: { amount: 20, cooldown: 50, level: 1, components: { utrium_bar: 20, zynthium_bar: 20, energy: 20 } },
     crystal: { amount: 6, cooldown: 21, level: 2, components: { composite: 6, lemergium_bar: 6, purifier: 6, energy: 45 } },
@@ -229,6 +230,69 @@ test('a stationary manager does not leave its seat; a mobile processor clears ou
     w.nextTick();
     assert.equal(w.terminal.store.wire, 1000);
     assert.equal(processor.memory.factoryLogistics, undefined);
+});
+
+test('a warehouse loads available commodity inputs before clearing its existing 24457 factory energy', () => {
+    const w = world({ warehouse: true, storage: { energy: 100000, keanium_bar: 122, mist: 600 }, factory: { energy: 24457 } });
+    const worker = w.creep();
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'condensate');
+    assert.equal(w.room.memory.factoryProduction.remaining, 6);
+    w.production.runFactoryLogistics(worker);
+    assert.deepEqual(w.actions, [['withdraw', worker.name, 'storage', 'keanium_bar', 120]]);
+    for (let tick = 0; tick < 4; tick++) {
+        w.nextTick();
+        w.production.runFactoryLogistics(worker);
+        w.production.runFactoryProduction(w.factory);
+        assert.equal(w.actions.some(action => action[0] === 'withdraw' && action[2] === 'factory' && action[3] === 'energy'), false);
+    }
+    assert.ok(w.actions.some(action => action[0] === 'produce' && action[1] === 'condensate'));
+    w.nextTick();
+    assert.equal(w.factory.store.condensate, 20);
+    assert.equal(w.factory.store.energy, 24417, 'the fuel stays available for further commodity production');
+    assert.equal(w.terminal.store.energy, 50000);
+});
+
+test('a full factory clears only enough excess fuel to make room for its next commodity reaction', () => {
+    const w = world({ warehouse: true, storage: { energy: 100000, keanium_bar: 122, mist: 600 }, factory: { energy: 50000 } });
+    const worker = w.creep();
+    w.production.planFactoryProduction(w.factory);
+    w.production.runFactoryLogistics(worker);
+    assert.deepEqual(w.actions, [['withdraw', worker.name, 'factory', 'energy', 120]]);
+    w.nextTick();
+    w.production.runFactoryLogistics(worker);
+    w.nextTick();
+    w.production.runFactoryLogistics(worker);
+    assert.deepEqual(w.actions, [['withdraw', worker.name, 'storage', 'keanium_bar', 20]]);
+    w.nextTick();
+    w.production.runFactoryLogistics(worker);
+    w.nextTick();
+    w.production.runFactoryLogistics(worker);
+    assert.deepEqual(w.actions, [['withdraw', worker.name, 'storage', 'mist', 100]]);
+    w.nextTick();
+    w.production.runFactoryLogistics(worker);
+    w.nextTick();
+    w.production.runFactoryProduction(w.factory);
+    assert.deepEqual(w.actions, [['produce', 'condensate']]);
+});
+
+test('factory carriers share remaining capacity and leave room for every next-reaction component', () => {
+    const w = world({ storage: { energy: 100000, silicon: 120, utrium_bar: 600 }, factory: { wire: 1840 }, capacity: 2000 });
+    const workers = [w.creep('processer-first'), w.creep('processer-second'), w.creep('manager-third')];
+    w.production.planFactoryProduction(w.factory);
+    for (const worker of workers) w.production.runFactoryLogistics(worker);
+    assert.deepEqual(w.actions, [
+        ['withdraw', workers[0].name, 'storage', 'silicon', 20],
+        ['withdraw', workers[1].name, 'storage', 'utrium_bar', 100],
+        ['withdraw', workers[2].name, 'storage', 'energy', 40],
+    ]);
+    w.nextTick();
+    for (const worker of workers) w.production.runFactoryLogistics(worker);
+    assert.equal(w.actions.reduce((sum, action) => sum + action[4], 0), 160);
+    w.nextTick();
+    assert.equal(w.factory.store.getFreeCapacity(), 0);
+    w.production.runFactoryProduction(w.factory);
+    assert.deepEqual(w.actions, [['produce', 'wire']]);
 });
 
 test('same-tick production consumption is not mistaken for surplus to drain', () => {

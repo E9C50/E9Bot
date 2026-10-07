@@ -132,8 +132,8 @@ export function updateLabReactionConfig(room: Room): void {
             let amount = getGlobalResourceAmount(resource)
             for (const candidate of rooms) {
                 const plan = candidate.memory.roomLabConfig?.productionPlan
-                if (candidate !== room && plan?.target === resource) amount += Math.max(0,
-                    plan.targetAmount - getRoomResourceAmount(candidate, resource) - getIncomingResourceAmount(candidate.name, resource))
+                if (candidate !== room && plan?.target === resource) amount += Math.max(0, plan.remaining ??
+                    Math.min(productionBatch, plan.targetAmount - getRoomResourceAmount(candidate, resource) - getIncomingResourceAmount(candidate.name, resource)))
             }
             globalAmounts.set(resource, amount)
         }
@@ -145,20 +145,28 @@ export function updateLabReactionConfig(room: Room): void {
     const targets = localTargets.length > 0 ? localTargets : [...t3Resources].sort((a, b) => global(a) - global(b))
     const previous = config.productionPlan
     const candidates: NonNullable<ILabConfig['productionPlan']>[] = []
-    if (previous && local(previous.target) + incoming(previous.target) < previous.targetAmount &&
+    if (previous && (previous.remaining ?? previous.targetAmount - local(previous.target) - incoming(previous.target)) > 0 &&
+        (!previous.local || local(previous.target) + incoming(previous.target) < previous.targetAmount) &&
         (previous.local || localTargets.length === 0)) candidates.push(previous)
     for (const target of targets) {
         if (candidates.some(plan => plan.target === target)) continue
         const current = local(target) + incoming(target)
         const isLocal = localTargets.includes(target as MineralBoostConstant)
         const quantity = isLocal ? Math.min(productionBatch, resourcePolicy.t3Reserve - current) : productionBatch
-        candidates.push({ target, targetAmount: current + Math.ceil(quantity / reactionUnit) * reactionUnit, local: isLocal })
+        const remaining = Math.ceil(quantity / reactionUnit) * reactionUnit
+        candidates.push({ target, targetAmount: current + remaining, local: isLocal, remaining })
     }
     for (const candidate of candidates) {
-        const plan = buildReactionPlan(candidate.target, candidate.targetAmount - local(candidate.target) - incoming(candidate.target), reactionUnit,
+        const current = local(candidate.target) + incoming(candidate.target)
+        // Legacy global targets were inflated when exported output lowered local stock.
+        let remaining = candidate.remaining ?? Math.min(productionBatch, Math.max(0, candidate.targetAmount - current))
+        if (candidate.local) remaining = Math.min(remaining, Math.max(0, candidate.targetAmount - current))
+        remaining = Math.ceil(remaining / reactionUnit) * reactionUnit
+        const plan = buildReactionPlan(candidate.target, remaining, reactionUnit,
             local, incoming, remote)
         if (!plan) continue
-        config.productionPlan = candidate
+        config.productionPlan = { ...candidate, remaining,
+            targetAmount: !candidate.local && candidate.remaining === undefined ? current + remaining : candidate.targetAmount }
         config.reactionAmount = plan.amount
         room.memory.productionReserve ||= {}
         room.memory.productionReserve.lab = plan.reserve

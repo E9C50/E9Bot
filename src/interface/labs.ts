@@ -45,6 +45,8 @@ interface ILabConfig {
         target: ResourceConstant
         targetAmount: number
         local: boolean
+        /** Final product still to make; exports cannot reopen a completed global batch. */
+        remaining?: number
     }
 
     singleLabConfig: {

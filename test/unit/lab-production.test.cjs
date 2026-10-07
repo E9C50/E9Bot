@@ -157,6 +157,66 @@ test('multiple full rooms include cooking batches when selecting the least stock
     assert.equal(second.memory.roomLabConfig.productionPlan.target, 'XLHO2');
 });
 
+test('legacy global batches inflated by exports migrate to at most 3000 remaining output', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 20000, XLHO2: 20000, UH2O: 7000, X: 7000 });
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 26055, local: false };
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+    assert.equal(room.memory.roomLabConfig.productionPlan.targetAmount, 23000);
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 3000);
+});
+
+test('local batches stop at their stored reserve target if imported final product closes part of the shortage', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 17000, XLHO2: 20000, UH2O: 3000, X: 3000 });
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.targetAmount, 20000);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+    room.storage.store.XUH2O = 19500;
+    w.game.time += 10;
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.local, true);
+    assert.equal(room.memory.roomLabConfig.productionPlan.targetAmount, 20000);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 500);
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 500);
+});
+
+test('a global batch completes while every produced unit is exported and then selects the next least stocked T3', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 20000, XLHO2: 20000, UH2O: 6000, LHO2: 6000, X: 6000 });
+    const warehouse = w.addRoom('W2N2', {}, true);
+    w.loader.globals.StructureLab = class {};
+    w.loader.globals.REACTIONS = { UH2O: { X: 'XUH2O' } };
+    const LabExtension = w.loader.load('mount/structure/LabExtension').default;
+    const [first, second, output] = room.labs;
+    first.mineralType = 'UH2O'; first.store.UH2O = 3000;
+    second.mineralType = 'X'; second.store.X = 3000;
+    Object.setPrototypeOf(output, LabExtension.prototype);
+    output.room = room; output.cooldown = 0;
+    const intents = [];
+    output.runReaction = () => {
+        intents.push(() => {
+            first.store.UH2O -= 5; second.store.X -= 5;
+            warehouse.storage.store.XUH2O = (warehouse.storage.store.XUH2O || 0) + 5;
+        });
+        return 0;
+    };
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    for (let tick = 10; tick < 610; tick++) {
+        w.game.time = tick;
+        w.update(room);
+        output.doWork();
+        while (intents.length) intents.shift()();
+        assert.equal(room.storage.store.XUH2O, 20000, 'exports keep local stock below the old 23000 completion test');
+    }
+    assert.equal(warehouse.storage.store.XUH2O, 3000);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 0);
+    assert.equal(room.memory.productionReserve.lab, undefined);
+    w.game.time = 610;
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XLHO2');
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+});
+
 test('a one-unit T3 deficit plans a complete native five-unit reaction batch', () => {
     const w = world(), room = w.addRoom('W1N1', { XUH2O: 19999, XLHO2: 20000, UH2O: 5, X: 5 });
     w.update(room);
@@ -227,7 +287,7 @@ test('processor fills only the planned reagent batch and retains minerals reserv
     room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'UH2O' }];
     const amounts = [], creep = {
         room, store: store({}), memory: {},
-        takeFromTarget: (_, resource, amount) => { amounts.push({ resource, amount }); return false; },
+        withdraw: (_, resource, amount) => { amounts.push({ resource, amount }); return 0; },
     };
     w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
     assert.deepEqual(amounts, [{ resource: 'UH2O', amount: 400 }]);
@@ -244,7 +304,7 @@ test('processor does not reserve boost and factory ingredients again after they 
     room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'UH2O' }];
     const amounts = [], creep = {
         room, store: store({}), memory: {},
-        takeFromTarget: (_, resource, amount) => { amounts.push({ resource, amount }); return false; },
+        withdraw: (_, resource, amount) => { amounts.push({ resource, amount }); return 0; },
     };
     w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
     assert.deepEqual(amounts, [{ resource: 'UH2O', amount: 400 }]);
@@ -257,7 +317,7 @@ test('processor retains the 10000 base mineral and G floor while filling a react
         room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: resource }];
         const amounts = [], creep = {
             room, store: store({}), memory: {},
-            takeFromTarget: (_, type, amount) => { amounts.push({ resource: type, amount }); return false; },
+            withdraw: (_, type, amount) => { amounts.push({ resource: type, amount }); return 0; },
         };
         w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
         assert.deepEqual(amounts, [{ resource, amount: 1000 }]);
@@ -291,4 +351,110 @@ test('failed terminal withdrawal intents do not debit resource availability', ()
     w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
     assert.equal(w.loader.load('room/resourceNetwork').getTerminalResourceAmount(room, 'H'), 13000);
     assert.equal(creep.memory.working, undefined);
+});
+
+test('storage Lab withdrawals fit a 1650-capacity worker and only deliver after native success', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 3000 });
+    room.memory.roomLabConfig.reactionAmount = 3000;
+    room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'UH2O' }];
+    const calls = [], creep = {
+        room, store: store({}, 1650), memory: {},
+        withdraw: (_, resource, amount) => {
+            calls.push({ resource, amount });
+            return amount > creep.store.getFreeCapacity() ? -8 : 0;
+        },
+        takeFromTarget(target, resource, amount) { creep.withdraw(target, resource, amount); return true; },
+    };
+    const role = w.loader.load('role/adv/RoleAdvProcesser').default({});
+    role.source(creep);
+    assert.deepEqual(calls, [{ resource: 'UH2O', amount: 1650 }]);
+    assert.equal(creep.memory.working, true);
+    creep.memory.working = false;
+    creep.withdraw = () => -6;
+    role.source(creep);
+    assert.equal(creep.memory.working, false, 'failed native intents leave the worker collecting');
+});
+
+test('storage Lab withdrawals move into range and cap a boost request by available stock', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 40 });
+    room.memory.roomLabConfig.singleLabConfig['W1N1-one'] = { boostMode: true, resourceType: 'UH2O' };
+    room.memory.boostNeed.UH2O = 300;
+    room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'UH2O' }];
+    const calls = [], creep = {
+        room, store: store({}, 1650), memory: {},
+        withdraw: (target, resource, amount) => { calls.push(['withdraw', resource, amount]); return -9; },
+        moveTo: target => calls.push(['move', target]),
+    };
+    w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
+    assert.deepEqual(calls, [['withdraw', 'UH2O', 40], ['move', room.storage]]);
+    assert.equal(creep.memory.working, undefined);
+});
+
+test('an empty processor recovers from a legacy failed withdrawal without dropping pending Lab jobs', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 3000 });
+    room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'UH2O' }];
+    const creep = { room, store: store({}, 1650), memory: { working: true }, transferToTarget: () => assert.fail('empty delivery') };
+    w.loader.load('role/adv/RoleAdvProcesser').default({}).target(creep);
+    assert.equal(creep.memory.working, false);
+    assert.equal(room.memory.roomFillJob.labInMineral.length, 1);
+});
+
+test('a small worker fills both reagent Labs and finishes a 3000-unit batch with deferred native intents', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 3000, X: 3000 });
+    w.loader.globals.StructureLab = class {};
+    w.loader.globals.RESOURCE_ENERGY = 'energy';
+    w.loader.globals.REACTIONS = { UH2O: { X: 'XUH2O' }, X: { UH2O: 'XUH2O' } };
+    const LabExtension = w.loader.load('mount/structure/LabExtension').default;
+    const intents = [], withdrawals = [];
+    for (const lab of room.labs) {
+        Object.setPrototypeOf(lab, LabExtension.prototype);
+        lab.room = room; lab.cooldown = 0;
+        lab.runReaction = (first, second) => {
+            if (!(first.store.UH2O >= 5) || !(second.store.X >= 5)) return -6;
+            intents.push(() => {
+                first.store.UH2O -= 5; second.store.X -= 5;
+                lab.store.XUH2O = (lab.store.XUH2O || 0) + 5; lab.mineralType = 'XUH2O';
+            });
+            return 0;
+        };
+    }
+    room.getResource = resource => [room.storage, room.terminal, ...room.labs, creep]
+        .reduce((total, holder) => total + (holder.store[resource] || 0), 0);
+    const creep = {
+        room, store: store({}, 100), memory: {},
+        withdraw(target, resource, amount = Math.min(creep.store.getFreeCapacity(), target.store[resource] || 0)) {
+            withdrawals.push(amount);
+            if (amount > creep.store.getFreeCapacity()) return -8;
+            if (!(amount > 0) || amount > (target.store[resource] || 0)) return -6;
+            intents.push(() => {
+                target.store[resource] -= amount; creep.store[resource] = (creep.store[resource] || 0) + amount;
+                if (target.mineralType === resource && target.store[resource] === 0) target.mineralType = undefined;
+            });
+            return 0;
+        },
+        takeFromTarget(target, resource, amount) { creep.withdraw(target, resource, amount); return true; },
+        transferToTarget(target, resource) {
+            const amount = Math.min(creep.store[resource] || 0, target.store.getFreeCapacity(resource));
+            if (!(amount > 0)) return false;
+            intents.push(() => {
+                creep.store[resource] -= amount; target.store[resource] = (target.store[resource] || 0) + amount;
+                if (room.labs.includes(target)) target.mineralType = resource;
+            });
+            return true;
+        },
+    };
+    w.update(room);
+    const role = w.loader.load('role/adv/RoleAdvProcesser').default({});
+    for (let tick = 10; tick < 1010 && room.memory.roomLabConfig.reactionAmount > 0; tick++) {
+        w.game.time = tick;
+        room.labs.forEach(lab => lab.init());
+        role[creep.memory.working ? 'target' : 'source'](creep);
+        room.labs[2].doWork();
+        while (intents.length) intents.shift()();
+    }
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 0, 'both reagents arrive and native reactions exhaust the planned batch');
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 0);
+    assert.equal(room.getResource('XUH2O'), 3000);
+    assert.equal(room.storage.store.X, 10000, 'ordinary base mineral remains protected');
+    assert.equal(withdrawals.every(amount => amount > 0 && amount <= 100), true);
 });
