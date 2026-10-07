@@ -6,6 +6,8 @@ import {
 } from 'settings/roomPolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
 import { cpuRecoveryInterval } from 'runtime/cpuRecovery'
+import { getAvailableResource, getTerminalResourceAmount, isWarehouseRoom, recordResourceDebit, terminalUsed } from './resourceNetwork'
+import { affordableSendAmount, resourceTransactionCost } from './terminal'
 
 export function sellResource(
     room: Room,
@@ -18,7 +20,7 @@ export function sellResource(
         room.storage == undefined ||
         room.storage.store[resourceType] <= threshold ||
         room.terminal == undefined ||
-        room.terminal.cooldown > 0
+        room.terminal.cooldown > 0 || terminalUsed(room)
     )
         return
 
@@ -48,9 +50,13 @@ export function sellResource(
         }
     }
     if (selectedOrder == undefined || bestPrice <= minPrice) return
-    const amount = Math.min(selectedOrder.remainingAmount, sellAmount)
+    const available = Math.min(selectedOrder.remainingAmount, sellAmount, getTerminalResourceAmount(room, resourceType),
+        getAvailableResource(room, resourceType))
+    const amount = affordableSendAmount(room, resourceType, selectedOrder.roomName!, available, getTerminalResourceAmount(room, 'energy'))
+    if (amount <= 0) return
     const result = Game.market.deal(selectedOrder.id, amount, room.name)
     if (result == OK) {
+        recordResourceDebit(room, resourceType, amount, resourceTransactionCost(room, selectedOrder.roomName!, amount))
         console.log(
             `卖出${resourceType} [${room.name}] => [${selectedOrder.roomName}]，单价为：${selectedOrder.price}，数量为：${amount}，综合单价为：${bestPrice}`
         )
@@ -68,11 +74,11 @@ export function processRoomMarket(room: Room): void {
             sale.minPrice,
             sale.sellAmount
         )
-    if (room.name != Memory.centerStorage) return
+    if (!isWarehouseRoom(room)) return
 
     for (const resourceType of centerTerminalResources) {
         room.memory.terminalAmount[resourceType] =
-            roomPolicy.terminal.centerResourceReserve
+            Math.max(room.memory.terminalAmount[resourceType] || 0, roomPolicy.terminal.centerResourceReserve)
     }
     if (due) for (const sale of centerResourceSales)
         sellResource(

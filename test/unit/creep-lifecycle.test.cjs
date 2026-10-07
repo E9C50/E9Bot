@@ -86,6 +86,18 @@ test('with harvesters but no filler, choose the filler for the first energized c
     assert.deepEqual(Array.from(queue), ['energizedFiller', 'manager', 'emptyFiller', 'builder']);
 });
 
+test('an empty mature logistics fleet spawns its storage carrier before a waiting full-size manager', () => {
+    const room = { name: 'W1N1', controller: { level: 8, my: true }, containers: [],
+        storage: { id: 'storage', store: { energy: 10000 } }, memory: { creepConfig: {
+            manager: demand('manager', 0), harvester: demand('harvester', 1),
+            storageFiller: demand('filler', 2, 'storage'), builder: demand('builder', 4)
+        } } };
+    assert.deepEqual(Array.from(queueApi().buildSpawnQueue(room, {})),
+        ['storageFiller', 'manager', 'harvester', 'builder']);
+    room.storage.store.energy = 0;
+    assert.equal(queueApi().buildSpawnQueue(room, {})[0], 'harvester');
+});
+
 function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'empire', teams = {} } = {}) {
     const errors = [];
     const game = { creeps, rooms: {}, shard: { name: 'test' }, cpu: { getUsed: () => 0 } };

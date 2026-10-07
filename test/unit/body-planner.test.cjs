@@ -230,8 +230,17 @@ test('mature local roads, young-room plains and remote unknown roads have distin
         assert.equal(count(local.planCreepBody(local.room, config(role, { carryParts: 8 })).body, 'move'), 8);
     }
     const manager = young.planCreepBody(young.room, config('manager'));
-    assert.equal(count(manager.body, 'carry'), 16);
+    assert.equal(count(manager.body, 'carry'), 49);
     assert.equal(count(manager.body, 'move'), 1);
+});
+
+test('native hub manager plans all 50 parts even when its replacement must wait for refill', () => {
+    const w = world({ capacity: 3000, available: 300 });
+    const plan = w.planCreepBody(w.room, config('manager'));
+    assert.equal(plan.body.length, 50);
+    assert.equal(count(plan.body, 'carry'), 49);
+    assert.equal(count(plan.body, 'move'), 1);
+    assert.equal(cost(plan.body), 2500);
 });
 
 test('source work respects regeneration, neutral capacity and native harvest compounds', () => {

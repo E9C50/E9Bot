@@ -4,6 +4,7 @@ import { generateCostMatrix } from "utils/CostMatrix";
 import { getDistance } from "utils";
 import { getRoomProcessors } from 'runtime/creepIndex'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { updateResourceJob } from 'room/resourceNetwork'
 
 export default class RoomExtension extends Room {
     private structureGroups?: Map<string, Structure[]>
@@ -350,13 +351,14 @@ export default class RoomExtension extends Room {
      * @returns
      */
     public sendResource(targetRoom: string, resourceType: ResourceConstant, amount: number): boolean {
-        if (isRoomEvacuating(this) || isRoomEvacuating(targetRoom)) return false
+        if (isRoomEvacuating(this) || isRoomEvacuating(targetRoom) || targetRoom === this.name ||
+            !Number.isFinite(amount) || amount <= 0) return false
         const jobId = this.name + '_' + targetRoom + '_' + resourceType
-        this.memory.terminalSendJob[jobId] = {
+        updateResourceJob(this, jobId, {
             targetRoom: targetRoom,
             resourceType: resourceType,
-            amount: amount
-        }
+            amount: Math.floor(amount), createdAt: Game.time
+        })
         return true
     }
 

@@ -21,13 +21,13 @@ function spawnWorld(body = ['move']) {
     const bodyCalls = [];
     const game = { creeps: { living: {} } };
     const loader = createSourceLoader({
-        globals: { StructureSpawn: class {}, Game: game, OK: 0, BODYPART_COST: { move: 50 } },
+        globals: { StructureSpawn: class {}, Game: game, OK: 0, BODYPART_COST: { move: 50, carry: 50 } },
         modules: {
             'settings/creep': {
                 bodyConfigs: { harvester: [{}], builder: [{}] },
                 roleBaseEnum: { HARVESTER: 'harvester', FILLER: 'filler' }, roleAdvEnum: { MANAGER: 'manager' }
             },
-            role: { isRoleSupported: role => ['harvester', 'builder'].includes(role) },
+            role: { isRoleSupported: role => ['harvester', 'builder', 'manager'].includes(role) },
             'creep/bodySelection': { selectCreepBody(room, config, force) {
                 bodyCalls.push(force); return { body, boostPlan: { tier: 0, steps: [] } } } },
             'creep/boosting': { reserveBoostPlan() {} }
@@ -65,6 +65,22 @@ test('an unaffordable empty body waits in the queue without attempting a spawn',
     spawn.doWork();
     assert.deepEqual(calls, []);
     assert.deepEqual(spawn.room.memory.creepSpawnQueue, ['valid']);
+});
+
+test('a hub replacement waits for its complete 2500 energy body instead of forcing a small spawn', () => {
+    const body = [...Array(49).fill('carry'), 'move'];
+    const { spawn, calls, bodyCalls } = spawnWorld(body);
+    spawn.room = { energyAvailable: 300, memory: {
+        creepSpawnQueue: ['manager'], creepConfig: { manager: { role: 'manager', data: {} } }
+    } };
+    spawn.doWork();
+    assert.deepEqual(bodyCalls, [false]);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(spawn.room.memory.creepSpawnQueue, ['manager']);
+    spawn.room.energyAvailable = 2500;
+    spawn.doWork();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].parts.length, 50);
 });
 
 test('custom body tables may have any length and emergency bodies fit current available energy', () => {

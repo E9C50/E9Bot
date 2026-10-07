@@ -1,13 +1,6 @@
-export default class FactoryExtension extends StructureFactory {
-    public init(): void {
-        // if (!this.room.memory.roomFillJob.nukerEnergy && this.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
-        //     this.room.memory.roomFillJob.nukerEnergy = true
-        // }
-        // if (!this.room.memory.roomFillJob.nukerMineral && this.store.getFreeCapacity(RESOURCE_GHODIUM) > 0) {
-        //     this.room.memory.roomFillJob.nukerMineral = true
-        // }
-    }
-    public doWork(): void {
+import { planFactoryProduction, runFactoryProduction } from 'room/factory'
 
-    }
+export default class FactoryExtension extends StructureFactory {
+    public init(): void { planFactoryProduction(this) }
+    public doWork(): void { runFactoryProduction(this) }
 }

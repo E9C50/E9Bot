@@ -115,7 +115,7 @@ export const bodyConfigs: { [role in CreepRoleConstant]: BodySet[] } = {
     attacker: meleeBodyConfigs,
     healer: [1, 2, 4, 6, 10, 16, 20, 25].map(parts => ({ [MOVE]: parts, [HEAL]: parts })),
     dismantler: [1, 2, 4, 6, 10, 16, 20, 25].map(parts => ({ [WORK]: parts, [MOVE]: parts })),
-    manager: [1, 2, 4, 6, 8, 12, 16, 24].map(parts => ({ [CARRY]: parts, [MOVE]: 1 })),
+    manager: [1, 2, 4, 6, 8, 12, 24, 49].map(parts => ({ [CARRY]: parts, [MOVE]: 1 })),
     reserver: [claimBodyConfigs[0], { [CLAIM]: 2, [MOVE]: 2 }],
     integrate: [1, 2, 3, 4, 6, 8, 10, 12].map(parts =>
         ({ [RANGED_ATTACK]: parts, [MOVE]: parts * 2, [HEAL]: parts })),

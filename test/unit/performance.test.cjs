@@ -314,8 +314,10 @@ test('room flags are processed once after initialization across multiple owned r
     assert.equal(calls.filter(call => call === 'flags:all').length, 1);
     for (const name of ['a', 'b']) {
         assert.deepEqual(calls.filter(call => call.endsWith(`:${name}`)).map(call => call.split(':')[0]),
-            ['safeMode', 'center', 'layout', 'terminal', 'market', 'boost', 'reaction', 'structures', 'enemies', 'repair', 'sign']);
+            ['boost', 'reaction', 'safeMode', 'center', 'layout', 'terminal', 'market', 'structures', 'enemies', 'repair', 'sign']);
     }
+    assert.ok(calls.indexOf('reaction:b') < calls.indexOf('terminal:a'),
+        'every owned room declares its production needs before the first terminal can dispatch raw materials');
     assert.equal(calls.some(call => call.endsWith(':neutral')), false);
     calls.length = 0;
     rooms.a.my = rooms.b.my = false;

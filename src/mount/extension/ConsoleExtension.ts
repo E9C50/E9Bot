@@ -10,6 +10,8 @@ import type { CombatTaskOptions } from 'combat/types'
 import { getHaulerRelayStatus } from 'creep/haulerRelay'
 import { renderHelp } from 'runtime/consoleHelp'
 import { createRoomEvacuation, getRoomEvacuationStatus, cancelRoomEvacuation } from 'room/evacuation'
+import { getRoomResourceAmount, isWarehouseRoom, updateResourceJob } from 'room/resourceNetwork'
+import { ordinaryResourceTarget, resourcePolicy } from 'settings/resourcePolicy'
 
 export default class ConsoleExtension {
     public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
@@ -68,7 +70,7 @@ export default class ConsoleExtension {
 
         html += '</tr></thead><tbody>';
 
-        Object.values(Game.rooms).sort((a, b) => a.name == Memory.centerStorage ? -1 : 1).forEach(room => {
+        Object.values(Game.rooms).sort((a, b) => Number(isWarehouseRoom(b)) - Number(isWarehouseRoom(a)) || a.name.localeCompare(b.name)).forEach(room => {
             if (!room.my) return;
 
             const storageCapacity = room.storage?.store.getCapacity() || 0
@@ -124,25 +126,16 @@ export default class ConsoleExtension {
             // 添加资源数量的单元格，并根据数量设置颜色
             resourceTypes.forEach(resourceType => {
                 let color = 'yellow'; // 默认黄色
-                const resourceAmount = room.getResource(resourceType, true, true, true, true) || 0;
-                if (room.name == Memory.centerStorage) {
+                const resourceAmount = getRoomResourceAmount(room, resourceType);
+                if (isWarehouseRoom(room)) {
                     if (resourceAmount < structurePolicy.dashboard.minerals.low) {
                         color = 'red';
                     } else if (resourceAmount >= structurePolicy.dashboard.minerals.high) {
                         color = 'green';
                     }
-                } else if (resourceType == RESOURCE_OPS || resourceType == RESOURCE_POWER) {
-                    if (resourceAmount < structurePolicy.dashboard.ops.low) {
-                        color = 'red';
-                    } else if (resourceAmount >= structurePolicy.dashboard.ops.high) {
-                        color = 'green';
-                    }
                 } else {
-                    if (resourceAmount < structurePolicy.dashboard.compounds.low) {
-                        color = 'red'; // 小于3000显示红色
-                    } else if (resourceAmount >= structurePolicy.dashboard.compounds.high) {
-                        color = 'green'; // 大于5000显示绿色
-                    }
+                    const target = resourceType === RESOURCE_ENERGY ? resourcePolicy.terminalEnergyReserve : ordinaryResourceTarget(resourceType)
+                    color = resourceAmount < target ? 'red' : 'green'
                 }
                 html += `<td style="color: ${color};">${resourceAmount}</td>`;
             });
@@ -218,6 +211,9 @@ export default class ConsoleExtension {
         Object.values(Game.rooms).forEach(room => {
             if (!room.my) return
             room.memory.roomLabConfig.labReactionConfig = undefined
+            delete room.memory.roomLabConfig.productionPlan
+            delete room.memory.roomLabConfig.reactionAmount
+            if (room.memory.productionReserve) delete room.memory.productionReserve.lab
             room.memory.roomFillJob.labInMineral = []
         })
         return true
@@ -229,7 +225,7 @@ export default class ConsoleExtension {
     public clearSendJobs(): boolean {
         Object.values(Game.rooms).forEach(room => {
             if (!room.my) return
-            room.memory.terminalSendJob = {}
+            for (const id in room.memory.terminalSendJob) updateResourceJob(room, id)
         })
         return true
     }

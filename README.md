@@ -6,6 +6,8 @@ Screeps TypeScript Bot。采用按 tick 编排、按业务领域拆分的控制�
 
 完整运行流程、角色职责、状态生命周期、旗帜协议和扩展步骤见 [项目逻辑与架构](docs/architecture.md)。
 
+多仓库资源调度、终端 50000 能量底线、T3 常备量及 Lab/Factory 批量生产见 [资源调度与生产](docs/resources.md)。
+
 ## 开发与验证
 
 使用 Node.js 18 或以上版本，在项目根目录执行：
@@ -86,7 +88,7 @@ bodyConfig("E41N8", "upgrader", null) // 恢复默认
 | 建造/维修/援建 | 移动工作身体配合用能周期的 CARRY；远程/跨 shard 无已确认道路时按平原满载移动 |
 | 矿物开采 | 矿物工自己运回 Storage，按 Extractor 冷却、往返距离和强化效果比较可支付方案的交付产量 |
 | 搬运/填充/实验室运输 | 根据所需等价容量和地形配 MOVE；满载道路约 2 CARRY : 1 MOVE，平原约 1 : 1，强化后使用原生疲劳倍率 |
-| 中央 manager | 默认 16 CARRY + 1 MOVE，可一次搬完普通 Link 的 800 能量；固定站位保持一个经理 |
+| 中央 manager | 成熟房默认 49 CARRY + 1 MOVE，等待 2500 能量再孵化；发展期按预算配置小身体，固定站位保持一个经理 |
 | Scout/Claim/Reserver | Scout 单 MOVE；普通 Claim 单 CLAIM；预定默认单 CLAIM，已知友军预定将到期时可用双 CLAIM，不再默认堆五个 |
 | 攻击/拆迁/治疗/一体机/防守 | 按可支付的火力、治疗、护甲组合生成身体，并按地形与 MOVE 强化计算移动部件；TOUGH 前置，HEAL 后置 |
 

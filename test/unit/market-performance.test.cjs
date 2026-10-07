@@ -9,7 +9,8 @@ function world() {
     const loader = createSourceLoader({ globals: { Game: game, Memory: { centerStorage: 'E31N2' }, ORDER_BUY: 'buy', RESOURCE_ENERGY: 'energy' },
         modules: { 'settings/roomPolicy': { roomPolicy: policy,
             roomResourceSales: [{ resourceType: 'energy', threshold: 600000, minPrice: 20, sellAmount: 10000 }],
-            centerResourceSales: [], centerTerminalResources: ['X'] } } });
+            centerResourceSales: [], centerTerminalResources: ['X'] },
+            './resourceNetwork': { isWarehouseRoom: room => room.name === 'E31N2', terminalUsed: () => false } } });
     const rooms = ['E31N2', 'E34N3', 'E35N1', 'E35N3', 'E36N2', 'E37N7', 'E38N5', 'E38N6', 'E41N7', 'E41N8', 'E37N5']
         .map(name => ({ name, storage: { store: { energy: 700000 } }, terminal: { cooldown: 0 }, memory: { terminalAmount: {} } }));
     return { game, policy, rooms, ...loader.load('room/market'), queries: () => queries,

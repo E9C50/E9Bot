@@ -137,6 +137,13 @@ function labPlanningWorld() {
     const loader = createSourceLoader({ globals: { Game: game, LAB_BOOST_MINERAL: 30 }, modules: {
         'settings/roomPolicy': { roomPolicy: { labs: { updateInterval: 10, staggerUpdates: true, minimumReactionReagent: 1000 } } },
         'settings/labs': { reactionConfig: { product: 1000 }, reactionSource: { product: ['A', 'B'] } },
+        'settings/resourcePolicy': { t3Resources: ['product'], basicMinerals: [], ordinaryResourceTarget: () => 0, resourcePolicy: { t3Reserve: 1000 } },
+        'room/resourceNetwork': {
+            getResourceRooms: () => [], isWarehouseRoom: () => false,
+            getRoomResourceAmount: (room, resource) => room.storage.store[resource] || 0,
+            getAvailableResource: () => 0, getGlobalResourceAmount: () => 0,
+            getIncomingResourceAmount: () => 0, getOutgoingResourceAmount: () => 0, requestRoomResource: () => 0,
+        },
         'settings/boost': { boostConfig: {} },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
         'creep/boosting': { getRoomBoostRequests: () => requests, usableBoostLabs: () => [] },

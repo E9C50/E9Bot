@@ -38,6 +38,14 @@ interface ILabConfig {
     sourceLab1?: string
     sourceLab2?: string
     labReactionConfig?: ResourceConstant
+    /** Current recipe's input batch; processors must leave boost reservations available. */
+    reactionAmount?: number
+    /** A bounded final-product batch survives precursor reactions and terminal cooldowns. */
+    productionPlan?: {
+        target: ResourceConstant
+        targetAmount: number
+        local: boolean
+    }
 
     singleLabConfig: {
         [labId: string]: {

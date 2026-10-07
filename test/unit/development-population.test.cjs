@@ -260,6 +260,21 @@ test('RCL6 custom boosts publish one native mineral mover before selecting boost
     assert.equal(byRole(state.release(), 'processer').length, 1, 'global role policy also prepares RCL6 logistics');
 });
 
+test('RCL7 factory growth publishes a mobile native processor without labs or custom boosts', () => {
+    const home = room({ level: 7, capacity: 5600 });
+    home.storage = structure('storage', 'storage', 20, 20, 20000);
+    home.terminal = structure('terminal', 'terminal', 20, 21, 50000);
+    const state = makeWorld(home);
+    assert.equal(byRole(state.release(), 'processer').length, 0);
+    home.factory = structure('factory', 'factory', 30, 30);
+    const processors = byRole(state.release(), 'processer');
+    assert.equal(processors.length, 1);
+    assert.equal(processors[0].name, 'W1N1_PROCESSER');
+    assert.equal(processors[0].bodyProfile.boostTier, 0);
+    const body = state.loader.load('creep/bodySelection').selectCreepBody(home, processors[0], false).body;
+    assert.ok(body.includes('carry') && body.includes('move'), 'factory mover must reach factories outside the manager seat');
+});
+
 test('550 and 700 capacity split the 5-WORK mining quota into affordable bodies', () => {
     for (const [capacity, expected] of [[300, [2, 2, 1]], [550, [4, 1]], [700, [5]]]) {
         const home = room({ capacity });

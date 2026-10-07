@@ -1,4 +1,4 @@
-// 合成需求配置
+// Legacy target configuration retained for compatibility. Production planning now uses resourcePolicy.ts.
 export const reactionConfig = {
     [RESOURCE_HYDROXIDE]: 10000,
 

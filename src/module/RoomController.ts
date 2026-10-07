@@ -9,6 +9,7 @@ import { roomPolicy } from 'settings/roomPolicy'
 import { isCpuProfilingEnabled, profileCpuTask } from 'runtime/profiling'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { processRoomEvacuation } from 'room/evacuation'
+import { planFactoryProduction } from 'room/factory'
 
 function profileRoomTask(label: string, task: () => unknown): void {
     const policy = roomPolicy.profiling
@@ -47,6 +48,13 @@ export const roomController = function (): void {
         } else if (legacyProfiling) profileRoomTask('处理房间内建筑相关旗子', processRoomFlags)
         else processRoomFlags()
     }
+    // All production reservations must exist before any donor queues or dispatches cargo.
+    for (const room of ownedRooms) {
+        if (isRoomEvacuating(room)) continue
+        runRoomTask('room:labBoost', '更新LabBoost配置', updateLabBoostConfig, room, profiling, legacyProfiling)
+        runRoomTask('room:labReaction', '更新Lab反应配置', updateLabReactionConfig, room, profiling, legacyProfiling)
+        if (room.factory) runRoomTask('room:factoryPlan', '更新Factory生产配置', r => planFactoryProduction(r.factory!), room, profiling, legacyProfiling)
+    }
     for (const room of ownedRooms) {
         runRoomTask('room:safeMode', '自动开启安全模式', autoEnableSafeMode, room, profiling, legacyProfiling)
         if (isRoomEvacuating(room)) {
@@ -60,8 +68,6 @@ export const roomController = function (): void {
         runRoomTask('room:construction', '自动规划', releaseConstructionSite, room, profiling, legacyProfiling)
         runRoomTask('room:terminal', '处理资源平衡', processTerminalResource, room, profiling, legacyProfiling)
         runRoomTask('room:market', '出售资源', processRoomMarket, room, profiling, legacyProfiling)
-        runRoomTask('room:labBoost', '更新LabBoost配置', updateLabBoostConfig, room, profiling, legacyProfiling)
-        runRoomTask('room:labReaction', '更新Lab反应配置', updateLabReactionConfig, room, profiling, legacyProfiling)
         runRoomTask('room:structures', '初始化建筑相关', initializeStructures, room, profiling, legacyProfiling)
         runRoomTask('room:enemy', '更新房间内敌人信息', findTowerEnemy, room, profiling, legacyProfiling)
         runRoomTask('room:repair', '建筑修理相关', repairStructure, room, profiling, legacyProfiling)

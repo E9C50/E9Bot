@@ -43,10 +43,12 @@ export default class LabExtension extends StructureLab {
         // 如果Lab冷却中，就跳过
         if (this.cooldown != 0) return
 
-        const sourceLab1 = this.room.memory.roomLabConfig.sourceLab1
-        const sourceLab2 = this.room.memory.roomLabConfig.sourceLab2
+        const config = this.room.memory.roomLabConfig
+        const sourceLab1 = config.sourceLab1
+        const sourceLab2 = config.sourceLab2
         // 如果房间没有配置好两个sourceLab，就跳过
-        if (sourceLab1 == undefined || sourceLab2 == undefined) return
+        if (sourceLab1 == undefined || sourceLab2 == undefined || config.labReactionConfig == undefined ||
+            config.singleLabConfig[sourceLab1]?.boostMode || config.singleLabConfig[sourceLab2]?.boostMode) return
 
         // 如果是sourceLab，就跳过
         if (this.id == sourceLab1 || this.id == sourceLab2) return
@@ -59,7 +61,7 @@ export default class LabExtension extends StructureLab {
         if (firstType == null || secondType == null) return
         const product = REACTIONS[firstType]?.[secondType]
         const outputType = this.mineralType
-        if (product === undefined || outputType != null && outputType !== product) return
+        if (product === undefined || product !== config.labReactionConfig || outputType != null && outputType !== product) return
 
         // Native runReaction checks room-wide RCL allocation even for empty/full labs.
         // Read live stores first; operated labs consume a larger batch of both reagents.
@@ -72,9 +74,10 @@ export default class LabExtension extends StructureLab {
         }
         const capacity = this.store.getFreeCapacity(product)
         if (lab1.store[firstType] < amount || lab2.store[secondType] < amount ||
-            capacity === null || capacity < amount) return
+            capacity === null || capacity < amount || config.reactionAmount !== undefined && config.reactionAmount < amount) return
 
-        this.runReaction(lab1, lab2);
+        const result = this.runReaction(lab1, lab2)
+        if (config.reactionAmount !== undefined && result === OK) config.reactionAmount -= amount
     }
 
     private labInJobExists(): boolean {
@@ -129,10 +132,11 @@ export default class LabExtension extends StructureLab {
             }
 
             // 如果不是boost模式，并且是sourceLab，并且和配置类型不一致，那就取出
-            if (labConfig.labReactionConfig != undefined && (this.id == labConfig.sourceLab1 || this.id == labConfig.sourceLab2) && !labOutJob.includes(this.id)) {
-                const reactionConfig = reactionSource[labConfig.labReactionConfig]
-                if ((this.id == labConfig.sourceLab1 && this.mineralType != undefined && this.mineralType != reactionConfig[0])
-                    || this.id == labConfig.sourceLab2 && this.mineralType != undefined && this.mineralType != reactionConfig[1]) {
+            if ((this.id == labConfig.sourceLab1 || this.id == labConfig.sourceLab2) && this.mineralType != undefined && !labOutJob.includes(this.id)) {
+                const reactionConfig = labConfig.labReactionConfig && reactionSource[labConfig.labReactionConfig]
+                if (reactionConfig == undefined ||
+                    (this.id == labConfig.sourceLab1 && this.mineralType != reactionConfig[0]) ||
+                    (this.id == labConfig.sourceLab2 && this.mineralType != reactionConfig[1])) {
                     this.room.memory.roomFillJob.labOut.push(this.id)
                 }
             }
@@ -140,15 +144,18 @@ export default class LabExtension extends StructureLab {
             // 如果有反应配置，则处理sourceLab
             if (labConfig.labReactionConfig != undefined) {
                 const reactionConfig = reactionSource[labConfig.labReactionConfig]
+                const desired = Math.min(3000, labConfig.reactionAmount ?? 3000)
                 if (this.id == labConfig.sourceLab1) {
-                    const amount1 = this.room.getResource(reactionConfig[0], true, false, true, true)
-                    if (amount1 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
+                    const amount1 = this.room.getResource(reactionConfig[0], true, true, true, true)
+                    if (amount1 > 0 && (this.store[reactionConfig[0]] || 0) < desired &&
+                        (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
                         this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[0] })
                     }
                 }
                 if (this.id == labConfig.sourceLab2) {
-                    const amount2 = this.room.getResource(reactionConfig[1], true, false, true, true)
-                    if (amount2 > 0 && (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
+                    const amount2 = this.room.getResource(reactionConfig[1], true, true, true, true)
+                    if (amount2 > 0 && (this.store[reactionConfig[1]] || 0) < desired &&
+                        (this.mineralType == undefined || this.store.getFreeCapacity(this.mineralType) > structurePolicy.lab.sourceFreeCapacity) && !this.labInJobExists()) {
                         this.room.memory.roomFillJob.labInMineral.push({ labId: this.id, resourceType: reactionConfig[1] })
                     }
                 }

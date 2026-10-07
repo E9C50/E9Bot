@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const { world: resourceWorld } = require('../helpers/resource-world.cjs');
 
 function roomLoader(globals = {}, modules = {}) {
     return createSourceLoader({ globals: { Game: { time: 1, shard: { name: 'shard3' }, rooms: {}, flags: {} }, Memory: { warMode: {} },
@@ -239,88 +240,123 @@ function terminalWorld(resources = { X: 100 }, overrides = {}) {
     return { game, memory, queued, logs, policy, addRoom, process: room => api.processTerminalResource(room), reload: () => { api = load(); } };
 }
 
-test('ten destination rooms index one hundred center jobs once, preserve every transfer, and avoid per-transfer logs', () => {
-    const resources = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`R${index}`, 100])), w = terminalWorld(resources);
-    const center = w.addRoom('W0N0', Object.fromEntries(Object.keys(resources).map(resource => [resource, 1000])));
-    const destinations = Array.from({ length: 10 }, (_, index) => w.addRoom(`W${index + 1}N1`));
+test('ten production recipients share one linear existing-job index and retain every resource promise quietly', () => {
+    const resources = Array.from({ length: 40 }, (_, index) => `R${index}`), w = resourceWorld();
+    const center = w.room('W0N0', Object.fromEntries(resources.map(resource => [resource, 1000])), { warehouse: true });
+    const destinations = Array.from({ length: 10 }, (_, index) => w.room(`W${index + 1}N1`));
     let reads = 0;
     for (let index = 0; index < 100; index++) center.memory.terminalSendJob[`old${index}`] = { targetRoom: 'elsewhere', amount: 100,
         get resourceType() { reads++; return `oldResource${index}`; } };
     for (const room of destinations) Object.values(center.memory.terminalSendJob).map(job => `${job.targetRoom}:${job.resourceType}`);
     assert.equal(reads, 1000, 'the previous per-room center index rebuild reads every old job');
     reads = 0;
-    for (const room of destinations) w.process(room);
-    assert.equal(reads, 100); assert.equal(w.queued.length, 400); assert.equal(w.logs.length, 0);
-    assert.ok(w.queued.every(job => job.from === center.name && job.amount === 100));
+    w.planResourceDistribution();
+    for (const room of destinations) {
+        for (const resource of resources) w.requestRoomResource(room, resource, 100);
+        w.processTerminalResource(room);
+    }
+    assert.ok(reads <= 500, 'existing jobs are read a bounded number of times for the entire empire');
+    const jobs = w.jobs().filter(job => job.kind === 'production');
+    assert.equal(jobs.length, 400); assert.equal(w.logs.length, 0);
+    assert.ok(jobs.every(job => job.from === center.name && job.amount === 100));
 });
 
-test('terminal cooldown preserves job reserves without querying capacity or attempting native sends', () => {
-    const w = terminalWorld(), room = w.addRoom('W1N1');
-    room.terminal.store.getFreeCapacity = () => { throw new Error('cooldown prevents a send'); };
+test('terminal cooldown stages the next complete batch and its fee without attempting a native send', () => {
+    const w = resourceWorld(), room = w.room('W1N1', { wire: 5000 }, { cooldown: 10 });
+    const target = w.room('W2N2');
     room.terminal.send = () => { throw new Error('cooldown prevents a send'); };
-    room.memory.terminalSendJob.energy = { targetRoom: 'W2N2', resourceType: 'energy', amount: 123 };
-    room.memory.terminalSendJob.X = { targetRoom: 'W2N2', resourceType: 'X', amount: 234 };
-    w.process(room);
-    assert.equal(room.memory.terminalAmount.energy, 50123); assert.equal(room.memory.terminalAmount.X, 234);
+    room.memory.terminalSendJob.wire = { targetRoom: target.name, resourceType: 'wire', amount: 5000 };
+    w.processTerminalResource(room);
+    assert.equal(room.memory.terminalAmount.energy, 50500);
+    assert.equal(room.memory.terminalAmount.wire, 5000);
+    assert.equal(room.memory.terminalSendJob.wire.amount, 5000);
+    assert.equal(w.sends.length, 0);
 });
 
-test('energy exporters share tick-local room membership but re-read live candidate stores and new rooms next tick', () => {
-    const w = terminalWorld(), donors = Array.from({ length: 3 }, (_, index) => w.addRoom(`W${index + 1}N1`, { energy: 500000 }));
-    const first = w.addRoom('W4N1', { energy: 10 }), second = w.addRoom('W5N1', { energy: 20 });
+test('resource suppliers share tick-local room membership while stock stays live and new rooms appear next tick', () => {
+    const w = resourceWorld(), donors = Array.from({ length: 3 }, (_, index) => w.room(`W${index + 1}N1`, { energy: 500000 }));
+    w.room('W4N1', { energy: 10 }); w.room('W5N1', { energy: 20 });
     let membershipReads = 0;
-    for (const room of Object.values(w.game.rooms)) Object.defineProperty(room, 'my', { get() { membershipReads++; return true; } });
-    w.process(donors[0]);
-    assert.equal(w.queued[0].targetRoom, first.name);
-    first.storage.store.energy = 400000;
-    w.process(donors[1]); w.process(donors[2]);
-    assert.equal(membershipReads, 5, 'three donors use one empire membership index instead of fifteen room ownership reads');
-    assert.deepEqual(w.queued.map(job => job.targetRoom), [first.name, second.name, second.name]);
-    w.game.time++;
-    const newest = w.addRoom('W6N1', { energy: 5 });
-    w.process(donors[0]);
-    assert.equal(w.queued.at(-1).targetRoom, newest.name, 'the next tick cannot retain a stale room list');
-});
-
-test('shared terminal pair counts observe successful job removal and do not duplicate a still-pending pair', () => {
-    const w = terminalWorld(), center = w.addRoom('W0N0', { X: 1000 }), room = w.addRoom('W1N1');
-    center.terminal.cooldown = 0; center.terminal.store.X = 1000; center.terminal.send = () => 0;
-    center.memory.terminalSendJob.first = { targetRoom: room.name, resourceType: 'X', amount: 100 };
-    center.memory.terminalSendJob.second = { targetRoom: room.name, resourceType: 'X', amount: 100 };
-    w.process(room); assert.equal(w.queued.length, 0);
-    w.process(center); w.process(room); assert.equal(w.queued.length, 0, 'one same-pair job remains');
-    w.process(center); w.process(room); assert.equal(w.queued.length, 1, 'deleting the last pair allows its next real request');
-});
-
-test('failed queue writes are neither logged nor marked pending, and latest Store values are read on the next call', () => {
-    const w = terminalWorld({ X: 100 }, { logTransfers: true }), center = w.addRoom('W0N0', { X: 1000 }), room = w.addRoom('W1N1');
-    let attempts = 0;
-    center.sendResource = () => { attempts++; return false; };
-    w.process(room); w.process(room);
-    assert.equal(attempts, 2); assert.equal(w.logs.length, 0);
-    center.storage.store.X = 0; w.process(room);
-    assert.equal(attempts, 2, 'current center resources are not a cached quantity');
-    w.game.time++; center.storage.store.X = 1000; w.game.time = 60; w.process(room);
-    assert.equal(attempts, 3);
-});
-
-test('stable stagger gives each of eleven rooms one distribution every thirty ticks across a module reload', () => {
-    const w = terminalWorld({ X: 100 }, { staggerDistribution: true }), schedules = new Map();
-    w.addRoom('W0N0', { X: 1000 });
-    const rooms = Array.from({ length: 11 }, (_, index) => {
-        const name = `W${index + 1}N1`, schedule = []; schedules.set(name, schedule);
-        return w.addRoom(name, { get X() { schedule.push(w.game.time); return 0; } });
+    for (const room of Object.values(w.game.rooms)) Object.defineProperty(room.controller, 'my', {
+        get() { membershipReads++; return true; }
     });
+    for (let index = 0; index < 10; index++) assert.equal(w.getResourceRooms().length, 5);
+    assert.equal(w.getAvailableResource(donors[0], 'energy'), 500000);
+    donors[0].storage.store.energy = 0;
+    assert.equal(w.getAvailableResource(donors[0], 'energy'), 0, 'Store quantities are never part of the membership cache');
+    assert.equal(membershipReads, 5);
+    w.game.time++;
+    const newest = w.room('W6N1', { energy: 5 });
+    assert.ok(w.getResourceRooms().includes(newest), 'the next tick rebuilds membership');
+    assert.equal(w.getResourceRooms().length, 6);
+    assert.equal(membershipReads, 10, 'five existing room ownership checks run once again in the new tick');
+});
+
+test('successful sends replace pending promises with delivered stock without duplicating same-pair requests', () => {
+    const w = resourceWorld(), center = w.room('W0N0', { wire: 0 }, {
+        terminal: { energy: 60000, wire: 200 }, cooldown: 0
+    }), room = w.room('W1N1');
+    center.memory.terminalSendJob.first = { targetRoom: room.name, resourceType: 'wire', amount: 100 };
+    center.memory.terminalSendJob.second = { targetRoom: room.name, resourceType: 'wire', amount: 100 };
+    w.processTerminalResource(center);
+    assert.equal(center.memory.terminalSendJob.first, undefined);
+    assert.equal(w.getIncomingResourceAmount(room.name, 'wire'), 100);
+    assert.equal(w.projectedResource(room, 'wire'), 200);
+    w.requestRoomResource(room, 'wire', 200);
+    w.processTerminalResource(center);
+    assert.equal(w.sends.length, 1, 'only one native terminal intent is allowed per tick');
+    assert.equal(Object.keys(center.memory.terminalSendJob).length, 1);
+    w.game.time++;
+    center.terminal.store.wire -= 100; center.terminal.store.energy -= 10;
+    room.terminal.store.wire = 100;
+    w.processTerminalResource(center);
+    w.requestRoomResource(room, 'wire', 200);
+    assert.equal(w.sends.length, 2);
+    assert.equal(w.getIncomingResourceAmount(room.name, 'wire'), 0);
+    assert.equal(Object.keys(center.memory.terminalSendJob).length, 0);
+});
+
+test('unavailable stock is never promised or logged and new live stock can satisfy the next request', () => {
+    const w = resourceWorld(1), center = w.room('W0N0', { wire: 0 }, { warehouse: true }), room = w.room('W1N1');
+    w.requestRoomResource(room, 'wire', 100); w.requestRoomResource(room, 'wire', 100);
+    assert.equal(w.jobs().length, 0);
+    assert.equal(w.getIncomingResourceAmount(room.name, 'wire'), 0);
+    assert.equal(w.logs.length, 0);
+    center.storage.store.wire = 100;
+    w.requestRoomResource(room, 'wire', 100);
+    assert.equal(w.getIncomingResourceAmount(room.name, 'wire'), 100);
+    assert.equal(w.jobs().length, 1, 'the existing room index still reads current stock');
+});
+
+test('one global thirty-tick plan stays idempotent across eleven room calls and a module reload', () => {
+    const w = resourceWorld(1), planningTicks = new Set();
+    w.room('W0N0', { X: 200000 }, { warehouse: true });
+    const rooms = Array.from({ length: 11 }, (_, index) => w.room(`W${index + 1}N1`));
     for (let tick = 1; tick <= 60; tick++) {
         w.game.time = tick; if (tick === 31) w.reload();
-        for (const room of rooms) w.process(room);
+        for (const room of rooms) w.planResourceDistribution();
+        const jobs = w.jobs().filter(job => job.resourceType === 'X');
+        for (const job of jobs) planningTicks.add(job.createdAt);
+        if (tick >= 30) {
+            assert.equal(jobs.length, 11);
+            for (const room of rooms) assert.equal(w.getIncomingResourceAmount(room.name, 'X'), 10000);
+        } else assert.equal(jobs.length, 0);
     }
-    for (const schedule of schedules.values()) { assert.equal(schedule.length, 2); assert.equal(schedule[1] - schedule[0], 30); }
-    assert.ok(new Set(Array.from(schedules.values(), schedule => schedule[0])).size > 1, 'distribution no longer runs every room on the same global tick');
+    assert.deepEqual([...planningTicks], [30, 60]);
+    w.reload(); w.planResourceDistribution();
+    assert.equal(w.jobs().filter(job => job.resourceType === 'X').length, 11,
+        'reloading on a distribution tick rebuilds the same promises instead of adding duplicates');
 });
 
-test('an invalid distribution interval does not delay immediate energy-balancing jobs', () => {
-    const w = terminalWorld({ X: 100 }, { distributionInterval: 0, staggerDistribution: true });
-    const donor = w.addRoom('W1N1', { energy: 500000 }), recipient = w.addRoom('W2N2', { energy: 10 });
-    w.process(donor);
-    assert.deepEqual(w.queued, [{ from: donor.name, targetRoom: recipient.name, resourceType: 'energy', amount: 50000 }]);
+test('energy promises preserve the terminal floor and native shipments also reserve their transaction fee', () => {
+    const w = resourceWorld(1), donor = w.room('W1N1', { energy: 60000 });
+    const first = w.room('W2N2', { energy: 0 }), second = w.room('W3N3', { energy: 0 });
+    w.requestRoomResource(first, 'energy', 100000);
+    w.requestRoomResource(second, 'energy', 100000);
+    assert.ok(w.getOutgoingResourceAmount(donor.name, 'energy') <= 60000);
+    assert.ok(w.projectedResource(donor, 'energy') >= 50000);
+    const shipment = w.affordableSendAmount(donor, 'energy', first.name, 100000, 80000);
+    const fee = w.resourceTransactionCost(donor, first.name, shipment);
+    assert.equal(shipment, 27272);
+    assert.equal(80000 - shipment - fee, 50000, 'cargo and native fees are both paid above the energy floor');
 });

@@ -84,14 +84,14 @@ test('closing creeps enter cargo handling before retirement, boost and ordinary 
 
 function terminalWorld() {
     const memory = { rooms: { W1N1: closingRoom().memory }, centerStorage: 'W1N1' }, sends = [], queues = [];
-    const store = (energy, mineral = 0) => ({ energy, H: mineral, getFreeCapacity: () => 100000 });
+    const store = (energy, mineral = 0) => ({ energy, H: mineral, getCapacity: () => 300000, getFreeCapacity: () => 100000 });
     const room = { name: 'W2N1', my: true, level: 8, memory: { terminalSendJob: { old: { targetRoom: 'W1N1', resourceType: 'H', amount: 100 }, normal: { targetRoom: 'W3N1', resourceType: 'H', amount: 100 } } },
-        storage: { store: store(20000, 1000) }, terminal: { cooldown: 0, store: store(1000, 1000), send(resource, amount, target) { sends.push({ resource, amount, target }); return 0; } },
+        storage: { store: store(20000, 20000) }, terminal: { cooldown: 0, store: store(60000, 1000), send(resource, amount, target) { sends.push({ resource, amount, target }); return 0; } },
         sendResource(target, resource, amount) { queues.push({ target, resource, amount }); return true; } };
     const source = { ...closingRoom(), storage: { store: store(0) }, terminal: { cooldown: 0, store: store(0) }, level: 8 };
     source.memory.terminalSendJob = {};
     memory.rooms.W1N1 = source.memory;
-    const game = { time: 1, shard: { name: 'shard3' }, rooms: { W1N1: source, W2N1: room } };
+    const game = { time: 1, shard: { name: 'shard3' }, rooms: { W1N1: source, W2N1: room }, market: { calcTransactionCost: amount => Math.ceil(amount / 10) } };
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', RESOURCE_GHODIUM: 'G', OK: 0 }, modules: {
         'settings/room': { defaultAutoResource: { H: 1000 } },
         'settings/roomPolicy': { roomPolicy: { terminal: { energyReserve: 100, maximumSendAmount: 1000, energyExportThreshold: 10000, energyImportThreshold: 5000,
@@ -104,18 +104,18 @@ function terminalWorld() {
 test('terminal balancing and old queued jobs never replenish a closing destination, even during cooldown', () => {
     const w = terminalWorld(); w.process(w.room);
     assert.deepEqual(w.sends, [{ resource: 'H', amount: 100, target: 'W3N1' }]);
-    assert.deepEqual(w.queues, []); assert.equal(w.room.memory.terminalAmount.H, 100);
+    assert.deepEqual(w.queues, []); assert.equal(w.room.memory.terminalAmount.H, undefined);
     assert.equal(w.room.memory.terminalSendJob.old.amount, 100, 'cancel may resume the explicit pending delivery');
     w.room.terminal.cooldown = 1; w.process(w.room); assert.equal(w.room.memory.terminalAmount.H, undefined);
     w.process(w.source); assert.equal(w.sends.length, 1, 'normal source pipeline is bypassed');
     delete w.source.memory.evacuation; w.room.terminal.cooldown = 0; w.game.time++; w.process(w.room);
-    assert.equal(w.sends[1].target, 'W1N1'); assert.ok(w.queues.some(job => job.target === 'W1N1'));
+    assert.equal(w.sends[1].target, 'W1N1');
 });
 
 test('sendResource refuses closing source or invisible closing destination without replacing pending jobs', () => {
     class Room {}
     const memory = { rooms: { W1N1: { evacuation: {} } } };
-    const loader = createSourceLoader({ globals: { Room, Memory: memory }, modules: {
+    const loader = createSourceLoader({ globals: { Room, Memory: memory, Game: { time: 1, rooms: {} } }, modules: {
         'settings/structures': {}, 'settings/settings': {}, 'utils/CostMatrix': {}, utils: {}, 'runtime/creepIndex': {},
     } });
     const room = new (loader.load('mount/extension/RoomExtension').default)(); room.name = 'W2N1'; room.memory = { terminalSendJob: {} };
@@ -135,7 +135,8 @@ test('ordinary terminal shipments share evacuation capacity reservations without
     assert.equal(w.room.memory.terminalSendJob.normal.amount, 50);
     assert.equal(shared.getEvacuationIncomingCapacity(receivingRoom), 0);
     const second = { name: 'W4N1', my: true, level: 1, memory: { terminalSendJob: { pending: { targetRoom: 'W3N1', resourceType: 'H', amount: 100 } } },
-        terminal: { cooldown: 0, store: { H: 100, getFreeCapacity: () => 1000 }, send(resource, amount, target) { w.sends.push({ resource, amount, target }); return 0; } } };
+        storage: { store: { energy: 10000, H: 20000 } },
+        terminal: { cooldown: 0, store: { energy: 60000, H: 100, getCapacity: () => 300000, getFreeCapacity: () => 1000 }, send(resource, amount, target) { w.sends.push({ resource, amount, target }); return 0; } } };
     w.process(second); assert.equal(w.sends.length, 1); assert.equal(second.memory.terminalSendJob.pending.amount, 100);
     w.game.time++; w.process(second);
     assert.deepEqual(w.sends[1], { resource: 'H', amount: 80, target: 'W3N1' });

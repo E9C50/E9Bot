@@ -35,6 +35,17 @@ export function buildSpawnQueue(
             creep.memory.role == roleBaseEnum.HARVESTER
     )
 
+    // A full-size manager must not block the carrier needed to refill its spawn energy.
+    if (!isDevelopingRoom(room) && fillers.length === 0 && room.storage &&
+        room.storage.store[RESOURCE_ENERGY] > 0) {
+        const storageCarrier = creepSpawnQueue.find(name => {
+            const config = creepConfigCache[name]
+            return config.role === roleBaseEnum.FILLER &&
+                (config.data as FillerData).sourceId === room.storage!.id
+        })
+        if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
+    }
+
     // Source.id logistics works before containers exist: commission one carrier before adding more miners.
     if (isDevelopingRoom(room) && fillers.length === 0 && harvesters.length > 0) {
         const sourceIds = new Set(harvesters.map(creep => (creep.memory.data as HarvesterData).sourceId))

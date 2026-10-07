@@ -1,70 +1,179 @@
 import { boostConfig } from 'settings/boost'
 import { getRoomBoostRequests, usableBoostLabs } from 'creep/boosting'
 import { getRoomProcessors } from 'runtime/creepIndex'
-import { reactionConfig, reactionSource } from 'settings/labs'
+import { reactionSource } from 'settings/labs'
 import { roomPolicy } from 'settings/roomPolicy'
+import { basicMinerals, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
 import { cpuRecoveryInterval, hasPendingRoomBoost } from 'runtime/cpuRecovery'
+import {
+    getAvailableResource, getGlobalResourceAmount, getIncomingResourceAmount, getOutgoingResourceAmount,
+    getResourceRooms, getRoomResourceAmount, isWarehouseRoom, requestRoomResource,
+} from 'room/resourceNetwork'
 
-/** Only this update's immutable game snapshot is reused; no data survives the call. */
-function createReactionResourceReader(room: Room): (resource: ResourceConstant) => number {
-    const amounts = new Map<ResourceConstant, number>()
-    return (resource) => {
-        const cached = amounts.get(resource)
-        if (cached !== undefined) return cached
-        let amount = room.storage?.store[resource] ?? 0
-        for (const lab of room.labs) amount += lab.store[resource]
-        for (const creep of getRoomProcessors(room.name)) amount += creep.store[resource]
-        amounts.set(resource, amount)
-        return amount
-    }
+const productionBatch = 3000
+type ResourceAmounts = Partial<Record<ResourceConstant, number>>
+interface ReactionPlan {
+    reaction: ResourceConstant
+    amount: number
+    reserve: ResourceAmounts
+    imports: ResourceAmounts
 }
 
-function hasReactionReagents(
-    getResource: (resource: ResourceConstant) => number,
-    resourceType: ResourceConstant
-): boolean {
-    const sources = reactionSource[resourceType]
-    if (sources == undefined) return false
-    const minimum = roomPolicy.labs.minimumReactionReagent
-    return (
-        getResource(sources[0]) > minimum &&
-        getResource(sources[1]) > minimum
-    )
+/** Allocate existing compounds before expanding recipes; repeated basic ingredients share one pool. */
+function buildReactionPlan(
+    target: ResourceConstant, amount: number, reactionUnit: number,
+    local: (resource: ResourceConstant) => number,
+    incoming: (resource: ResourceConstant) => number,
+    remote: (resource: ResourceConstant) => number,
+): ReactionPlan | undefined {
+    const pool = new Map<ResourceConstant, { local: number; remote: number }>()
+    const reserve: ResourceAmounts = {}, imports: ResourceAmounts = {}
+    let firstReaction: ResourceConstant | undefined
+    let firstAmount = 0
+    const produce = (resource: ResourceConstant, quantity: number, path: Set<ResourceConstant>): boolean => {
+        const sources = reactionSource[resource]
+        if (!sources || path.has(resource)) return false
+        quantity = Math.ceil(quantity / reactionUnit) * reactionUnit
+        const nextPath = new Set(path); nextPath.add(resource)
+        for (const source of sources) {
+            reserve[source] = (reserve[source] || 0) + quantity
+            let stock = pool.get(source)
+            if (!stock) {
+                stock = { local: local(source) + incoming(source), remote: remote(source) }
+                pool.set(source, stock)
+            }
+            const useLocal = Math.min(quantity, stock.local)
+            stock.local -= useLocal
+            const useRemote = Math.min(quantity - useLocal, stock.remote)
+            stock.remote -= useRemote
+            imports[source] = (imports[source] || 0) + useRemote
+            const missing = quantity - useLocal - useRemote
+            if (missing > 0 && !produce(source, missing, nextPath)) return false
+        }
+        if (!firstReaction) { firstReaction = resource; firstAmount = quantity }
+        return true
+    }
+    return amount > 0 && produce(target, amount, new Set()) && firstReaction ?
+        { reaction: firstReaction, amount: firstAmount, reserve, imports } : undefined
+}
+
+function setLabReaction(room: Room, resource: ResourceConstant | undefined): void {
+    const config = room.memory.roomLabConfig
+    if (!resource) delete config.reactionAmount
+    if (config.labReactionConfig === resource) return
+    config.labReactionConfig = resource
+    // Do not let a processor finish an obsolete precursor delivery after a recipe change.
+    const jobs = room.memory.roomFillJob?.labInMineral
+    if (jobs) room.memory.roomFillJob.labInMineral = jobs.filter(job => {
+        if (config.singleLabConfig[job.labId]?.boostMode) return true
+        const expected = resource && reactionSource[resource]
+        return !!expected && (job.labId === config.sourceLab1 && job.resourceType === expected[0] ||
+            job.labId === config.sourceLab2 && job.resourceType === expected[1])
+    })
+    if (resource) console.log(`${room.name} notify_Lab合成配置更新：${resource}`)
 }
 
 export function updateLabReactionConfig(room: Room): void {
     const interval = hasPendingRoomBoost(room) ? roomPolicy.labs.updateInterval :
         cpuRecoveryInterval('labPlanning', roomPolicy.labs.updateInterval)
-    if (
-        !roomWorkDue(room.name, interval, roomPolicy.labs.staggerUpdates === true) ||
-        room.labs.length == 0
-    )
-        return
+    if (!roomWorkDue(room.name, interval, roomPolicy.labs.staggerUpdates === true)) return
     const config = room.memory.roomLabConfig
-    if (config.sourceLab1 == undefined || config.sourceLab2 == undefined) return
-    const getReactionResource = createReactionResourceReader(room)
-    const currentReaction = config.labReactionConfig
-    if (
-        currentReaction != undefined &&
-        room.getResource(currentReaction) < reactionConfig[currentReaction] &&
-        hasReactionReagents(getReactionResource, currentReaction)
-    )
-        return
-
-    for (const resource in reactionConfig) {
-        const resourceType = resource as ResourceConstant
-        if (
-            getReactionResource(resourceType) >=
-            reactionConfig[resource]
-        )
-            continue
-        if (!hasReactionReagents(getReactionResource, resourceType)) continue
-        config.labReactionConfig = resourceType
-        console.log(`${room.name} notify_Lab合成配置更新：${resourceType}`)
+    if (room.labs.length === 0 || config.sourceLab1 == undefined || config.sourceLab2 == undefined ||
+        config.singleLabConfig[config.sourceLab1]?.boostMode || config.singleLabConfig[config.sourceLab2]?.boostMode) {
+        delete config.productionPlan
+        setLabReaction(room, undefined)
+        if (room.memory.productionReserve) delete room.memory.productionReserve.lab
         return
     }
-    config.labReactionConfig = undefined
+    const rooms = getResourceRooms()
+    const warehouse = isWarehouseRoom(room)
+    let reactionUnit = typeof LAB_REACTION_AMOUNT === 'number' ? LAB_REACTION_AMOUNT : 5
+    if (typeof PWR_OPERATE_LAB !== 'undefined' && typeof POWER_INFO !== 'undefined') {
+        for (const lab of room.labs) {
+            if (lab.id === config.sourceLab1 || lab.id === config.sourceLab2 || config.singleLabConfig[lab.id]?.boostMode) continue
+            for (const effect of lab.effects || []) {
+                if (effect.effect === PWR_OPERATE_LAB && effect.ticksRemaining > 0 && 'level' in effect) {
+                    reactionUnit = Math.max(reactionUnit, LAB_REACTION_AMOUNT + POWER_INFO[PWR_OPERATE_LAB].effect[effect.level - 1])
+                }
+            }
+        }
+    }
+    // Snapshot resource values once per planning pass, without retaining native objects across ticks.
+    const amounts = new Map<ResourceConstant, number>(), rawAmounts = new Map<ResourceConstant, number>()
+    const incomingAmounts = new Map<ResourceConstant, number>()
+    const remoteAmounts = new Map<ResourceConstant, number>(), globalAmounts = new Map<ResourceConstant, number>()
+    const local = (resource: ResourceConstant): number => {
+        if (!amounts.has(resource)) {
+            const baseKeep = !warehouse && (basicMinerals.includes(resource) || resource === 'G') ? ordinaryResourceTarget(resource) : 0
+            const amount = getRoomResourceAmount(room, resource) - Math.max(baseKeep, room.memory.boostNeed?.[resource] || 0) -
+                (room.memory.productionReserve?.factory?.[resource] || 0) - getOutgoingResourceAmount(room.name, resource)
+            rawAmounts.set(resource, amount)
+            amounts.set(resource, Math.max(0, amount))
+        }
+        return amounts.get(resource)!
+    }
+    const incoming = (resource: ResourceConstant): number => {
+        if (!incomingAmounts.has(resource)) {
+            const available = local(resource)
+            incomingAmounts.set(resource, Math.max(0, rawAmounts.get(resource)! +
+                getIncomingResourceAmount(room.name, resource)) - available)
+        }
+        return incomingAmounts.get(resource)!
+    }
+    const remote = (resource: ResourceConstant): number => {
+        if (!remoteAmounts.has(resource)) remoteAmounts.set(resource, rooms.reduce((total, candidate) =>
+            total + (candidate === room ? 0 : getAvailableResource(candidate, resource)), 0))
+        return remoteAmounts.get(resource)!
+    }
+    const global = (resource: ResourceConstant): number => {
+        if (!globalAmounts.has(resource)) {
+            // Include batches already cooking elsewhere so all rooms do not choose the same low stock.
+            let amount = getGlobalResourceAmount(resource)
+            for (const candidate of rooms) {
+                const plan = candidate.memory.roomLabConfig?.productionPlan
+                if (candidate !== room && plan?.target === resource) amount += Math.max(0,
+                    plan.targetAmount - getRoomResourceAmount(candidate, resource) - getIncomingResourceAmount(candidate.name, resource))
+            }
+            globalAmounts.set(resource, amount)
+        }
+        return globalAmounts.get(resource)!
+    }
+    const localTargets = warehouse ? [] : t3Resources.filter(resource =>
+        local(resource) + incoming(resource) < resourcePolicy.t3Reserve)
+    localTargets.sort((a, b) => local(a) + incoming(a) - local(b) - incoming(b) || global(a) - global(b))
+    const targets = localTargets.length > 0 ? localTargets : [...t3Resources].sort((a, b) => global(a) - global(b))
+    const previous = config.productionPlan
+    const candidates: NonNullable<ILabConfig['productionPlan']>[] = []
+    if (previous && local(previous.target) + incoming(previous.target) < previous.targetAmount &&
+        (previous.local || localTargets.length === 0)) candidates.push(previous)
+    for (const target of targets) {
+        if (candidates.some(plan => plan.target === target)) continue
+        const current = local(target) + incoming(target)
+        const isLocal = localTargets.includes(target as MineralBoostConstant)
+        const quantity = isLocal ? Math.min(productionBatch, resourcePolicy.t3Reserve - current) : productionBatch
+        candidates.push({ target, targetAmount: current + Math.ceil(quantity / reactionUnit) * reactionUnit, local: isLocal })
+    }
+    for (const candidate of candidates) {
+        const plan = buildReactionPlan(candidate.target, candidate.targetAmount - local(candidate.target) - incoming(candidate.target), reactionUnit,
+            local, incoming, remote)
+        if (!plan) continue
+        config.productionPlan = candidate
+        config.reactionAmount = plan.amount
+        room.memory.productionReserve ||= {}
+        room.memory.productionReserve.lab = plan.reserve
+        // Imports are absolute goals and include existing promises, so cooldown waiting is idempotent.
+        for (const resource in plan.imports) {
+            const type = resource as ResourceConstant
+            if (plan.imports[type]! > 0) requestRoomResource(room, type,
+                getRoomResourceAmount(room, type) + getIncomingResourceAmount(room.name, type) + plan.imports[type]!)
+        }
+        setLabReaction(room, plan.reaction)
+        return
+    }
+    delete config.productionPlan
+    if (room.memory.productionReserve) delete room.memory.productionReserve.lab
+    setLabReaction(room, undefined)
 }
 
 function getBoostType(resourceType: string): BoostTypeConstant | undefined {

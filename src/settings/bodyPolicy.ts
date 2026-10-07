@@ -10,7 +10,8 @@ export const bodyPolicy = {
         stationaryEnergyTicks: 4,
         sourceCarryBatches: 2,
         minimumCarryParts: 1,
-        managerCarryParts: 16,
+        // A stationary mature hub uses the full native body: 49 CARRY + 1 MOVE.
+        managerCarryParts: 49,
         maximumMineralWorkParts: 20,
         mineralCarryPerWork: 0.5,
         mineralTravelMargin: 1.3,

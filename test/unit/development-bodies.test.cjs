@@ -193,13 +193,13 @@ test('a stationary development manager uses the affordable 4-CARRY 1-MOVE storag
     assert.deepEqual(Array.from(state.body(state.room, demand)), []);
 });
 
-test('RCL8 managers use a one-link capacity hub body without reading growth state', () => {
+test('RCL8 managers use the full 50-part hub body without reading growth state', () => {
     const state = world({ capacity: 5600, level: 8 });
     Object.defineProperty(state.room.memory, 'fastUpgrade', { get() { throw new Error('RCL8 must exit first'); } });
     assert.equal(state.body(state.room, config('manager', { carryParts: 4, stationary: true })), undefined);
     const spawn = makeSpawn(state, { manager: { role: 'manager', name: 'old-manager', data: {} } });
     spawn.doWork();
-    assert.equal(count(state.spawned[0].body, 'carry'), 16);
+    assert.equal(count(state.spawned[0].body, 'carry'), 49);
     assert.equal(count(state.spawned[0].body, 'move'), 1);
     assert.deepEqual(state.legacyCalls, [], 'optimized spawning no longer reads legacy tier tables');
 });

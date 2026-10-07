@@ -248,10 +248,10 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const remote = remoteIncome(room, creeps)
     const income = local.income + remote
     const stored = room.storage?.store[RESOURCE_ENERGY] || 0
-    // RCL6 labs need an unboosted mover before custom bodies can use minerals in storage.
+    // RCL6 boosts and RCL7 factories need a mobile native mover independent of the manager's seat.
     const customBoosts = Object.values({ ...bodyPolicy.profiles, ...room.memory.bodyProfiles })
         .some(profile => profile != undefined && (profile.boostTier || 0) > 0)
-    if (customBoosts && room.labs.length > 0 && (room.storage || room.terminal)) {
+    if ((customBoosts && room.labs.length > 0 || room.factory != undefined) && (room.storage || room.terminal)) {
         const key = addCreepConfig(room, 'processer', `${room.name}_PROCESSER`, { waiting: 0 })
         if (room.memory.creepConfig[key]) {
             room.memory.creepConfig[key].development = {}

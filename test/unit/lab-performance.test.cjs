@@ -19,7 +19,7 @@ function world() {
     };
     class Room { constructor(name) { this.name = name; } }
     const loader = createSourceLoader({
-        globals: { Room, StructureLab: class {}, Game: game, RESOURCE_ENERGY: 'energy',
+        globals: { Room, StructureLab: class {}, Game: game, RESOURCE_ENERGY: 'energy', OK: 0,
             REACTIONS: { A: { B: 'product' }, B: { A: 'product' } }, LAB_REACTION_AMOUNT: 5,
             PWR_OPERATE_LAB: 5, POWER_INFO: { 5: { effect: [2, 4, 6, 8, 10] } } },
         modules: {
@@ -77,6 +77,50 @@ test('a destroyed reagent Lab pauses reactions until fresh configured IDs resolv
     state.game.time++;
     state.game.getObjectById = id => id === 'lab1' ? null : source;
     assert.doesNotThrow(() => lab.doWork()); assert.equal(reactions, 1);
+});
+
+test('cleared, retasked or boost-occupied source labs do not continue an obsolete reaction', () => {
+    const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
+    const first = reagent('A'), second = reagent('B');
+    state.game.getObjectById = id => id === 'lab0' ? first : second;
+    let reactions = 0;
+    lab.cooldown = 0; lab.runReaction = () => reactions++;
+    room.memory.roomLabConfig.labReactionConfig = undefined;
+    lab.doWork(); assert.equal(reactions, 0);
+    room.memory.roomLabConfig.labReactionConfig = 'other';
+    lab.doWork(); assert.equal(reactions, 0);
+    room.memory.roomLabConfig.labReactionConfig = 'product';
+    room.memory.roomLabConfig.singleLabConfig.lab0 = { boostMode: true, resourceType: 'A' };
+    lab.doWork(); assert.equal(reactions, 0);
+    delete room.memory.roomLabConfig.singleLabConfig.lab0;
+    lab.doWork(); assert.equal(reactions, 1);
+});
+
+test('successful output intents debit one shared batch quota before the native reagent stores change', () => {
+    const state = world(), room = state.createRoom('W1N1');
+    state.game.getObjectById = id => id === 'lab0' ? reagent('A') : reagent('B');
+    room.memory.roomLabConfig.reactionAmount = 10;
+    let reactions = 0;
+    for (let index = 0; index < 8; index++) {
+        const lab = state.createLab(room, `output-${index}`);
+        lab.cooldown = 0; lab.runReaction = () => { reactions++; return 0; };
+        lab.doWork();
+    }
+    assert.equal(reactions, 2, 'the remaining six labs cannot spend the same pre-intent batch');
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 0);
+});
+
+test('batch quotas debit operated Lab consumption only on successful reactions', () => {
+    const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
+    state.game.getObjectById = id => id === 'lab0' ? reagent('A') : reagent('B');
+    room.memory.roomLabConfig.reactionAmount = 20;
+    lab.cooldown = 0; lab.effects = [{ effect: 5, level: 5, ticksRemaining: 100 }];
+    let result = -6, reactions = 0;
+    lab.runReaction = () => { reactions++; return result; };
+    lab.doWork(); assert.equal(room.memory.roomLabConfig.reactionAmount, 20);
+    result = 0;
+    lab.doWork(); assert.equal(room.memory.roomLabConfig.reactionAmount, 5);
+    lab.doWork(); assert.equal(reactions, 2, 'a remaining five units cannot fund another operated 15-unit reaction');
 });
 
 test('eleven ten-lab rooms resolve each reaction pair once while preserving all output intents', () => {
@@ -227,7 +271,7 @@ test('a ten-lab reaction initializes its two source jobs with two queries instea
     calls.length = 0;
     state.game.time += 10;
     for (const lab of room.labs) lab.init();
-    assert.deepEqual(calls, [['A', true, false, true, true], ['B', true, false, true, true]]);
+    assert.deepEqual(calls, [['A', true, true, true, true], ['B', true, true, true, true]]);
     assert.deepEqual(JSON.parse(JSON.stringify(room.memory.roomFillJob.labInMineral)), [
         { labId: 'lab0', resourceType: 'A' }, { labId: 'lab1', resourceType: 'B' }
     ]);

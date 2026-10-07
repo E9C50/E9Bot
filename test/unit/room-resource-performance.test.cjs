@@ -19,6 +19,18 @@ function labWorld({ reactionConfig = {}, reactionSource = {}, boostConfig = {}, 
         globals: { Game: game, LAB_BOOST_MINERAL: 30, MAX_CREEP_SIZE: 50, console: { log: value => logs.push(value) } },
         modules: {
             'settings/labs': { reactionConfig, reactionSource },
+            'settings/resourcePolicy': { t3Resources: Object.keys(reactionConfig), basicMinerals: [], ordinaryResourceTarget: () => 0, resourcePolicy: { t3Reserve: 10000 } },
+            'room/resourceNetwork': {
+                getResourceRooms: () => [room], isWarehouseRoom: () => false,
+                getRoomResourceAmount: (room, resource) => {
+                    let amount = (room.storage.store[resource] || 0) + (room.terminal.store[resource] || 0);
+                    for (const lab of room.labs) amount += lab.store[resource] || 0;
+                    for (const creep of loader.load('runtime/creepIndex').getRoomProcessors(room.name)) amount += creep.store[resource] || 0;
+                    return amount;
+                },
+                getAvailableResource: () => 0, getGlobalResourceAmount: () => 0,
+                getIncomingResourceAmount: () => 0, getOutgoingResourceAmount: () => 0, requestRoomResource: () => 0,
+            },
             'settings/boost': { boostConfig, boostBodyPart, roleBoostConfig },
             'settings/creep': { roleAdvEnum: { PROCESSER: 'processer' } },
             'settings/roomPolicy': { roomPolicy: policy }
@@ -108,20 +120,20 @@ test('reaction checks scan the empire once and reuse repeated reagents within on
     assert.equal(sharedLabReads, 1);
     assert.equal(world.logs.length, 0);
     world.game.time += 10;
-    world.room.storage.store.shared = 1500;
-    world.room.storage.store.other = 1500;
+    world.room.storage.store.shared = 3000;
+    world.room.storage.store.other = 3000;
     world.updateLabReactionConfig(world.room);
     assert.equal(world.room.memory.roomLabConfig.labReactionConfig, 'product0', 'a later tick must read fresh stores');
     assert.equal(creepRoomReads, 6);
     assert.equal(creepEnumerations, 2);
 });
 
-test('reaction retention uses storage for the product and labs/local processors for reagents', () => {
+test('reaction retention counts product and reagents in storage, terminal, labs and local processors', () => {
     const world = labWorld({ reactionConfig: { product: 10000 }, reactionSource: { product: ['first', 'second'] } });
     world.room.memory.roomLabConfig.labReactionConfig = 'product';
     world.room.storage.store = store({ first: 500 });
     world.room.terminal.store = store({ second: 99999 });
-    world.room.labs = [{ id: 'source1', store: store({ product: 20000, first: 501, second: 700 }) }];
+    world.room.labs = [{ id: 'source1', store: store({ product: 9000, first: 501, second: 700 }) }];
     world.game.creeps.processor = { room: { name: world.room.name }, memory: { role: 'processer' }, store: store({ second: 301 }) };
     world.game.creeps.filler = { room: { name: world.room.name }, memory: { role: 'filler' }, store: store({ second: 99999 }) };
     world.game.creeps.remote = { room: { name: 'W9N9' }, memory: { role: 'processer' }, store: store({ second: 99999 }) };
@@ -131,7 +143,11 @@ test('reaction retention uses storage for the product and labs/local processors 
     world.game.time += 10;
     world.game.creeps.processor.store.second = 300;
     world.updateLabReactionConfig(world.room);
-    assert.equal(world.room.memory.roomLabConfig.labReactionConfig, undefined, 'exactly the reagent minimum is insufficient');
+    assert.equal(world.room.memory.roomLabConfig.labReactionConfig, 'product', 'terminal stock remains usable when a processor unloads');
+    world.game.time += 10;
+    world.room.labs[0].store.first = 499;
+    world.updateLabReactionConfig(world.room);
+    assert.equal(world.room.memory.roomLabConfig.labReactionConfig, undefined, 'an unavailable base reagent cannot support the pending batch');
 });
 
 test('boost updates count each unboosted body part once and track lab reassignment accurately', () => {
@@ -163,18 +179,19 @@ test('boost updates count each unboosted body part once and track lab reassignme
     assert.equal(assigned.source2, undefined);
 });
 
-function terminalWorld(defaultAutoResource = {}) {
-    const game = { time: 30, rooms: {} };
+function terminalWorld() {
+    const game = { time: 30, shard: { name: 'shard3' }, rooms: {}, creeps: {}, market: { calcTransactionCost: amount => Math.ceil(amount / 10) } };
     const memory = { centerStorage: 'W0N0' };
     const queued = [];
     const loader = createSourceLoader({
         globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', RESOURCE_GHODIUM: 'G', OK: 0, console: { log() {} } },
-        modules: { 'settings/room': { defaultAutoResource }, 'settings/roomPolicy': { roomPolicy: policy } }
+        modules: { 'settings/room': { defaultAutoResource: {} }, 'settings/roomPolicy': { roomPolicy: policy } }
     });
     function addRoom(name, resources = {}, overrides = {}) {
         const room = {
-            name, my: true, level: 8, storage: { store: store(resources) },
-            terminal: { cooldown: 1, store: { getFreeCapacity: () => 10000 }, send: () => -6 },
+            name, my: true, level: 8, controller: { my: true, isPowerEnabled: name === 'W0N0' },
+            storage: { store: { ...resources, getCapacity: () => name === 'W0N0' ? 8000000 : 1000000, getFreeCapacity: () => 1000000 } },
+            terminal: { cooldown: 1, store: { energy: 50000, getCapacity: () => 300000, getFreeCapacity: () => 250000 }, send: () => -6 },
             memory: { terminalSendJob: {}, terminalAmount: {} },
             getResource: resource => resources[resource] || 0,
             sendResource(targetRoom, resourceType, amount) {
@@ -186,28 +203,27 @@ function terminalWorld(defaultAutoResource = {}) {
         game.rooms[name] = room;
         return room;
     }
-    return { game, memory, queued, addRoom, ...loader.load('room/terminal') };
+    return { game, memory, queued, addRoom, ...loader.load('room/terminal'), ...loader.load('room/resourceNetwork') };
 }
 
-test('energy balancing visits each eligible candidate once and preserves ties', () => {
+test('energy balancing cannot overcommit donor stock across several low-energy rooms', () => {
     const world = terminalWorld();
-    world.game.time = 1;
-    const donor = world.addRoom('W1N1', { energy: 500000 });
+    const donor = world.addRoom('W1N1', { energy: 550000 });
     const reads = {};
     for (const [name, energy] of [['first', 10], ['second', 10], ['third', 100], ['full', 350000]]) {
         reads[name] = 0;
-        world.addRoom(name, {}, { storage: { store: { get energy() { reads[name]++; return energy; } } } });
+        world.addRoom(name, { energy });
     }
-    const unowned = world.addRoom('unowned', {}, { my: false });
+    const unowned = world.addRoom('unowned', {}, { my: false, controller: { my: false } });
     Object.defineProperty(unowned, 'storage', { get() { throw new Error('must skip unowned room'); } });
     world.processTerminalResource(donor);
-    assert.deepEqual(reads, { first: 1, second: 1, third: 1, full: 1 });
-    assert.deepEqual(world.queued, [{ from: donor.name, targetRoom: 'first', resourceType: 'energy', amount: 50000 }]);
+    assert.ok(world.getOutgoingResourceAmount(donor.name, 'energy') <= 150000);
+    for (const name of ['first', 'second', 'third']) assert.ok(world.getIncomingResourceAmount(name, 'energy') <= 50000);
 });
 
-test('resource distribution indexes each existing queue once instead of rescanning for every resource', () => {
+test('resource requests index existing queues once instead of rescanning for every resource', () => {
     const resources = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`resource${index}`, 100]));
-    const world = terminalWorld(resources);
+    const world = terminalWorld();
     const room = world.addRoom('W1N1');
     const center = world.addRoom('W0N0', Object.fromEntries(Object.keys(resources).map(resource => [resource, 1000])));
     let resourceReads = 0;
@@ -222,22 +238,21 @@ test('resource distribution indexes each existing queue once instead of rescanni
     }
     assert.equal(resourceReads, 4000, 'measure the previous queue scan for each resource');
     resourceReads = 0;
-    world.processTerminalResource(room);
-    assert.equal(world.queued.length, 40);
+    for (const resource of Object.keys(resources)) world.requestRoomResource(room, resource, 100);
+    assert.equal(Object.keys(center.memory.terminalSendJob).length, 140);
     assert.equal(resourceReads, 100);
-    assert(world.queued.every(job => job.from === center.name && job.targetRoom === room.name && job.amount === 100));
+    assert(Object.values(center.memory.terminalSendJob).filter(job => job.kind === 'production').every(job => job.targetRoom === room.name && job.amount === 100));
 });
 
-test('distribution indexes include queued mineral surplus and preserve existing target/resource pairs', () => {
-    const world = terminalWorld({ X: 100, A: 100, B: 100 });
-    const room = world.addRoom('W1N1', { X: 1000, B: 200 }, { mineral: { mineralType: 'X' } });
-    const center = world.addRoom('W0N0', { A: 1000 });
-    center.memory.terminalSendJob.existing = { targetRoom: room.name, resourceType: 'A', amount: 50 };
+test('distribution subtracts existing commitments and preserves manual target/resource jobs', () => {
+    const world = terminalWorld();
+    const room = world.addRoom('W1N1', { X: 15000, B: 200 }, { mineral: { mineralType: 'X' } });
+    const center = world.addRoom('W0N0', { H: 100000 });
+    center.memory.terminalSendJob.existing = { targetRoom: room.name, resourceType: 'H', amount: 50 };
     room.memory.terminalSendJob.otherTarget = { targetRoom: 'elsewhere', resourceType: 'B', amount: 50 };
-    world.processTerminalResource(room);
-    assert.deepEqual(world.queued, [
-        { from: room.name, targetRoom: center.name, resourceType: 'X', amount: 990 },
-        { from: room.name, targetRoom: center.name, resourceType: 'B', amount: 100 }
-    ]);
+    world.planResourceDistribution();
+    assert.equal(world.getIncomingResourceAmount(center.name, 'X'), 5000);
+    assert.equal(world.getIncomingResourceAmount(center.name, 'B'), 150);
+    assert.equal(world.getIncomingResourceAmount(room.name, 'H'), 10000);
     assert.equal(center.memory.terminalSendJob.existing.amount, 50);
 });

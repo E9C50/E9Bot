@@ -1,5 +1,14 @@
 import { getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
+import { resourcePolicy } from "settings/resourcePolicy"
+import { runFactoryLogistics } from "room/factory"
+import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from "room/evacuation"
+import { getTerminalResourceAmount, recordTerminalWithdrawal } from "room/resourceNetwork"
+
+function terminalGoal(room: Room, resource: ResourceConstant): number {
+    const amount = room.memory.terminalAmount?.[resource] || 0
+    return resource === RESOURCE_ENERGY ? Math.max(resourcePolicy.terminalEnergyReserve, amount) : amount
+}
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -52,66 +61,86 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
-        // if (creep.pickupDroppedResource(true, 1)) return true
+        const room = creep.room
+        const storage = room.storage!
+        const terminal = room.terminal
+        const terminalFree = (): number => terminal ? getEvacuationIncomingCapacity(room) : 0
+        if (room.memory.terminalAmount === undefined) room.memory.terminalAmount = {}
+        room.memory.terminalAmount[RESOURCE_ENERGY] = terminalGoal(room, RESOURCE_ENERGY)
 
-        // 身上有东西就放到Storage
+        // Complete a factory delivery before normal cargo handling can return its reagents to storage.
+        if (creep.memory.factoryLogistics && runFactoryLogistics(creep, true)) return true
+
         if (creep.store.getUsedCapacity() > 0) {
-            const resourceType = Object.keys(creep.store)[0] as ResourceConstant
-
-            if (creep.room.memory.terminalAmount == undefined) creep.room.memory.terminalAmount = {}
-            if (creep.room.terminal != undefined && creep.room.terminal.store[resourceType] < (creep.room.memory.terminalAmount[resourceType] || 0)) {
-                creep.transfer(creep.room.terminal, resourceType);
-            } else {
-                creep.transfer(creep.room.storage, resourceType);
+            const resources = Object.keys(creep.store) as ResourceConstant[]
+            resources.sort((a, b) => Number(b === RESOURCE_ENERGY) - Number(a === RESOURCE_ENERGY))
+            for (const resource of resources) {
+                const carried = creep.store[resource] || 0
+                if (carried <= 0) continue
+                if (terminal) {
+                    const amount = Math.min(carried, terminalGoal(room, resource) - getTerminalResourceAmount(room, resource),
+                        terminalFree())
+                    if (amount > 0) {
+                        if (creep.transfer(terminal, resource, amount) === OK) reserveEvacuationIncoming(room, amount)
+                        return true
+                    }
+                }
+                const amount = Math.min(carried, storage.store.getFreeCapacity())
+                if (amount > 0) { creep.transfer(storage, resource, amount); return true }
             }
             return true
         }
 
-        // CenterLink有东西就拿起来
-        if (creep.room.centerLink != undefined && creep.room.centerLink.store[RESOURCE_ENERGY] > 0) {
-            creep.withdraw(creep.room.centerLink, RESOURCE_ENERGY);
+        const capacity = creep.store.getFreeCapacity()
+        const clearTerminal = (): boolean => {
+            if (!terminal || storage.store.getFreeCapacity() <= 0) return false
+            // Free mineral space first when the energy reserve cannot fit in the terminal.
+            const resources = Object.keys(terminal.store) as ResourceConstant[]
+            resources.sort((a, b) => Number(a === RESOURCE_ENERGY) - Number(b === RESOURCE_ENERGY))
+            for (const resource of resources) {
+                const amount = Math.min(getTerminalResourceAmount(room, resource) - terminalGoal(room, resource),
+                    capacity, storage.store.getFreeCapacity())
+                if (amount > 0) {
+                    if (creep.withdraw(terminal, resource, amount) === OK) recordTerminalWithdrawal(room, resource, amount)
+                    return true
+                }
+            }
+            return false
+        }
+
+        if (terminal) {
+            const energyDeficit = terminalGoal(room, RESOURCE_ENERGY) - getTerminalResourceAmount(room, RESOURCE_ENERGY)
+            if (energyDeficit > 0) {
+                if (terminalFree() < Math.min(capacity, energyDeficit) && clearTerminal()) return true
+                const source = room.centerLink && room.centerLink.store[RESOURCE_ENERGY] > 0 ? room.centerLink : storage
+                const amount = Math.min(energyDeficit, capacity, source.store[RESOURCE_ENERGY] || 0,
+                    terminalFree())
+                if (amount > 0) { creep.withdraw(source, RESOURCE_ENERGY, amount); return true }
+            }
+        }
+
+        const drainLink = (): boolean => {
+            if (!room.centerLink) return false
+            const amount = Math.min(room.centerLink.store[RESOURCE_ENERGY] || 0, capacity, storage.store.getFreeCapacity())
+            if (amount <= 0) return false
+            creep.withdraw(room.centerLink, RESOURCE_ENERGY, amount)
             return true
         }
+        // Batch link intake while keeping almost-full links flowing during long terminal jobs.
+        if (room.centerLink && room.centerLink.store[RESOURCE_ENERGY] >=
+            room.centerLink.store.getCapacity(RESOURCE_ENERGY) * rolePolicy.manager.linkDrainRatio && drainLink()) return true
 
-        // // factory有东西就拿起来
-        // if (creep.room.factory && creep.room.factory.store[RESOURCE_ENERGY] > 0) {
-        //     creep.withdraw(creep.room.factory, RESOURCE_ENERGY);
-        //     return true
-        // }
-
-        // if (creep.room.factory && creep.room.factory.store.getFreeCapacity() > 20000
-        //     && creep.room.storage && creep.room.storage.store[RESOURCE_BATTERY] > 0) {
-        //     creep.withdraw(creep.room.storage, RESOURCE_BATTERY);
-        //     return true
-        // }
-
-        // if (creep.room.factory != undefined && creep.room.factory.store.getUsedCapacity() > 0) {
-        //     const resourceType = Object.keys(creep.room.factory.store)[0] as ResourceConstant
-        //     creep.withdraw(creep.room.factory, resourceType);
-        //     return true
-        // }
-
-        // 终端有东西就拿起来
-        if (creep.room.terminal != undefined && creep.room.terminal.store.getUsedCapacity() > 0) {
-            for (let resourceType in creep.room.terminal.store) {
-                if (creep.room.terminal.store[resourceType] > (creep.room.memory.terminalAmount[resourceType] || 0)) {
-                    var amount = Math.abs(creep.room.terminal.store[resourceType] - (creep.room.memory.terminalAmount[resourceType] || 0))
-                    amount = Math.min(amount, creep.store.getFreeCapacity())
-                    creep.withdraw(creep.room.terminal, resourceType as ResourceConstant, amount);
-                    return true
-                }
+        if (clearTerminal()) return true
+        if (terminal) {
+            for (const resource of Object.keys(room.memory.terminalAmount) as ResourceConstant[]) {
+                const amount = Math.min(terminalGoal(room, resource) - getTerminalResourceAmount(room, resource), capacity,
+                    storage.store[resource] || 0, terminalFree())
+                if (amount > 0) { creep.withdraw(storage, resource, amount); return true }
             }
         }
 
-        // 终端东西不足就从storage拿
-        if (creep.room.terminal != undefined) {
-            for (let resourceType in creep.room.memory.terminalAmount) {
-                if (creep.room.terminal.store[resourceType] < creep.room.memory.terminalAmount[resourceType] && creep.room.storage.store[resourceType] > 0) {
-                    creep.withdraw(creep.room.storage, resourceType as ResourceConstant);
-                    return true
-                }
-            }
-        }
+        if (runFactoryLogistics(creep, true)) return true
+        if (drainLink()) return true
 
         return true
     },

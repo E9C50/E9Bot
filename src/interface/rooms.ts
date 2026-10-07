@@ -75,8 +75,14 @@ interface RoomMemory {
             amount: number
             targetRoom: string
             resourceType: ResourceConstant
+            kind?: 'production' | 'refill' | 'surplus' | 'balance' | 'energy'
+            createdAt?: number
+            retryAfter?: number
+            failures?: number
+            lastError?: number
         }
     }
+    productionReserve?: { lab?: Record<string, number>; factory?: Record<string, number> }
 
     restrictedPos?: { [creepName: string]: RoomPosition }
 

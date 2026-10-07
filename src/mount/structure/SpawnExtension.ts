@@ -51,7 +51,8 @@ export default class SpawnExtension extends StructureSpawn {
             const creepMemory = this.room.memory.creepConfig[creepName]
             const bootstrapBuilder = creepMemory.role == roleAdvEnum.RBUILDER &&
                 (creepMemory.data as RemoteBuilderData).bootstrap === true
-            const forceSpawn = bootstrapBuilder || creepMemory.role == roleAdvEnum.MANAGER || creepMemory.role == roleBaseEnum.FILLER || creepMemory.role == roleBaseEnum.HARVESTER
+            // The hub waits for its planned body; emergency carriers restart extension filling.
+            const forceSpawn = bootstrapBuilder || creepMemory.role == roleBaseEnum.FILLER || creepMemory.role == roleBaseEnum.HARVESTER
             // Bootstrap assistance must remain mobile and affordable before the target has a spawn.
             const config = bootstrapBuilder ? { ...creepMemory, bodyProfile: {
                 ...creepMemory.bodyProfile, boostTier: 0 as CreepBoostTier,

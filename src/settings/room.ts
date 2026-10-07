@@ -32,6 +32,7 @@ export const roomSignTextList = [
   "听妈妈的话，别让她受伤，想快快长大才能保护她。" // 《听妈妈的话》
 ];
 
+/** Legacy compatibility only; automatic stock targets are defined in settings/resourcePolicy.ts. */
 export const defaultAutoResource = {
     [RESOURCE_CATALYZED_LEMERGIUM_ACID]: 20000,     // +100% repair 和 build 效率但不增加其能量消耗
     [RESOURCE_LEMERGIUM_ACID]: 10000,               // +80% repair 和 build 效率但不增加其能量消耗

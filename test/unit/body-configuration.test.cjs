@@ -67,10 +67,18 @@ function processorWorld({ missingLab = false } = {}) {
         roomLabConfig: { singleLabConfig: { [lab.id]: { boostMode: true } } } } };
     const held = { KH2O: 0 };
     Object.defineProperty(held, 'getUsedCapacity', { value: () => held.KH2O });
+    Object.defineProperty(held, 'getFreeCapacity', { value: () => 500 - held.KH2O });
     const creep = { room, memory: {}, store: held,
         takeFromTarget(target, resource, amount) { calls.push(['take', target.id, resource, amount]); return true; },
+        withdraw(target, resource, amount) { calls.push(['withdraw', target.id, resource, amount]); return 0; },
         transferToTarget(target, resource) { calls.push(['put', target.id, resource]); return true; } };
-    const behavior = createSourceLoader({ globals: { Game: { getObjectById: () => missingLab ? null : lab } } })
+    let withdrawn = 0;
+    const behavior = createSourceLoader({ globals: { OK: 0, ERR_NOT_IN_RANGE: -9, Game: { getObjectById: () => missingLab ? null : lab } },
+        modules: { 'room/resourceNetwork': {
+            getTerminalResourceAmount: (_, resource) => (terminal.store[resource] || 0) - withdrawn,
+            recordTerminalWithdrawal: (_, resource, amount) => { if (resource === 'KH2O') withdrawn += amount; },
+            isWarehouseRoom: () => false,
+        } } })
         .load('role/adv/RoleAdvProcesser').default({});
     return { calls, room, lab, creep, behavior };
 }
@@ -78,7 +86,7 @@ function processorWorld({ missingLab = false } = {}) {
 test('lab mineral movers obtain the exact requested boost amount directly from terminal stock', () => {
     const w = processorWorld();
     w.behavior.source(w.creep);
-    assert.deepEqual(w.calls, [['take', 'terminal', 'KH2O', 300]]);
+    assert.deepEqual(w.calls, [['withdraw', 'terminal', 'KH2O', 300]]);
     assert.equal(w.creep.memory.working, true);
 });
 
