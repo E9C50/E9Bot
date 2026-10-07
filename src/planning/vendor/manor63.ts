@@ -7,7 +7,8 @@
  * Port changes: function-local state, typed local grid/heap/union-find helpers,
  * Object.keys instead of lodash, explicit options instead of flags/global.minPlaneCnt,
  * no visualization, and resource routes start at the selected integer storage center.
- * The block partitioning, candidate evaluation, lab model and building placement are upstream.
+ * The block partitioning, lab model and building placement are upstream; optional resource-distance
+ * scoring selects the base anchor before the single building-placement pass.
  */
 import { RoomArray } from './RoomArray'
 import { PriorityQueue, NewNode } from './PriorityQueue'
@@ -15,6 +16,7 @@ import { UnionFind } from './UnionFind'
 import { PlanningBudgetExceeded } from './PlanningBudgetExceeded'
 import { selectControllerContainer } from '../controllerContainer'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
+import { resourceAccessScores } from '../resourceDistances'
 
 export function computeManor63(roomName, points, options) {
     const started = Game.cpu.getUsed()
@@ -421,6 +423,10 @@ export function computeManor63(roomName, points, options) {
                 if (p.pos && p.pos.roomName == roomName)
                     objects.push(p.pos);
             }
+            const resourceScores = options.optimizeResourceAccess ? resourceAccessScores(new Room.Terrain(roomName),
+                objects.map((pos, index) => ({ pos, kind: index === 0 ? 'controller' : index === 1 ? 'mineral' : 'source' })),
+                options.resourceAccessWeights, checkBudget) : undefined;
+            const reservedResources = new Set(objects.map(pos => pos.x * 50 + pos.y));
             let blockArray = pro.computeBlock(roomName, blocked);
             let unionFind = blockArray[0];
             let sizeMap = blockArray[1];
@@ -441,6 +447,9 @@ export function computeManor63(roomName, points, options) {
             let innerPutAbleList = [];
             let centerX = undefined;
             let centerY = undefined;
+            let selectedAnchor = undefined;
+            let selectedLab = undefined;
+            let selectedResourceScore = Infinity;
             Object.keys(sizeMap).forEach(pos => {
                 checkBudget();
                 pro.getBlockPutAbleCnt(roomWalkable, visited, queMin, unionFind, pos, putAbleCacheMap, allCacheMap);
@@ -484,11 +493,73 @@ export function computeManor63(roomName, points, options) {
                     });
                 }
                 let currentWallCnt = wallMap[pos].length;
-                if (minPlaneCnt < currentPutAbleList.length && wallCnt > currentWallCnt && (currentInnerPutAbleList.filter(e => e.k > 1).length > 30 || maxDist > 5)) {
+                if (!(minPlaneCnt < currentPutAbleList.length && (currentInnerPutAbleList.filter(e => e.k > 1).length > 30 || maxDist > 5)))
+                    return;
+                let currentAnchor = undefined;
+                let currentLab = undefined;
+                let currentResourceScore = Infinity;
+                if (resourceScores) {
+                    const depth = new Int16Array(2500);
+                    currentPutAbleList.forEach(e => depth[e.x * 50 + e.y] = e.k);
+                    const isAvailable = (x, y) => x > 0 && y > 0 && x < 49 && y < 49
+                        && Number.isFinite(resourceScores[x * 50 + y]) && roomWalkable.get(x, y)
+                        && !reservedResources.has(x * 50 + y) && !roomObjectCache.get(x, y);
+                    // All anchors share the same viable lab rectangles within this block.
+                    const labCandidates = [];
+                    for (let y = 1; y <= 45; y++) {
+                        checkBudget();
+                        for (let x = 1; x <= 45; x++) {
+                            if (depth[x * 50 + y] < 2) continue;
+                            let available = true;
+                            for (let i = 0; i < 4 && available; i++) for (let j = 0; j < 4; j++) {
+                                if (depth[(x + i) * 50 + y + j] <= 0 || !isAvailable(x + i, y + j)) {
+                                    available = false;
+                                    break;
+                                }
+                            }
+                            if (available) labCandidates.push({ x, y });
+                        }
+                    }
+                    const anchors = preferredStorage ? currentPutAbleList.filter(e => e.x === preferredStorage.x && e.y === preferredStorage.y) : filter2;
+                    anchors.forEach((anchor, index) => {
+                        if (index % 16 === 0) checkBudget();
+                        const score = resourceScores[anchor.x * 50 + anchor.y];
+                        if (!Number.isFinite(score) || score > currentResourceScore
+                            || score === currentResourceScore && currentAnchor && anchor.k <= currentAnchor.k) return;
+                        // The four fixed core structures and surrounding road diamond must be buildable.
+                        for (const [dx, dy] of [[0, 0], [-1, 0], [0, 1], [1, 0], [0, -1], [-2, 0], [-1, -1],
+                            [0, -2], [-1, 1], [1, -1], [0, 2], [1, 1], [2, 0]]) {
+                            if (!isAvailable(anchor.x + dx, anchor.y + dy)) return;
+                        }
+                        let bestLab = undefined;
+                        let labDistance = Infinity;
+                        labCandidates.forEach((lab, index) => {
+                            if (index % 64 === 0) checkBudget();
+                            const distance = Math.pow(anchor.x - lab.x - 1.5, 2) + Math.pow(anchor.y - lab.y - 1.5, 2);
+                            if (distance >= labDistance) return;
+                            for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+                                if (Math.abs(lab.x + i - anchor.x) + Math.abs(lab.y + j - anchor.y) <= 2) return;
+                            }
+                            bestLab = lab;
+                            labDistance = distance;
+                        });
+                        if (!bestLab) return;
+                        currentAnchor = anchor;
+                        currentLab = bestLab;
+                        currentResourceScore = score;
+                    });
+                    if (!currentAnchor) return;
+                }
+                if (resourceScores ? currentResourceScore < selectedResourceScore
+                    || currentResourceScore === selectedResourceScore && (currentWallCnt < wallCnt
+                        || currentWallCnt === wallCnt && currentAnchor.k > (selectedAnchor?.k ?? -Infinity)) : wallCnt > currentWallCnt) {
                     putAbleList = currentPutAbleList;
                     innerPutAbleList = currentInnerPutAbleList;
                     wallCnt = currentWallCnt;
                     finalPos = pos;
+                    selectedAnchor = currentAnchor;
+                    selectedLab = currentLab;
+                    selectedResourceScore = currentResourceScore;
                     if (preferredStorage) {
                         centerX = preferredStorage.x;
                         centerY = preferredStorage.y;
@@ -512,7 +583,11 @@ export function computeManor63(roomName, points, options) {
             let storageX = 0;
             let storageY = 0;
             let storageDistance = 100;
-            innerPutAbleList.filter(e => e.k > 2).forEach(e => {
+            if (selectedAnchor) {
+                storageX = selectedAnchor.x;
+                storageY = selectedAnchor.y;
+            }
+            else innerPutAbleList.filter(e => e.k > 2).forEach(e => {
                 let x = e.x;
                 let y = e.y;
                 let detX = centerX - x;
@@ -531,7 +606,11 @@ export function computeManor63(roomName, points, options) {
             let labX = 0;
             let labY = 0;
             let labDistance = 1e5;
-            roomManor.forEach((x, y, val) => {
+            if (selectedLab) {
+                labX = selectedLab.x;
+                labY = selectedLab.y;
+            }
+            else roomManor.forEach((x, y, val) => {
                 if (val >= 2) {
                     let distance = Math.sqrt(Math.pow(storageX - x - 1.5, 2) + Math.pow(storageY - y - 1.5, 2));
                     if (labDistance <= distance)
@@ -749,6 +828,13 @@ export function computeManor63(roomName, points, options) {
             });
             let terrain = new Room.Terrain(roomName);
             const naturalPositions = new Set(objects.map(pos => `${pos.x},${pos.y}`));
+            // Upstream road gradients can cross a later building placement on irregular terrain.
+            // Remove those proposals before roads lower PathFinder costs on obstacle tiles.
+            const blockedRoadTiles = new Set(naturalPositions);
+            for (const type of OBSTACLE_OBJECT_TYPES) {
+                for (const [x, y] of structMap[type] || []) blockedRoadTiles.add(`${x},${y}`);
+            }
+            structMap.road = structMap.road.filter(([x, y]) => !blockedRoadTiles.has(`${x},${y}`));
             const occupants = new Map();
             for (const [type, positions] of Object.entries(structMap)) {
                 for (const [x, y] of positions) {

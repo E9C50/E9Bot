@@ -6,22 +6,27 @@ import { roomPolicy } from 'settings/roomPolicy'
 import { migrateControllerContainer } from './controllerContainerMigration'
 import { roomWorkDue } from 'runtime/roomSchedule'
 import { cleanupSourceLinkContainers } from './sourceLinkContainers'
+import { migrateLayoutStrategy } from './layoutStrategyMigration'
+import { PLANNING_STRATEGY_VERSION } from './types'
 
 let tick = -1
 let planningAttempts = 0
 let constructionBudget: ConstructionBudget | undefined
+const deferredMigrationRooms = new Set<string>()
 
 function prepareTick(): void {
     if (tick == Game.time) return
     tick = Game.time
     planningAttempts = 0
     constructionBudget = undefined
+    deferredMigrationRooms.clear()
 }
 
-/** 已占领房间首次规划/快照，此后只消费持久蓝图，升级及建筑损毁不触发重规划。 */
+/** 首次规划/快照、一次性策略升级，此后消费持久蓝图补建。 */
 export function runAutomaticLayout(room: Room): void {
     if (!constructionPolicy.enabled || !room.controller?.my || room.memory.autoLaylout === false) return
     prepareTick()
+    if (deferredMigrationRooms.has(room.name)) return
     const state = room.memory.roomBlueprintState || (room.memory.roomBlueprintState = {})
     if (state.ownedSince == undefined) state.ownedSince = Game.time
     let blueprint = room.memory.roomBlueprint
@@ -39,13 +44,15 @@ export function runAutomaticLayout(room: Room): void {
         planningAttempts++
         state.lastPlanAttempt = Game.time
         try {
-            const existingStorage = room.find(FIND_MY_STRUCTURES).find((item) => item.structureType == STRUCTURE_STORAGE)
+            const existingStructures = room.find(FIND_MY_STRUCTURES)
+            const existingStorage = existingStructures.find((item) => item.structureType == STRUCTURE_STORAGE)
             const result = computeRoomBlueprint(room, {
                 minimumPlaneCount: policy.minimumPlaneCount,
                 maximumCpu: Math.min(policy.maximumCpu, headroom - policy.cpuReserve),
                 storagePosition: existingStorage == undefined ? undefined : {
                     x: existingStorage.pos.x + 1, y: existingStorage.pos.y,
                 },
+                fixedTowers: existingStructures.filter(item => item.structureType === STRUCTURE_TOWER).map(item => [item.pos.x, item.pos.y]),
             })
             if (result != undefined) blueprint = plannedRoomBlueprint(room, result)
             if (blueprint == undefined) {
@@ -57,6 +64,38 @@ export function runAutomaticLayout(room: Room): void {
         } catch (error) {
             state.lastError = error instanceof Error ? error.message : String(error)
             console.log(`[layout] ${room.name}: ${state.lastError}`)
+            return
+        }
+    }
+    if (constructionPolicy.exitDefense?.enabled && blueprint.origin === 'planner63' &&
+        blueprint.planningStrategyVersion !== PLANNING_STRATEGY_VERSION && room.controller.level < 8) {
+        const policy = constructionPolicy.planning
+        if (planningAttempts >= policy.maximumRoomsPerTick || Game.cpu.bucket < policy.minimumBucket ||
+            (state.lastPlanAttempt != undefined && Game.time - state.lastPlanAttempt < policy.retryInterval)) return
+        const headroom = Game.cpu.tickLimit - Game.cpu.getUsed()
+        if (headroom < policy.minimumCpuHeadroom) return
+        planningAttempts++
+        state.lastPlanAttempt = Game.time
+        try {
+            const migration = migrateLayoutStrategy(room, blueprint, {
+                minimumPlaneCount: policy.minimumPlaneCount,
+                maximumCpu: Math.min(policy.maximumCpu, headroom - policy.cpuReserve),
+            })
+            if (migration === undefined) {
+                state.lastError = '63bot strategy migration found no viable layout'
+                return
+            }
+            blueprint = migration.blueprint
+            room.memory.roomBlueprint = blueprint
+            delete state.lastError
+            synchronizeBlueprintMetadata(room, blueprint)
+            if (migration.deferConstruction) {
+                deferredMigrationRooms.add(room.name)
+                return
+            }
+        } catch (error) {
+            state.lastError = error instanceof Error ? error.message : String(error)
+            console.log(`[layout] ${room.name}: strategy migration: ${state.lastError}`)
             return
         }
     }

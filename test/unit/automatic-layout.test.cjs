@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const { PLANNING_STRATEGY_VERSION } = createSourceLoader().load('planning/types');
 
 const structureTypes = ['spawn', 'extension', 'road', 'constructedWall', 'rampart', 'link', 'storage', 'tower', 'observer', 'powerSpawn', 'extractor', 'lab', 'terminal', 'container', 'nuker', 'factory'];
 
@@ -684,4 +685,159 @@ test('near-controller source containers remain harvest infrastructure even when 
     world.load().api.runAutomaticLayout(room);
     assert.deepEqual(saved.structures.container, [[24, 10]]);
     assert.ok(world.calls.some(call => call.type === 'container' && call.x === 24 && call.y === 10));
+});
+
+test('strategy upgrades leave disabled policies, snapshots, RCL8 rooms and current plans on their existing construction path', () => {
+    for (const setting of ['missing-policy', 'disabled-policy', 'snapshot', 'RCL8', 'current']) {
+        const policy = setting === 'missing-policy' ? {} : { exitDefense: { enabled: setting !== 'disabled-policy' } };
+        const world = createLayoutWorld({ policy });
+        const saved = blueprint({ spawn: [[20, 20]], road: [[21, 20]] }, setting === 'snapshot' ? 'snapshot' : 'planner63');
+        if (setting === 'current') saved.planningStrategyVersion = PLANNING_STRATEGY_VERSION;
+        const room = world.addRoom({ level: setting === 'RCL8' ? 8 : 3,
+            structures: [world.item('spawn', 20, 20)], memory: { roomBlueprint: saved } });
+        let migrations = 0;
+        const api = world.load({ './layoutStrategyMigration': { migrateLayoutStrategy() {
+            migrations++; throw new Error('This plan must retain its current strategy');
+        } } }).api;
+        api.runAutomaticLayout(room);
+        assert.equal(migrations, 0, setting);
+        assert.equal(room.memory.roomBlueprint, saved, setting);
+        assert.deepEqual(world.plannedRooms, [], setting);
+        assert.deepEqual(world.calls, [{ room: room.name, x: 21, y: 20, type: 'road' }], setting);
+    }
+});
+
+test('strategy upgrades wait for bucket and CPU headroom before allowing any old-layout construction', () => {
+    for (const capacity of ['bucket', 'headroom']) {
+        const world = createLayoutWorld({ policy: { exitDefense: { enabled: true } } });
+        const saved = blueprint({ spawn: [[35, 25]] });
+        const room = world.addRoom({ level: 2, memory: { roomBlueprint: saved, unrelated: { keep: true } } });
+        const upgraded = { ...blueprint({ spawn: [[18, 24]] }), planningStrategyVersion: PLANNING_STRATEGY_VERSION, center: [18, 25] };
+        const received = [];
+        const api = world.load({ './layoutStrategyMigration': { migrateLayoutStrategy(target, previous, options) {
+            assert.equal(target, room); assert.equal(previous, saved); received.push(options);
+            return { blueprint: upgraded, deferConstruction: true };
+        } } }).api;
+        if (capacity === 'bucket') world.game.cpu.bucket = 1999;
+        else world.game.cpu.getUsed = () => 360;
+        api.runAutomaticLayout(room);
+        assert.equal(received.length, 0, capacity);
+        assert.equal(room.memory.roomBlueprint, saved, capacity);
+        assert.equal(room.memory.roomBlueprintState.lastPlanAttempt, undefined, 'waiting for capacity does not start a retry cooldown');
+        assert.deepEqual(world.calls, [], 'the old empty-room layout must not start construction while waiting to move');
+        world.game.cpu.bucket = 10000;
+        world.game.cpu.getUsed = () => capacity === 'headroom' ? 280 : 0;
+        world.advanceTick(101);
+        api.runAutomaticLayout(room);
+        assert.equal(received.length, 1, capacity);
+        assert.equal(received[0].minimumPlaneCount, 140);
+        assert.equal(received[0].maximumCpu, capacity === 'headroom' ? 170 : 300, 'strategy upgrades receive the same remaining-CPU reserve as fresh plans');
+        assert.equal(room.memory.roomBlueprint, upgraded, capacity);
+        assert.equal(room.memory.roomBlueprintState.lastPlanAttempt, 101);
+        assert.equal(room.memory.unrelated.keep, true);
+        assert.deepEqual(world.calls, [], 'successful deferred upgrades still wait for construction');
+    }
+});
+
+test('fresh plans and strategy upgrades share the one-room-per-tick planning allowance', () => {
+    for (const first of ['upgrade', 'fresh']) {
+        const world = createLayoutWorld({ policy: { exitDefense: { enabled: true } },
+            planner: room => ({ ...plannerResult(room), planningStrategyVersion: PLANNING_STRATEGY_VERSION }) });
+        const existing = world.addRoom({ name: 'W1N1', level: 2, memory: { roomBlueprint: blueprint({ spawn: [[35, 25]] }) } });
+        const fresh = world.addRoom({ name: 'W2N2', level: 1 });
+        const migrations = [];
+        const api = world.load({ './layoutStrategyMigration': { migrateLayoutStrategy(room) {
+            migrations.push(room.name);
+            return { blueprint: { ...blueprint({ spawn: [[18, 24]] }), planningStrategyVersion: PLANNING_STRATEGY_VERSION }, deferConstruction: true };
+        } } }).api;
+        const ordered = first === 'upgrade' ? [existing, fresh] : [fresh, existing];
+        for (const room of ordered) api.runAutomaticLayout(room);
+        assert.equal(migrations.length + world.plannedRooms.length, 1, first);
+        if (first === 'upgrade') {
+            assert.deepEqual(migrations, ['W1N1']);
+            assert.equal(fresh.memory.roomBlueprint, undefined);
+            assert.deepEqual(world.calls, [], 'a deferred fresh room does not receive construction intents');
+        } else {
+            assert.deepEqual(world.plannedRooms, ['W2N2']);
+            assert.equal(existing.memory.roomBlueprint.planningStrategyVersion, undefined);
+            assert.ok(world.calls.every(call => call.room === fresh.name), 'waiting old blueprints do not lock their obsolete layout');
+        }
+        assert.equal(ordered[1].memory.roomBlueprintState.lastPlanAttempt, undefined, 'a per-tick budget deferral does not consume the room retry cooldown');
+        world.advanceTick(2);
+        api.runAutomaticLayout(ordered[1]);
+        assert.deepEqual(migrations, ['W1N1']);
+        assert.deepEqual(world.plannedRooms, ['W2N2']);
+        assert.equal(existing.memory.roomBlueprint.planningStrategyVersion, PLANNING_STRATEGY_VERSION);
+        assert.equal(fresh.memory.roomBlueprint.planningStrategyVersion, PLANNING_STRATEGY_VERSION);
+    }
+});
+
+test('successful strategy upgrades persist once, clear errors, synchronize metadata and defer that tick of construction', () => {
+    const world = createLayoutWorld({ policy: { exitDefense: { enabled: true } } });
+    const saved = blueprint({ spawn: [[35, 25]] });
+    const upgraded = { ...blueprint({ spawn: [[18, 24]], rampart: [[18, 47]] }),
+        planningStrategyVersion: PLANNING_STRATEGY_VERSION, exitDefense: { exitCount: 28, exitSides: 1 }, center: [18, 25] };
+    const room = world.addRoom({ level: 2, memory: { roomBlueprint: saved,
+        roomBlueprintState: { lastError: 'obsolete planner error' }, unrelated: { keep: true } } });
+    let migrations = 0;
+    const api = world.load({ './layoutStrategyMigration': { migrateLayoutStrategy() {
+        migrations++; return { blueprint: upgraded, deferConstruction: true };
+    } } }).api;
+    api.runAutomaticLayout(room);
+    assert.equal(migrations, 1);
+    assert.equal(room.memory.roomBlueprint, upgraded);
+    assert.equal(room.memory.roomBlueprint.planningStrategyVersion, PLANNING_STRATEGY_VERSION);
+    assert.equal(room.memory.roomBlueprint.exitDefense.exitCount, 28);
+    assert.equal(room.memory.roomBlueprintState.lastError, undefined);
+    assert.equal(room.memory.roomPosition.centerPos.x, 18);
+    assert.equal(room.memory.roomPosition.managerPos.y, 25);
+    assert.equal(room.memory.unrelated.keep, true);
+    assert.deepEqual(world.calls, []);
+    api.runAutomaticLayout(room);
+    assert.deepEqual(world.calls, [], 'repeated calls do not build during the deferred migration tick');
+    world.advanceTick(11);
+    api.runAutomaticLayout(room);
+    assert.equal(migrations, 1, 'the strategy version prevents repeated migration');
+    assert.equal(room.memory.roomBlueprint, upgraded);
+    assert.deepEqual(world.calls, [{ room: room.name, x: 18, y: 24, type: 'spawn' }]);
+    assert.deepEqual(world.plannedRooms, []);
+});
+
+test('failed strategy upgrades preserve the old blueprint, suppress construction and retry only after cooldown', () => {
+    for (const failure of ['undefined', 'exception']) {
+        const world = createLayoutWorld({ policy: { exitDefense: { enabled: true } } });
+        const saved = blueprint({ spawn: [[35, 25]], extension: [[36, 25]] });
+        const room = world.addRoom({ level: 2, memory: { roomBlueprint: saved, unrelated: { keep: true } } });
+        const serialized = JSON.stringify(saved);
+        const upgraded = { ...blueprint({ spawn: [[18, 24]] }), planningStrategyVersion: PLANNING_STRATEGY_VERSION };
+        let attempts = 0;
+        const api = world.load({ './layoutStrategyMigration': { migrateLayoutStrategy() {
+            attempts++;
+            if (attempts === 1) {
+                if (failure === 'exception') throw new Error('strategy planning budget exceeded');
+                return undefined;
+            }
+            return { blueprint: upgraded, deferConstruction: false };
+        } } }).api;
+        assert.doesNotThrow(() => api.runAutomaticLayout(room));
+        assert.equal(attempts, 1);
+        assert.equal(room.memory.roomBlueprint, saved);
+        assert.equal(JSON.stringify(saved), serialized, 'failure retains every old blueprint coordinate');
+        assert.equal(room.memory.unrelated.keep, true);
+        assert.match(room.memory.roomBlueprintState.lastError, failure === 'exception' ? /strategy planning budget exceeded/ : /no viable layout/);
+        assert.equal(room.memory.roomBlueprintState.lastPlanAttempt, 1);
+        assert.deepEqual(world.calls, [], 'a failed strategy upgrade cannot start obsolete construction');
+        world.advanceTick(2);
+        api.runAutomaticLayout(room);
+        assert.equal(attempts, 1);
+        assert.equal(room.memory.roomBlueprint, saved);
+        assert.deepEqual(world.calls, []);
+        world.advanceTick(101);
+        api.runAutomaticLayout(room);
+        assert.equal(attempts, 2);
+        assert.equal(room.memory.roomBlueprint, upgraded);
+        assert.equal(room.memory.roomBlueprintState.lastError, undefined);
+        assert.deepEqual(world.calls, [{ room: room.name, x: 18, y: 24, type: 'spawn' }]);
+        assert.deepEqual(world.plannedRooms, []);
+    }
 });

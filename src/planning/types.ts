@@ -1,6 +1,7 @@
 // 房间坐标和蓝图版本是数据格式约定，不属于运行策略。
 export const ROOM_SIZE = 50
 export const BLUEPRINT_SCHEMA_VERSION = 1
+export const PLANNING_STRATEGY_VERSION = 2
 // Screeps 反应 Lab 的固定交互距离；API 没有对应全局常量。
 export const REACTION_LAB_RANGE = 2
 export type BlueprintPosition = [number, number]
@@ -16,6 +17,8 @@ export interface RoomBlueprint {
     sourceLabs?: [BlueprintPosition, BlueprintPosition]
     /** Explicit identity: resource containers are reordered by the upstream planner. */
     controllerContainer?: BlueprintPosition
+    planningStrategyVersion?: number
+    exitDefense?: { exitCount: number; exitSides: number }
 }
 
 export interface RoomBlueprintState {

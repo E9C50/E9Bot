@@ -10,6 +10,13 @@ export const constructionPolicy = {
         retryInterval: 100,
         minimumPlaneCount: 140,
     },
+    exitDefense: {
+        enabled: true,
+        maximumExitTiles: 32,
+        maximumRamparts: 80,
+        resourceAccessWeights: { source: 3, controller: 2, mineral: 0.5 },
+        towers: { enabled: true, minimumEnemyRange: 4 },
+    },
     building: {
         interval: 10,
         staggerMatureInspections: true,

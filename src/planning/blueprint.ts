@@ -14,11 +14,12 @@ function append(structures: BlueprintStructures, type: BuildableStructureConstan
 }
 
 /** 初次见到已满级房间时冻结现有布局；已保存的蓝图永不在巡检中重新快照。 */
-export function snapshotRoomBlueprint(room: Room): RoomBlueprint {
+export function snapshotRoomBlueprint(room: Room, excludedConstructionSites?: ReadonlySet<string>): RoomBlueprint {
     const structures: BlueprintStructures = {}
     const buildings = currentRoomBuildings(room)
     for (const item of buildings) {
         if ('my' in item && item.my === false) continue
+        if ('progress' in item && excludedConstructionSites?.has(item.id)) continue
         append(structures, item.structureType as BuildableStructureConstant, [item.pos.x, item.pos.y])
     }
     const blueprint: RoomBlueprint = { schemaVersion: BLUEPRINT_SCHEMA_VERSION, origin: 'snapshot', createdAt: Game.time, structures }
@@ -31,9 +32,12 @@ export function snapshotRoomBlueprint(room: Room): RoomBlueprint {
 }
 
 /** 已有建筑优先保留，不拆除已有 Spawn 或因自动规划替换人工建筑。 */
-export function plannedRoomBlueprint(room: Room, result: Planner63Result): RoomBlueprint | undefined {
-    const blueprint = snapshotRoomBlueprint(room)
+export function plannedRoomBlueprint(room: Room, result: Planner63Result,
+    options: { excludedConstructionSites?: ReadonlySet<string> } = {}): RoomBlueprint | undefined {
+    const blueprint = snapshotRoomBlueprint(room, options.excludedConstructionSites)
     blueprint.origin = 'planner63'
+    blueprint.planningStrategyVersion = result.planningStrategyVersion
+    if (result.exitDefense) blueprint.exitDefense = { ...result.exitDefense }
     if (result.controllerContainer) blueprint.controllerContainer = [...result.controllerContainer]
     for (const type of Object.keys(result.structMap) as BuildableStructureConstant[]) {
         for (const position of result.structMap[type] || []) append(blueprint.structures, type, position)

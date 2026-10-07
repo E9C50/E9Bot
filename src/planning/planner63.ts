@@ -1,6 +1,12 @@
 import { computeManor63 } from './vendor/manor63'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
-export { PlanningBudgetExceeded } from './vendor/PlanningBudgetExceeded'
+import { constructionPolicy } from 'settings/construction'
+import { computeExitPerimeter, isRampartTerrainLegal } from './exitPerimeter'
+import { planExitTowers } from './exitTowers'
+import { defaultResourceAccessWeights, ResourceAccessWeights } from './resourceDistances'
+import { PLANNING_STRATEGY_VERSION } from './types'
+import { PlanningBudgetExceeded } from './vendor/PlanningBudgetExceeded'
+export { PlanningBudgetExceeded }
 
 export interface Planner63Position { x: number; y: number }
 
@@ -8,6 +14,8 @@ export interface Planner63Options {
     minimumPlaneCount?: number
     storagePosition?: Planner63Position
     maximumCpu?: number
+    resourceAccessWeights?: Partial<ResourceAccessWeights>
+    fixedTowers?: [number, number][]
 }
 
 export interface Planner63Result {
@@ -15,6 +23,8 @@ export interface Planner63Result {
     storagePos: Planner63Position
     labPos: Planner63Position
     controllerContainer?: [number, number]
+    planningStrategyVersion?: typeof PLANNING_STRATEGY_VERSION
+    exitDefense?: { exitCount: number; exitSides: number }
     structMap: Partial<Record<BuildableStructureConstant, [number, number][]>>
 }
 
@@ -30,6 +40,11 @@ function isRoomPosition(position: Planner63Position | undefined): position is Pl
 
 /** CPU-heavy, explicit planning operation. Importing this module has no Screeps side effects. */
 export function computeRoomBlueprint(room: Room, options: Planner63Options = {}): Planner63Result | undefined {
+    const started = Game.cpu.getUsed()
+    const checkBudget = () => {
+        if (options.maximumCpu !== undefined && Game.cpu.getUsed() - started >= options.maximumCpu)
+            throw new PlanningBudgetExceeded(options.maximumCpu)
+    }
     const controller = room.controller
     const mineral = room.find(FIND_MINERALS)[0]
     const sources = room.find(FIND_SOURCES)
@@ -42,15 +57,54 @@ export function computeRoomBlueprint(room: Room, options: Planner63Options = {})
     if (!Number.isInteger(minimumPlaneCount) || minimumPlaneCount <= 0 || minimumPlaneCount > 2500) return undefined
     if (options.maximumCpu !== undefined && (!Number.isFinite(options.maximumCpu) || options.maximumCpu <= 0)) return undefined
 
-    const raw = computeManor63(room.name, points, { ...options, minimumPlaneCount }) as Planner63Result | undefined
+    const terrain = new Room.Terrain(room.name)
+    const policy = constructionPolicy.exitDefense
+    let perimeter = policy === undefined ? undefined : computeExitPerimeter(terrain, policy, checkBudget)
+    if (perimeter !== undefined && points.some(point => perimeter!.outside[point.pos.y * 50 + point.pos.x] ||
+        perimeter!.ramparts.some(([x, y]) => x === point.pos.x && y === point.pos.y))) perimeter = undefined
+    const resourceAccessWeights = { ...defaultResourceAccessWeights, ...policy?.resourceAccessWeights, ...options.resourceAccessWeights }
+    if (Object.values(resourceAccessWeights).some(weight => !Number.isFinite(weight) || weight < 0) ||
+        Object.values(resourceAccessWeights).every(weight => weight === 0)) return undefined
+    checkBudget()
+    let raw: Planner63Result | undefined
+    try {
+        raw = computeManor63(room.name, points, {
+            ...options, minimumPlaneCount, optimizeResourceAccess: perimeter !== undefined, resourceAccessWeights,
+            maximumCpu: options.maximumCpu === undefined ? undefined : options.maximumCpu - (Game.cpu.getUsed() - started),
+        }) as Planner63Result | undefined
+    } catch (error) {
+        if (error instanceof PlanningBudgetExceeded && options.maximumCpu !== undefined)
+            throw new PlanningBudgetExceeded(options.maximumCpu)
+        throw error
+    }
+    checkBudget()
     if (raw === undefined || !isRoomPosition(raw.storagePos) || !isRoomPosition(raw.labPos)) return undefined
     const actualStorage = raw.structMap.storage?.[0]
     if (actualStorage === undefined) return undefined
     const storagePos = { x: actualStorage[0] + 1, y: actualStorage[1] }
     if (!isRoomPosition(storagePos)) return undefined
+    const proposedMap = { ...raw.structMap }
+    if (perimeter !== undefined) {
+        const unprotected = buildableTypes.some(type => type !== 'road' && type !== 'rampart' &&
+            (proposedMap[type] ?? []).some(([x, y]) => perimeter!.outside[y * 50 + x]))
+        if (!unprotected) proposedMap.rampart = perimeter.ramparts
+        else perimeter = undefined
+    }
+    if (perimeter !== undefined && policy.towers?.enabled) {
+        const towerPlan = planExitTowers(terrain, perimeter, proposedMap, points.map(point => [point.pos.x, point.pos.y]), {
+            minimumEnemyRange: policy.towers.minimumEnemyRange,
+            towerCount: CONTROLLER_STRUCTURES.tower[8],
+            fixedTowers: options.fixedTowers,
+        }, checkBudget)
+        if (towerPlan !== undefined) {
+            proposedMap.tower = towerPlan.towers
+            proposedMap.road = towerPlan.roads
+        }
+    }
     const structMap: Planner63Result['structMap'] = {}
     for (const type of buildableTypes) {
-        const coordinates = raw.structMap[type]
+        checkBudget()
+        const coordinates = proposedMap[type]
         if (coordinates === undefined) continue
         const seen = new Set<string>()
         structMap[type] = []
@@ -73,17 +127,18 @@ export function computeRoomBlueprint(room: Room, options: Planner63Options = {})
     for (const type of ['storage', 'terminal', 'factory', 'observer', 'powerSpawn', 'nuker'] as const) {
         if ((structMap[type]?.length ?? 0) < 1) return undefined
     }
-    const terrain = new Room.Terrain(room.name)
     const resourcePositions = new Set(points.map(point => `${point.pos.x},${point.pos.y}`))
     const mineralPosition = `${mineral.pos.x},${mineral.pos.y}`
     const occupants = new Map<string, BuildableStructureConstant[]>()
     for (const type of buildableTypes) {
+        checkBudget()
         for (const [x, y] of structMap[type] ?? []) {
             const key = `${x},${y}`
             // Minerals may occupy natural wall tiles; their extractor is the native exception.
             const mineralExtractor = type === 'extractor' && key === mineralPosition
             if (type !== 'road' && (x === 0 || y === 0 || x === 49 || y === 49
-                || (terrain.get(x, y) === TERRAIN_MASK_WALL && !mineralExtractor))) return undefined
+                || ((terrain.get(x, y) & TERRAIN_MASK_WALL) !== 0 && !mineralExtractor))) return undefined
+            if (type === 'rampart' && !isRampartTerrainLegal(terrain, x, y)) return undefined
             if (resourcePositions.has(key) && !mineralExtractor) return undefined
             const existing = occupants.get(key) ?? []
             if (existing.some(other => {
@@ -94,5 +149,9 @@ export function computeRoomBlueprint(room: Room, options: Planner63Options = {})
             occupants.set(key, existing)
         }
     }
-    return { roomName: room.name, storagePos, labPos: raw.labPos, controllerContainer: [...controllerContainer], structMap }
+    checkBudget()
+    return { roomName: room.name, storagePos, labPos: raw.labPos, controllerContainer: [...controllerContainer], structMap,
+        planningStrategyVersion: PLANNING_STRATEGY_VERSION,
+        ...(perimeter === undefined ? {} : { exitDefense: { exitCount: perimeter.exitCount, exitSides: perimeter.exitSides } }),
+    }
 }

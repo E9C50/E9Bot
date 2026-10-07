@@ -59,6 +59,10 @@ src/
     construction.ts      RCL 配额、叠加合法性、工地预算、缺失建筑补建
     controllerContainer.ts  三格容器的内侧升级位、外侧搬运位选址
     controllerContainerMigration.ts  发展期旧蓝图的局部迁移与运输路径验证
+    exitPerimeter.ts      原生合法出口防线、八方向端点封闭与校验
+    exitTowers.ts         入口安全塔位、覆盖火力、建设顺序与供能道路
+    resourceDistances.ts  资源工作位距离评分，单次 BFS 比较基地候选
+    layoutStrategyMigration.ts  旧规划的版本升级与未开建布局迁移
     types.ts             可序列化绝对坐标蓝图和进度协议
     planner63.ts         63bot 算法的受控适配入口
     vendor/              原布局算法与本地网格/并查集/二叉堆
@@ -136,6 +140,12 @@ src/
 新规划在完整建筑落位后选择距 Controller 恰好 3 格的容器，检查至少两个内侧升级位和一个外侧搬运位，道路连接外侧席位。`controllerContainer` 坐标随蓝图持久化；RCL1–7 旧 `planner63` 蓝图按 CPU 预算和冷却做一次局部修正，先确认运输路径，再取消零进度自有旧工地。既有建筑和已投入建设进度的工地保留，源/矿容器、原 Controller Link、RCL8 和 snapshot 蓝图不迁移；迁移推迟或失败时不补建过近的旧控制器容器，其余建设继续。
 
 63bot 算法源自工作区 `63bot/default/manager_planner.js`，保留分区、基地选择、Lab 模型、防线和道路规划，算法状态改为函数局部变量。队列原 WASM 依赖换成本地二叉堆，网格/并查集独立封装；不引入 63bot 的全局初始化、原型或旗帜控制器。`planner63` 验证 controller/mineral/source 参数、整数坐标和规划结果，CPU 预算异常在调度层隔离，所有退出路径清理临时数据。
+
+单边出口或总出口格数不超过 32 的房间优先封住入口。`exitPerimeter` 从边界沿八方向搜索到第一批原生允许建 Rampart 的格子，端点随地形回折，校验整条防线无斜向绕行；防线超过 80 格、资源格冲突或核心无法保护时退回原有防线。出口 y0/49、x0/49 以及贴着可通行出口的 y1/48、x1/48 均按原生建造限制排除。适用房间在同一次规划中按 Source、Controller、Mineral 的实际地形步行距离选基地，默认权重为 3、2、0.5；明确指定或已有 Storage 的锚点优先。多边宽出口继续使用原有分区及围墙策略，以上阈值在 `settings/construction.ts` 配置。
+
+出口防线适用房间由 `exitTowers` 在敌方可站位以外至少 4 格处选 Tower，射程按 Chebyshev 距离计算，天然墙不遮挡远程攻击。塔位优先提高入口最弱位置的合计基础火力，并兼顾分散覆盖和供能道路；Tower 在 5 格内伤害为 600，之后每格减少 30，20 格及以上为 150。候选不能覆盖资源、建筑、运输道路或防线，新增道路在内区接入已有网络；没有足够合法位置或可达道路时保留原塔位。建设顺序还按每个塔数量前缀的入口火力排序，使 RCL3/5/7 先建的少量 Tower 也能覆盖入口。距离安全以完整的入口防线为前提；策略在 `exitDefense.towers` 配置。
+
+蓝图保存 `planningStrategyVersion`；旧 RCL1–7 的 planner63 蓝图共用首次规划的 CPU、单 tick 房数和重试预算升级一次。尚未有策略版本的 RCL1–3 房间，没有已有建筑且所有自有工地均属于旧蓝图、进度为零时允许重新选基地，在新蓝图完整验证后取消不兼容的零进度工地。已有出口布局的版本 1→2 升级保留基地，仅更新出口防线、尚未开建的 Tower 和必要道路。已有建筑、已投入进度和后来人工添加的 Rampart/Tower 保留；只取消旧蓝图中零进度且已淘汰的工地。人工设置的经理站位、RCL8 与 snapshot 蓝图保持原有规则。几何分析、物流评分、vendor 规划、塔位优化与适配校验共用整次调用的 CPU 上限。
 
 蓝图采用绝对坐标，不依赖中心偏移模板。已有建筑坐标优先合并，施工仅检查实际存在的结构/工地，不拆迁。建设层分别维护当前 RCL 类型限额、每房活跃/新建工地限额和全局预算；成功 `createConstructionSite` 意图会在当前 tick 自行记账，避免 `find` 或 `Game.constructionSites` 尚未更新时重复创建、突破上限。允许 road/container 和 rampart 的合法叠加；已有异类建筑和任何同格工地会阻挡目标。道路和 Rampart 分阶段开始，矿物 Container 等到 RCL6，Extractor 只能放在矿物格。
 
