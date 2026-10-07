@@ -9,6 +9,8 @@ import { runCombatUnits } from 'combat/missions'
 import { requestTowerSupport } from 'combat/defense'
 import { runHaulerRelays, haulerRelayHandled } from './haulerRelay'
 import { idleBuilderIfNoWork } from 'role/support/builderMaintenance'
+import { runRoomEvacuationCreep } from 'room/evacuation'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 function reportFailure(name: string, error: unknown): void {
     console.log(
@@ -43,10 +45,14 @@ export function creepWorkController(): void {
                 ? empireAtWar
                 : warModes[creep.room.name]
         const automaticRemote = isDevelopmentRemoteData(creep.memory.data)
-        // Automatic remotes must reach prepare even during war so their safety wrapper can evacuate them.
-        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote) continue
+        // Preserve the ordinary war skip and its profiling semantics when there is no cargo task to intercept.
+        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote &&
+            !isRoomEvacuating(creep.room) && !isRoomEvacuating(creep.memory.spawnRoom)) continue
         const roleStarted = roleProfiling ? Game.cpu.getUsed() : 0
         try {
+            if (runRoomEvacuationCreep(creep)) continue
+            // Automatic remotes must reach prepare even during war so their safety wrapper can evacuate them.
+            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote) continue
             if (!automaticRemote && retireDevelopmentCreep(creep)) continue
             if (creep.memory.role === 'builder' && idleBuilderIfNoWork(creep)) continue
             // Some economy roles deliberately skip their legacy prepare boost hook.

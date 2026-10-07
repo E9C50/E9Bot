@@ -7,6 +7,8 @@ import { processRoomMarket } from 'room/market'
 import { processTerminalResource } from 'room/terminal'
 import { roomPolicy } from 'settings/roomPolicy'
 import { isCpuProfilingEnabled, profileCpuTask } from 'runtime/profiling'
+import { isRoomEvacuating } from 'room/evacuationState'
+import { processRoomEvacuation } from 'room/evacuation'
 
 function profileRoomTask(label: string, task: () => unknown): void {
     const policy = roomPolicy.profiling
@@ -47,6 +49,13 @@ export const roomController = function (): void {
     }
     for (const room of ownedRooms) {
         runRoomTask('room:safeMode', '自动开启安全模式', autoEnableSafeMode, room, profiling, legacyProfiling)
+        if (isRoomEvacuating(room)) {
+            // Keep combat protection while all resource-consuming room automation is suspended.
+            delete room.memory.roomStructure.towerAllowRepair
+            runRoomTask('room:enemy', '更新房间内敌人信息', findTowerEnemy, room, profiling, legacyProfiling)
+            runRoomTask('room:evacuation', '撤房资源转运', processRoomEvacuation, room, profiling, legacyProfiling)
+            continue
+        }
         runRoomTask('room:center', '自动计算RoomCenter', autoComputeCenterPos, room, profiling, legacyProfiling)
         runRoomTask('room:construction', '自动规划', releaseConstructionSite, room, profiling, legacyProfiling)
         runRoomTask('room:terminal', '处理资源平衡', processTerminalResource, room, profiling, legacyProfiling)

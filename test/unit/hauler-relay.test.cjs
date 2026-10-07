@@ -271,3 +271,17 @@ test('mature rooms do not scan the creep population and relay statistics stay bo
     const status = w.relay.getHaulerRelayStatus();
     assert.ok(status.rolling.ticks <= 100); assert.equal(status.rolling.pairs, 0);
 });
+
+test('closing local or remote homes leave all haulers to evacuation without changing cached trips', () => {
+    for (const remote of [false, true]) {
+        const w = world({ remote }); w.home.memory.evacuation = { status: 'draining' };
+        const original = w.cache.donor;
+        w.relay.runHaulerRelays();
+        assert.equal(w.calls.length, 0); assert.equal(w.cache.donor, original);
+        assert.equal(w.relay.haulerRelayHandled(w.donor), false);
+        delete w.home.memory.evacuation; w.game.time++;
+        w.moved.donor = w.moved.receiver = w.game.time - 1;
+        w.relay.runHaulerRelays();
+        assert.equal(w.calls.filter(call => call.type === 'transfer').length, 1);
+    }
+});

@@ -3,6 +3,7 @@ import { creepWhiteList, STRUCTURE_MEMORYKEY_PERFIX, STRUCTURE_PRIVATEKEY_PERFIX
 import { generateCostMatrix } from "utils/CostMatrix";
 import { getDistance } from "utils";
 import { getRoomProcessors } from 'runtime/creepIndex'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 export default class RoomExtension extends Room {
     private structureGroups?: Map<string, Structure[]>
@@ -349,6 +350,7 @@ export default class RoomExtension extends Room {
      * @returns
      */
     public sendResource(targetRoom: string, resourceType: ResourceConstant, amount: number): boolean {
+        if (isRoomEvacuating(this) || isRoomEvacuating(targetRoom)) return false
         const jobId = this.name + '_' + targetRoom + '_' + resourceType
         this.memory.terminalSendJob[jobId] = {
             targetRoom: targetRoom,

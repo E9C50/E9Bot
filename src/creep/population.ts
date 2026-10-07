@@ -7,6 +7,8 @@ import { releaseShardCreepConfig } from 'shard/controller'
 import { releaseDevelopmentRemoteConfigs } from './developmentRemotes'
 import { addCreepConfig } from './demand'
 import { releaseCombatCreepConfigs } from 'combat/missions'
+import { isRoomEvacuating } from 'room/evacuationState'
+import { releaseRoomEvacuationConfigs } from 'room/evacuation'
 
 export function creepNumberController(): void {
     if (!Memory.creeps) Memory.creeps = {}
@@ -23,5 +25,17 @@ export function creepNumberController(): void {
     releaseShardCreepConfig()
     releaseWarCreepConfig()
     releaseCombatCreepConfigs()
+    for (const room of Object.values(Game.rooms)) {
+        if (!room.my || !isRoomEvacuating(room)) continue
+        // Tasks retain their own state; only new births from the closing room are suspended.
+        for (const name in room.memory.creepConfig) {
+            const config = room.memory.creepConfig[name]
+            if (config.role !== 'defender' && config.role !== 'rdefender' &&
+                !(config.role === 'filler' && (config.data as FillerData).evacuationRoom === room.name)) {
+                delete room.memory.creepConfig[name]
+            }
+        }
+        releaseRoomEvacuationConfigs(room, addCreepConfig)
+    }
     orderCreepSpawnQueue()
 }

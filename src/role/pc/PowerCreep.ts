@@ -1,13 +1,31 @@
 import { getDistance } from "utils";
 import { rolePolicy } from "settings/rolePolicy";
+import { isRoomEvacuating } from 'room/evacuationState'
+import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from 'room/evacuation'
 
 export const powerSpawnController = function (): void {
     Object.values(Game.powerCreeps).forEach(pc => {
+        if (pc.room && isRoomEvacuating(pc.room)) {
+            // Freeze generation before it creates fresh OPS; cargo remains in the evacuation snapshot until deposited.
+            const terminal = pc.room.terminal
+            if (terminal == undefined) return
+            const resource = Object.keys(pc.store).find(key => pc.store[key as ResourceConstant] > 0) as ResourceConstant | undefined
+            if (resource == undefined) return
+            const capacity = getEvacuationIncomingCapacity(pc.room)
+            if (capacity <= 0) return
+            if (!pc.pos.isNearTo(terminal)) pc.moveTo(terminal, { range: 1 })
+            else {
+                const amount = Math.min(pc.store[resource], capacity)
+                if (pc.transfer(terminal, resource, amount) === OK) reserveEvacuationIncoming(pc.room, amount)
+            }
+            return
+        }
         const pcFlagName = 'PC_' + pc.name
         const pcFlag = Game.flags[pcFlagName]
         if (pcFlag == undefined) return
 
         const pcFlagTargetRoom = Game.rooms[pcFlag.pos.roomName]
+        if (isRoomEvacuating(pcFlag.pos.roomName)) return
 
         // 如果不存在，且插旗房间有powerSpawn，就生成
         if (pcFlag != undefined && pc.room == undefined) {

@@ -30,7 +30,7 @@ function literalSetting(file, name) {
 }
 function failAction() { throw new Error('help executed an application action'); }
 const deniedWorld = new Proxy({}, { get() { throw new Error('help read live Game/Memory'); }, set: failAction });
-function world() {
+function world(evacuation = { createRoomEvacuation: failAction, getRoomEvacuationStatus: failAction, cancelRoomEvacuation: failAction }) {
     const modules = {
         'settings/roomPolicy': { roomPolicy: literalSetting('settings/roomPolicy.ts', 'roomPolicy') },
         'settings/creep': { spawnPriority: literalSetting('settings/creep.ts', 'spawnPriority') },
@@ -41,12 +41,30 @@ function world() {
         'creep/bodyConsole': { configureBody: failAction, previewBodies: failAction },
         'combat/missions': { createCombatTask: failAction, listCombatTasks: failAction, cancelCombatTask: failAction },
         'creep/haulerRelay': { getHaulerRelayStatus: failAction },
+        'room/evacuation': evacuation,
     };
     const loader = createSourceLoader({ globals: { Game: deniedWorld, Memory: deniedWorld }, modules });
     const catalog = loader.load('runtime/consoleHelp');
     const ConsoleExtension = loader.load('mount/extension/ConsoleExtension').default;
     return { ...catalog, console: new ConsoleExtension(), policy: modules['settings/roomPolicy'].roomPolicy };
 }
+
+test('evacuation console commands delegate exact rooms without issuing unclaim', () => {
+    const calls = [];
+    const { console } = world({
+        createRoomEvacuation: (...args) => { calls.push(['start', ...args]); return 'created'; },
+        getRoomEvacuationStatus: (...args) => { calls.push(['status', ...args]); return 'status'; },
+        cancelRoomEvacuation: (...args) => { calls.push(['cancel', ...args]); return 'cancelled'; },
+    });
+    assert.equal(console.evacuateRoom('E31N2', 'E41N8'), 'created');
+    assert.equal(console.evacuationStatus('E31N2'), 'status');
+    assert.equal(console.evacuationStatus(), 'status');
+    assert.equal(console.evacuationCancel('E31N2'), 'cancelled');
+    assert.deepEqual(calls, [['start', 'E31N2', 'E41N8'], ['status', 'E31N2'], ['status', undefined], ['cancel', 'E31N2']]);
+    const text = console.help('evacuateRoom', 'text');
+    assert.ok(text.includes('不会自动 unclaim'));
+    assert.ok(text.includes('Nuker'));
+});
 
 test('every mounted business command has one help entry and a working individual lookup', () => {
     const { helpSections, console } = world();

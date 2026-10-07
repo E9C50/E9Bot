@@ -1,6 +1,8 @@
 import { defaultAutoResource } from 'settings/room'
 import { roomPolicy } from 'settings/roomPolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
+import { isRoomEvacuating } from './evacuationState'
+import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from './evacuation'
 
 interface SendJobIndex {
     jobs: RoomMemory['terminalSendJob']
@@ -24,7 +26,7 @@ function getEnergyCandidates(): readonly Room[] {
     energyCandidates = []
     for (const name in Game.rooms) {
         const room = Game.rooms[name]
-        if (room.my && room.storage !== undefined && room.terminal !== undefined) energyCandidates.push(room)
+        if (room.my && !isRoomEvacuating(room) && room.storage !== undefined && room.terminal !== undefined) energyCandidates.push(room)
     }
     return energyCandidates
 }
@@ -57,6 +59,7 @@ function queueTransfer(
     resourceType: ResourceConstant,
     amount: number
 ): boolean {
+    if (isRoomEvacuating(room) || isRoomEvacuating(targetRoom)) return false
     const pairs = createSendJobIndex(room), key = `${targetRoom}:${resourceType}`
     if (!room.sendResource(targetRoom, resourceType, amount)) return false
     // sendResource 对既有 pair 是覆盖，对新 pair 是新增；同 tick 的其他房间立即可见。
@@ -72,6 +75,8 @@ function processSendJobs(room: Room, terminal: StructureTerminal): void {
     let full: boolean | undefined
     for (const id in room.memory.terminalSendJob) {
         const job = room.memory.terminalSendJob[id]
+        // Retain explicit jobs for cancellation/resumption, but reserve and send no cargo to closing rooms.
+        if (isRoomEvacuating(job.targetRoom)) continue
         const resourceType = job.resourceType
         room.memory.terminalAmount[resourceType] =
             (room.memory.terminalAmount[resourceType] || 0) + job.amount
@@ -93,10 +98,15 @@ function processSendJobs(room: Room, terminal: StructureTerminal): void {
         )
             amount = terminal.store[resourceType]
         amount = Math.min(amount, policy.maximumSendAmount)
+        const target = Game.rooms[job.targetRoom]
+        const reservableTarget = target?.controller?.my && target.terminal?.my !== false && target.terminal !== undefined ? target : undefined
+        if (reservableTarget) amount = Math.min(amount, getEvacuationIncomingCapacity(reservableTarget))
+        if (amount <= 0) continue
         if (
             terminal.store[resourceType] >= amount &&
             terminal.send(resourceType, amount, job.targetRoom) == OK
         ) {
+            if (reservableTarget) reserveEvacuationIncoming(reservableTarget, amount)
             job.amount -= amount
             if (job.amount <= 0) { delete room.memory.terminalSendJob[id]; removeIndexedJob(room, job) }
             break
@@ -190,7 +200,7 @@ function distributionDue(roomName: string): boolean {
 /** 终端发货、跨房间能量平衡、中央仓库资源平衡各自独立。 */
 export function processTerminalResource(room: Room): void {
     const terminal = room.terminal
-    if (terminal == undefined) return
+    if (terminal == undefined || isRoomEvacuating(room)) return
     processSendJobs(room, terminal)
     balanceEnergy(room)
 
@@ -203,6 +213,6 @@ export function processTerminalResource(room: Room): void {
         return
     const center = Game.rooms[Memory.centerStorage]
     // 中央仓库尚未配置/不可见时不阻断其他房间任务。
-    if (center == undefined || center.terminal == undefined) return
+    if (center == undefined || center.terminal == undefined || isRoomEvacuating(center)) return
     balanceCenterResources(room, center)
 }

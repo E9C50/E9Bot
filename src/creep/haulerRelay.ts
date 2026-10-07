@@ -4,6 +4,7 @@ import { haulerRelayPolicy as policy } from 'settings/haulerRelay'
 import { runtimePolicy } from 'settings/runtime'
 import type { CachedMovementPath, CachedMovementStep } from 'utils/cachedMovement'
 import { blockHaulerEnergyPickup } from './haulerPickup'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 interface Lane {
     key: string
@@ -38,6 +39,7 @@ function atWar(home: Room): boolean {
 /** Relay only established energy lanes; portals, mixed cargo and retreating missions keep their own protocols. */
 function laneFor(creep: Creep): Lane | undefined {
     const home = Game.rooms[creep.memory.spawnRoom]
+    if (isRoomEvacuating(creep.room) || isRoomEvacuating(creep.memory.spawnRoom)) return undefined
     if (!isDevelopingRoom(home) || home!.enemies?.length || atWar(home!)) return undefined
     const data = creep.memory.data
     if (creep.memory.role === 'rFiller' && isDevelopmentRemoteData(data)) {
@@ -102,6 +104,7 @@ export function runHaulerRelays(): void {
     for (const name in Game.creeps) {
         if (Game.cpu.getUsed() - started >= policy.maximumCpu || Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) break
         const creep = Game.creeps[name]
+        if (isRoomEvacuating(creep.room) || isRoomEvacuating(creep.memory.spawnRoom)) continue
         const role = creep.memory.role
         if (!creep.spawning && (role === 'upgrader' || role === 'builder' || role === 'rBuilder' || role === 'sBuilder') &&
             isDevelopingRoom(creep.room) && !creep.room.storage && range(creep.pos, creep.room.controller!.pos) <= 3 &&

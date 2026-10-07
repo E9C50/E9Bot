@@ -2,6 +2,7 @@ import { bodyConfigs, roleAdvEnum, roleBaseEnum, roleWarEnum } from 'settings/cr
 import { populationPolicy } from 'settings/population'
 import { addCreepConfig } from './demand'
 import { sha1String } from 'utils'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
 export function releaseBootstrapBuilderConfig(): void {
@@ -12,10 +13,10 @@ export function releaseBootstrapBuilderConfig(): void {
             cost + BODYPART_COST[part as BodyPartConstant] * (body[part] || 0), 0)
     ).filter(cost => cost > 0))
     const rooms = Object.values(Game.rooms)
-    const homes = rooms.filter(room => room.my && room.spawns.length > 0 &&
+    const homes = rooms.filter(room => room.my && !isRoomEvacuating(room) && room.spawns.length > 0 &&
         room.energyCapacityAvailable >= minimumBodyCost && !Memory.warMode?.[room.name])
     for (const target of rooms) {
-        if (!target.my || target.spawns.length > 0 || target.constructionSites.length == 0 ||
+        if (!target.my || isRoomEvacuating(target) || target.spawns.length > 0 || target.constructionSites.length == 0 ||
             target.sources.length == 0 || Memory.warMode?.[target.name]) continue
         const candidates = homes.map(home => ({
             home,
@@ -36,7 +37,7 @@ export function releaseJobsCreepConfig(): void {
     releaseBootstrapBuilderConfig()
     for (const roomName in Game.rooms) {
         const room: Room = Game.rooms[roomName]
-        if (!room.my) continue
+        if (!room.my || isRoomEvacuating(room)) continue
 
         // 发布侦察兵
         if (Game.flags[room.name + '_SCOUT'] != undefined) {

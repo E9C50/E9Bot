@@ -88,6 +88,8 @@ interface CreepMemory {
     needRenew?: boolean
     pathCache?: string
     prePos?: string
+    /** Finish unloading mixed evacuation cargo before restoring the original economy role after cancellation. */
+    evacuationCargoRoom?: string
     /** Local-shard aid loading progress and bounded target cooldowns. */
     aidBuilderEnergy?: AidBuilderEnergyState
     /** Stable local mine assignment and loading progress for development haulers. */
@@ -151,7 +153,7 @@ interface EmptyData { }
 
 interface HarvesterData { sourceId: string, buildTarget?: string }
 interface MineralData { sourceId: string }
-interface FillerData { sourceId: string, targetId?: string, mineId?: string }
+interface FillerData { sourceId: string, targetId?: string, mineId?: string, evacuationRoom?: string }
 
 interface ManagerData { }
 interface ProcesserData { waiting: number }

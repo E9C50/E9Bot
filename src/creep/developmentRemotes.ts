@@ -8,6 +8,7 @@ import { haulerEnergyPickupReserved, pickupAdjacentHaulerEnergy, reserveHaulerEn
 import { retireSourceLinkMiner } from './sourceLinkMining'
 import { sourceLink } from 'room/sourceLinks'
 import { prepareStationaryMining, runStationaryMining } from './stationaryMining'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -241,7 +242,7 @@ function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant
 export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): void {
     const assigned = new Set<string>()
     for (const home of Object.values(Game.rooms)) {
-        if (!enabled(home) || atWar(home)) continue
+        if (!enabled(home) || isRoomEvacuating(home) || atWar(home)) continue
         const state = stateFor(home), manual = manualRooms()
         if (state.lastScanTick === undefined || Game.time - state.lastScanTick >= policy.scanInterval) discover(home, state)
         for (const roomName of state.candidates) {

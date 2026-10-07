@@ -7,6 +7,7 @@ import { releaseDevelopmentBaseConfig } from './developmentPopulation'
 import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
 import { sourceLinkPolicy } from 'settings/sourceLinks'
 import { releaseRepairerCreepConfigs } from './repairerPopulation'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 /** A zero-CARRY resident cannot hold the only Link-miner birth slot until natural death. */
 function linkedMinerName(room: Room, source: Source, name: string): string {
@@ -51,7 +52,7 @@ function localBuilderPublisher(room: Room): (name: string, data: BuilderData) =>
 export function releaseBaseCreepConfig(): void {
     for (const roomName in Game.rooms) {
         const room: Room = Game.rooms[roomName]
-        if (!room.my) continue
+        if (!room.my || isRoomEvacuating(room)) continue
         if (isDevelopingRoom(room)) {
             releaseDevelopmentBaseConfig(room)
             continue

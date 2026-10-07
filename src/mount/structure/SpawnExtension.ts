@@ -5,6 +5,7 @@ import { reserveBoostPlan } from 'creep/boosting'
 import { isDevelopmentRemoteData, DevelopmentRemoteData } from 'creep/developmentRemotes'
 import { isDevelopingRoom } from 'creep/development'
 import { combatSpawnAllowed, recordCombatSpawn } from 'combat/spawning'
+import { isRoomEvacuating } from 'room/evacuationState'
 
 export default class SpawnExtension extends StructureSpawn {
     public init(): void {
@@ -21,6 +22,11 @@ export default class SpawnExtension extends StructureSpawn {
         while (creepSpawnQueue.length > 0) {
             const name = creepSpawnQueue[0]
             const config = this.room.memory.creepConfig?.[name]
+            if (config && isRoomEvacuating(this.room) && config.role !== 'defender' && config.role !== 'rdefender' &&
+                !(config.role === 'filler' && (config.data as FillerData).evacuationRoom === this.room.name)) {
+                creepSpawnQueue.shift()
+                continue
+            }
             if (config && !combatSpawnAllowed(config)) { creepSpawnQueue.shift(); continue }
             const developmentRemote = (config?.data as Partial<DevelopmentRemoteData> | undefined)?.developmentRemote
             // A demand refresh will publish legacy profiles after reaching RCL8; stale growth must wait for that refresh.

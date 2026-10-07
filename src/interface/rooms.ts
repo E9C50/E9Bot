@@ -59,6 +59,8 @@ interface RoomPosition {
 }
 
 interface RoomMemory {
+    /** Persistent resource evacuation; normal operations remain paused until cancellation or unclaim. */
+    evacuation?: import('../room/evacuationState').RoomEvacuationTask
     /** Persisted console settings, independent of regularly refreshed population demands. */
     bodyProfiles?: Partial<Record<CreepRoleConstant, CreepBodyProfile>>
     creepConfig: { [creepName: string]: CreepMemory }

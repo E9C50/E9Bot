@@ -9,6 +9,7 @@ import { createCombatTask, listCombatTasks, cancelCombatTask } from 'combat/miss
 import type { CombatTaskOptions } from 'combat/types'
 import { getHaulerRelayStatus } from 'creep/haulerRelay'
 import { renderHelp } from 'runtime/consoleHelp'
+import { createRoomEvacuation, getRoomEvacuationStatus, cancelRoomEvacuation } from 'room/evacuation'
 
 export default class ConsoleExtension {
     public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
@@ -16,6 +17,9 @@ export default class ConsoleExtension {
     public combatTasks(id?: string): string { return listCombatTasks(id) }
     public combatTaskCancel(id: string): string { return cancelCombatTask(id) }
     public help(topic?: string, format?: 'html' | 'text'): string { return renderHelp(topic, format) }
+    public evacuateRoom(sourceRoom: string, targetRoom: string): string { return createRoomEvacuation(sourceRoom, targetRoom) }
+    public evacuationStatus(sourceRoom?: string): string { return getRoomEvacuationStatus(sourceRoom) }
+    public evacuationCancel(sourceRoom: string): string { return cancelRoomEvacuation(sourceRoom) }
 
     public bodyConfig(room: string, role: string, profile?: CreepBodyProfile | null): string { return configureBody(room, role, profile) }
     public bodyPreview(room: string, role: string): string { return previewBodies(room, role) }
