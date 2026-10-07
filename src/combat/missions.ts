@@ -1,6 +1,7 @@
 import { addCreepConfig } from 'creep/demand'
 import { isRoleSupported } from 'role'
-import { combatSnapshot, combatPower, towerDamage, isCombatHostile } from './intelligence'
+import { combatPower, towerDamage, isCombatHostile } from './intelligence'
+import { isCombatStructureObjective } from './targets'
 import { executeCombatSquad } from './tactics'
 import { runCombatScout, runControllerAttack, runCombatLoot, returnCombatUnit, countCombatLoot } from './support'
 import { planCombatForce } from './planning'
@@ -165,32 +166,26 @@ export function listCombatTasks(id?: string): string {
 }
 
 export function readCombatIntel(room: Room, homeRoom = room.name): CombatIntel {
-    const snapshot = combatSnapshot(room)
     const structures = room.structures || room.find(FIND_STRUCTURES)
+    // Temporary invulnerability stops attacks, but never makes a surviving enemy count as cleared.
+    const enemies = room.enemies.filter(enemy => isCombatHostile(enemy, room))
+    const objectives = structures.filter(structure => isCombatStructureObjective(structure, room))
     const core = structures.find(structure => structure.structureType === STRUCTURE_INVADER_CORE) as StructureInvaderCore | undefined
     const owner = room.controller?.owner?.username || room.controller?.reservation?.username
     const player = owner && !['Invader', 'Source Keeper'].includes(owner)
     let attack = 0, ranged = 0, healing = 0, armedCount = 0
-    for (const enemy of snapshot.enemies) {
+    for (const enemy of enemies) {
         const power = combatPower(enemy)
         attack += power.attack; ranged += power.ranged; healing += power.heal
         if (power.attack + power.ranged + power.dismantle > 0) armedCount++
     }
     let protectedUntil = 0
-    for (const structure of structures) for (const effect of structure.effects || [])
+    for (const target of [...objectives, ...enemies]) for (const effect of target.effects || [])
         if (effect.effect === EFFECT_INVULNERABILITY && effect.ticksRemaining > 0)
             protectedUntil = Math.max(protectedUntil, Game.time + effect.ticksRemaining)
-    let objectives = structures.filter(structure =>
-        [STRUCTURE_TOWER, STRUCTURE_SPAWN, STRUCTURE_INVADER_CORE].includes(structure.structureType as any) &&
-        isCombatHostile(structure, room)).length
-    // NPC treasure remains covered until its hostile rampart is destroyed; clearing the core alone is insufficient.
-    if (core || !player) for (const structure of structures) {
-        if (structure.structureType === STRUCTURE_RAMPART && !(structure as StructureRampart).my &&
-            !(structure as StructureRampart).isPublic && structure.hits > 0 && isCombatHostile(structure, room)) objectives++
-    }
     const towers = structures.filter(structure => structure.structureType === STRUCTURE_TOWER && isCombatHostile(structure, room)) as StructureTower[]
     const loot = countCombatLoot(room, homeRoom)
-    const enemyBodies = snapshot.enemies.map(enemy => {
+    const enemyBodies = enemies.map(enemy => {
         const segments: { hits: number; damageRatio: number }[] = []
         for (const part of 'body' in enemy ? enemy.body : []) {
             if (part.hits <= 0) continue
@@ -201,10 +196,10 @@ export function readCombatIntel(room: Room, homeRoom = room.name): CombatIntel {
         }
         return segments
     })
-    return { seenAt: Game.time, owner, category: player ? 'player' : core || snapshot.enemies.some(enemy => enemy.owner.username === 'Invader') ? 'npc' : 'neutral',
-        safeModeUntil: Game.time + (room.controller?.safeMode || 0), protectedUntil, hostileCount: snapshot.enemies.length,
+    return { seenAt: Game.time, owner, category: player ? 'player' : core || enemies.some(enemy => enemy.owner.username === 'Invader') ? 'npc' : 'neutral',
+        safeModeUntil: Game.time + (room.controller?.safeMode || 0), protectedUntil, hostileCount: enemies.length,
         armedCount, attack, ranged, healing, enemyBodies, towers: towers.map(tower => ({ x: tower.pos.x, y: tower.pos.y,
-            power: Math.max(TOWER_POWER_ATTACK, towerDamage(tower, tower.pos)) })), objectives, core: core?.id,
+            power: Math.max(TOWER_POWER_ATTACK, towerDamage(tower, tower.pos)) })), objectives: objectives.length, core: core?.id,
         loot, downgrade: room.controller?.ticksToDowngrade, level: room.controller?.level,
         upgradeBlocked: room.controller?.upgradeBlocked || 0 }
 }
@@ -257,8 +252,12 @@ export function runCombatTasks(): void {
                 finish(task, '驻守时间结束'); continue
             }
             const target = Game.rooms[task.targetRoom]
+            const implicitSupport = task.phase === 'controller' && task.options.controllerAttack !== true ||
+                task.phase === 'loot' && task.options.loot !== true
+            const confirmingClear = task.mode === 'attack' && ['planning', 'spawning', 'combat'].includes(task.phase) &&
+                task.clearSince !== undefined && Game.time - task.clearSince >= combatPolicy.completionConfirmTicks
             if (target && (!task.intel || Game.time - task.intel.seenAt >= combatPolicy.intelRefreshTicks ||
-                task.phase === 'controller')) {
+                task.phase === 'controller' || implicitSupport || confirmingClear)) {
                 task.intel = isCpuProfilingEnabled() ? profileCpuTask('combat:intel', () => readCombatIntel(target, task.homeRoom)) : readCombatIntel(target, task.homeRoom)
                 if (task.category === undefined || task.category === 'neutral') task.category = task.intel.category
                 task.updatedAt = Game.time
@@ -283,13 +282,19 @@ export function runCombatTasks(): void {
             if (task.reason?.startsWith(PROTECTION_WAIT_PREFIX)) delete task.reason
             if (task.phase === 'recon') task.phase = 'planning'
             const clear = intel.armedCount === 0 && intel.hostileCount === 0 && intel.objectives === 0
+            // Tasks saved under the previous default may already be in an implicit support stage.
+            if (implicitSupport) {
+                if (target && clear) { finish(task, '目标已清场'); continue }
+                withdraw(task); task.phase = 'planning'
+                task.reason = '按清场目标重新检查剩余单位及建筑'
+            }
             if (task.mode === 'attack' && clear && ['planning', 'spawning', 'combat'].includes(task.phase)) {
                 task.clearSince = task.clearSince === undefined ? Game.time : task.clearSince
                 if (target && Game.time - task.clearSince >= combatPolicy.completionConfirmTicks) {
                     withdraw(task)
-                    if (task.category === 'player' && task.options.controllerAttack !== false && target.controller?.owner) {
+                    if (task.category === 'player' && task.options.controllerAttack === true && target.controller?.owner) {
                         task.phase = 'controller'; task.controllerBaseline = target.controller.ticksToDowngrade
-                    } else if (task.category === 'npc' && task.options.loot !== false) task.phase = 'loot'
+                    } else if (task.category === 'npc' && task.options.loot === true) task.phase = 'loot'
                     else finish(task, '目标已清场')
                 }
                 continue

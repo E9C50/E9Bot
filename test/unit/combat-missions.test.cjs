@@ -10,7 +10,7 @@ function world() {
         spawns: [{ id: 'spawn', pos: { x: 20, y: 20, roomName: 'W1N1' } }], storage: { store: store(300000) },
         memory: { creepConfig: {}, creepSpawnQueue: [], teamConfig: {} }, energyCapacityAvailable: 12900 };
     const target = { name: 'W2N1', controller: { owner: { username: 'enemy' }, level: 8, ticksToDowngrade: 200000, upgradeBlocked: 0 },
-        structures: [{ id: 'enemy-spawn', structureType: 'spawn', owner: { username: 'enemy' }, effects: [] }],
+        structures: [{ id: 'enemy-spawn', structureType: 'spawn', hits: 5000, owner: { username: 'enemy' }, effects: [] }],
         enemies: [], ruins: [], tombstones: [], droppedResource: [], find: () => [] };
     const game = { time: 100, shard: { name: 'shard3' }, rooms: { W1N1: home, W2N1: target }, creeps: {}, structures: {},
         map: { findRoute: () => [{}], getRoomLinearDistance: () => 1 } };
@@ -19,7 +19,8 @@ function world() {
     let plan = { formation: 'duo', members: [member, member], energy: 900 };
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, console: { log: value => actions.push(['log', value]) },
         STRUCTURE_OBSERVER: 'observer', STRUCTURE_INVADER_CORE: 'core', STRUCTURE_TOWER: 'tower', STRUCTURE_SPAWN: 'spawn',
-        STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container', STRUCTURE_STORAGE: 'storage', STRUCTURE_TERMINAL: 'terminal',
+        STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall', STRUCTURE_CONTROLLER: 'controller',
+        STRUCTURE_CONTAINER: 'container', STRUCTURE_STORAGE: 'storage', STRUCTURE_TERMINAL: 'terminal',
         EFFECT_INVULNERABILITY: 1001, RESOURCE_ENERGY: 'energy', TOWER_POWER_ATTACK: 600,
         OBSERVER_RANGE: 10, OK: 0, FIND_MY_SPAWNS: 'spawns', CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
         BODYPART_COST: { move: 50, ranged_attack: 150, heal: 250, claim: 600 } }, modules: {
@@ -29,7 +30,9 @@ function world() {
         'role': { isRoleSupported: role => ['integrate', 'repairer', 'scout', 'cAttacker', 'filler'].includes(role) },
         './intelligence': { combatSnapshot: room => ({ enemies: room.enemies, structures: room.structures, towers: [], friendlies: [] }),
             combatPower: enemy => ({ attack: enemy.attack || 0, ranged: 0, heal: 0, dismantle: 0 }),
-            towerDamage: () => 600, isCombatHostile: object => object.owner?.username === 'enemy' || object.structureType === 'rampart' },
+            towerDamage: () => 600, isCombatHostile: object => !object.my && object.owner?.username !== 'friend' &&
+                (object.owner !== undefined || ['rampart', 'constructedWall'].includes(object.structureType)) },
+        'settings/settings': { creepWhiteList: ['friend'] },
         './tactics': { executeCombatSquad: members => actions.push(['fight', members.map(member => member.name)]) },
         './rally': { parkReadyCombatMembers: (task, members) => members.forEach(member => actions.push(['rally', member.name])) },
         './planning': { planCombatForce: () => plan },
@@ -226,7 +229,7 @@ test('hold tasks persist after an empty-room snapshot until their duration or ca
 
 test('player cleanup dispatches CLAIM and confirms a later native result before releasing its task', () => {
     const w = world(); w.target.structures = [];
-    const task = w.create(); w.runCombatTasks(); w.tick(10); assert.equal(task.phase, 'controller'); w.publish();
+    const task = w.create({ controllerAttack: true }); w.runCombatTasks(); w.tick(10); assert.equal(task.phase, 'controller'); w.publish();
     const [name] = Object.keys(w.home.memory.creepConfig), unit = w.spawn(name); unit.room = w.target;
     w.runCombatUnits(); assert.equal(task.phase, 'controller'); assert.equal(task.controllerSentAt, 110);
     w.target.controller.upgradeBlocked = 1000; w.tick(1);
@@ -235,7 +238,7 @@ test('player cleanup dispatches CLAIM and confirms a later native result before 
 
 test('a rejected CLAIM intent cannot be misreported as our controller suppression', () => {
     const w = world(); w.target.structures = [];
-    const task = w.create(); w.runCombatTasks(); w.tick(10); w.publish();
+    const task = w.create({ controllerAttack: true }); w.runCombatTasks(); w.tick(10); w.publish();
     const [name] = Object.keys(w.home.memory.creepConfig), unit = w.spawn(name); unit.room = w.target; unit.controllerOK = false;
     w.runCombatUnits(); assert.equal(task.controllerSentAt, undefined);
     w.target.controller.upgradeBlocked = 1000; w.tick(); assert.equal(task.controllerConfirmed, undefined); assert.equal(task.phase, 'controller');
@@ -248,10 +251,139 @@ test('cancellation immediately withdraws queues and keeps living cargo units on 
     w.runCombatUnits(); assert.ok(w.actions.some(action => action[0] === 'return' && action[1] === name));
 });
 
-test('post-raid NPC treasure ramparts stay combat objectives until the cargo is accessible', () => {
+test('remaining walls and ramparts do not keep a cleared NPC room alive', () => {
     const w = world(); delete w.target.controller.owner;
-    w.target.structures = [{ structureType: 'rampart', hits: 50000, my: false, isPublic: false, effects: [] }];
-    assert.equal(w.readCombatIntel(w.target).objectives, 1);
+    w.target.structures = [
+        { structureType: 'rampart', hits: 50000, my: false, isPublic: false, effects: [{ effect: 1001, ticksRemaining: 200 }] },
+        { structureType: 'constructedWall', hits: 50000, effects: [] },
+    ];
+    const intel = w.readCombatIntel(w.target);
+    assert.equal(intel.objectives, 0); assert.equal(intel.protectedUntil, 0);
+    const task = w.create(); w.runCombatTasks(); w.tick(10); w.runCombatUnits();
+    assert.equal(task.phase, 'completed'); assert.match(task.reason, /目标已清场/);
+});
+
+test('room intel counts every destructible non-barrier building, including neutral roads and containers', () => {
+    const w = world();
+    const ownedTypes = ['spawn', 'tower', 'extension', 'storage', 'terminal', 'lab', 'factory', 'link',
+        'extractor', 'observer', 'powerSpawn', 'nuker', 'core'];
+    w.target.structures = ownedTypes.map(structureType => ({ structureType, hits: 1000, owner: { username: 'enemy' }, pos: { x: 20, y: 20 } }));
+    w.target.structures.push(...['road', 'container'].map(structureType => ({ structureType, hits: 1000 })));
+    w.target.structures.push(
+        { structureType: 'controller', hits: 1000, owner: { username: 'enemy' } },
+        { structureType: 'rampart', hits: 1000, owner: { username: 'enemy' } },
+        { structureType: 'constructedWall', hits: 1000 },
+        { structureType: 'lab', hits: 1000, my: true, owner: { username: 'me' } },
+        { structureType: 'terminal', hits: 1000, owner: { username: 'friend' } },
+        { structureType: 'storage', hits: 0, owner: { username: 'enemy' } },
+        { structureType: 'portal' },
+        { structureType: 'keeperLair', owner: { username: 'Source Keeper' } },
+    );
+    assert.equal(w.readCombatIntel(w.target).objectives, ownedTypes.length + 2);
+    w.target.controller.owner.username = 'friend';
+    assert.equal(w.readCombatIntel(w.target).objectives, 0);
+    w.target.controller.owner.username = 'me'; w.target.controller.my = true;
+    assert.equal(w.readCombatIntel(w.target).objectives, 0);
+});
+
+test('economic buildings block completion after military structures die, while leftover barriers do not', () => {
+    const w = world(), task = w.create(); w.runCombatTasks(); w.publish();
+    const unit = w.spawn(task.memberNames[0]);
+    const wall = { structureType: 'constructedWall', hits: 1000000 };
+    const rampart = { structureType: 'rampart', hits: 1000000, owner: { username: 'enemy' } };
+    w.target.structures = [wall, rampart, ...['storage', 'lab', 'factory', 'road', 'container'].map(structureType =>
+        ({ structureType, hits: 1000, ...(structureType === 'road' || structureType === 'container' ? {} : { owner: { username: 'enemy' } }) }))];
+    w.tick(10);
+    assert.equal(task.intel.objectives, 5); assert.equal(task.clearSince, undefined);
+    assert.ok(!['returning', 'completed', 'controller', 'loot'].includes(task.phase));
+    w.target.structures = [wall, rampart];
+    w.tick(); w.tick(10);
+    assert.equal(task.phase, 'returning'); assert.equal(task.intel.objectives, 0);
+    assert.deepEqual(Object.keys(w.home.memory.creepConfig), []);
+    w.runCombatUnits(); assert.ok(w.actions.some(action => action[0] === 'return' && action[1] === unit.name));
+    delete w.game.creeps[unit.name]; w.runCombatUnits();
+    assert.equal(task.phase, 'completed'); assert.equal(w.target.controller.owner.username, 'enemy');
+});
+
+test('civilian creeps and PowerCreeps prevent completion even with no military buildings', () => {
+    const w = world(); w.target.structures = [];
+    w.target.enemies = [{ id: 'worker', hits: 100, body: [], owner: { username: 'enemy' } },
+        { id: 'power', hits: 1000, owner: { username: 'enemy' } }];
+    const task = w.create(); w.runCombatTasks(); w.tick(10);
+    assert.equal(task.intel.hostileCount, 2); assert.equal(task.intel.armedCount, 0); assert.equal(task.clearSince, undefined);
+    w.target.enemies.shift(); w.tick(); assert.equal(task.intel.hostileCount, 1);
+    assert.ok(!['returning', 'completed'].includes(task.phase));
+    w.target.enemies = []; w.tick(); w.tick(10); w.runCombatUnits();
+    assert.equal(task.phase, 'completed');
+});
+
+test('invulnerable hostile creeps remain visible to completion and trigger a bounded protection wait', () => {
+    const w = world(); w.target.structures = [];
+    const protectedWorker = { hits: 100, body: [], owner: { username: 'enemy' }, effects: [{ effect: 1001, ticksRemaining: 20 }] };
+    w.target.enemies = [protectedWorker,
+        { hits: 100, body: [], my: true, owner: { username: 'me' }, effects: [{ effect: 1001, ticksRemaining: 200 }] },
+        { hits: 100, body: [], owner: { username: 'friend' } }];
+    const intel = w.readCombatIntel(w.target);
+    assert.equal(intel.hostileCount, 1); assert.equal(intel.protectedUntil, 120);
+    const task = w.create(); w.runCombatTasks(); w.publish();
+    assert.match(task.reason, /无敌效果/); assert.equal(task.clearSince, undefined);
+    assert.deepEqual(Object.keys(w.home.memory.creepConfig), []);
+    protectedWorker.effects = []; w.tick(20);
+    assert.equal(task.intel.hostileCount, 1); assert.equal(task.phase, 'spawning');
+});
+
+test('default player and NPC attacks finish at room clearance without implicit controller or loot phases', () => {
+    for (const category of ['player', 'npc']) {
+        const w = world(); if (category === 'npc') delete w.target.controller.owner;
+        w.target.structures = []; w.target.lootAmount = 5000;
+        const task = w.create(); task.category = category;
+        w.runCombatTasks(); w.tick(10); w.publish(); w.runCombatUnits();
+        assert.equal(task.phase, 'completed'); assert.match(task.reason, /目标已清场/);
+        assert.deepEqual(Object.keys(w.home.memory.creepConfig), []);
+        assert.equal(w.actions.some(action => action[0] === 'controller' || action[0] === 'loot'), false);
+    }
+});
+
+test('the final clearance confirmation refreshes same-tick cached intel before accepting completion', () => {
+    for (const threat of ['creep', 'building']) {
+        const w = world(); w.target.structures = [];
+        const task = w.create(); w.runCombatTasks();
+        assert.equal(task.clearSince, 100);
+        w.game.time = 110;
+        task.intel = w.readCombatIntel(w.target);
+        assert.equal(task.intel.seenAt, w.game.time);
+        if (threat === 'creep') w.target.enemies = [{ hits: 100, body: [], owner: { username: 'enemy' } }];
+        else w.target.structures = [{ structureType: 'storage', hits: 1000, owner: { username: 'enemy' } }];
+        w.runCombatTasks();
+        assert.equal(task.clearSince, undefined); assert.equal(task.phase, 'spawning');
+        assert.equal(threat === 'creep' ? task.intel.hostileCount : task.intel.objectives, 1);
+    }
+});
+
+test('persisted implicit support stages refresh stale intel and return once the full room is clear', () => {
+    for (const phase of ['controller', 'loot']) {
+        const w = world(); w.target.structures = [];
+        const task = w.create(); task.phase = phase; task.category = phase === 'controller' ? 'player' : 'npc';
+        task.intel = { ...w.readCombatIntel(w.target), objectives: 1 };
+        w.home.memory.creepConfig.legacy = { combatTaskId: task.id };
+        w.home.memory.creepSpawnQueue = ['legacy'];
+        w.runCombatTasks(); w.runCombatUnits();
+        assert.equal(task.phase, 'completed'); assert.equal(task.intel.objectives, 0);
+        assert.deepEqual(Object.keys(w.home.memory.creepConfig), []); assert.deepEqual(w.home.memory.creepSpawnQueue, []);
+    }
+});
+
+test('persisted implicit support stages resume clearing surviving buildings rather than finishing on old intel', () => {
+    for (const phase of ['controller', 'loot']) {
+        const w = world();
+        const task = w.create(); task.phase = phase; task.category = phase === 'controller' ? 'player' : 'npc';
+        task.intel = { ...w.readCombatIntel(w.target), objectives: 0 };
+        w.target.structures = [{ structureType: 'road', hits: 5000 }];
+        w.runCombatTasks(); w.publish();
+        assert.equal(task.intel.objectives, 1); assert.equal(task.phase, 'spawning');
+        assert.ok(Object.values(w.home.memory.creepConfig).every(config => config.combatJob === 'fighter'));
+        assert.equal(task.clearSince, undefined);
+    }
 });
 
 test('the native spawn boundary rejects stale generations and records only accepted spawn costs', () => {
@@ -279,8 +411,8 @@ test('home defense preempts an expedition without publishing more offensive dema
 
 test('NPC cleanup transitions into hauling and waits for all cargo to arrive before completing', () => {
     const w = world(); delete w.target.controller.owner;
-    w.target.structures = [{ id: 'core', structureType: 'core', owner: { username: 'enemy' }, effects: [] }];
-    const task = w.create(); w.runCombatTasks(); w.publish();
+    w.target.structures = [{ id: 'core', structureType: 'core', hits: 5000, owner: { username: 'enemy' }, effects: [] }];
+    const task = w.create({ loot: true }); w.runCombatTasks(); w.publish();
     assert.equal(task.category, 'npc');
     w.target.structures = []; w.target.lootAmount = 2600; w.tick(); w.tick(10); w.publish();
     assert.equal(task.phase, 'loot');
@@ -295,7 +427,7 @@ test('NPC cleanup transitions into hauling and waits for all cargo to arrive bef
 
 test('unreachable NPC cargo exits with an incomplete reason after bounded lack of progress', () => {
     const w = world(); delete w.target.controller.owner; w.target.structures = []; w.target.lootAmount = 1000;
-    const task = w.create(); task.category = 'npc'; w.runCombatTasks(); w.tick(10); w.tick(1);
+    const task = w.create({ loot: true }); task.category = 'npc'; w.runCombatTasks(); w.tick(10); w.tick(1);
     assert.equal(task.phase, 'loot'); w.tick(500);
     assert.equal(task.phase, 'returning'); assert.match(task.reason, /无进展/);
 });

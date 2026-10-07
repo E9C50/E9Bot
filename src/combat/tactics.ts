@@ -1,6 +1,8 @@
-import { CombatSnapshot, CombatUnit, combatPower, combatRange, combatSnapshot,
+import { CombatSnapshot, combatPower, combatRange, combatSnapshot,
     effectiveDamage, incomingDamage, isCombatHostile, towerHeal } from './intelligence'
-import { CombatFormation, PositionPlan, planSquadMovement, squadBreachTarget, translateSquad } from './squadMovement'
+import { CombatFormation, PositionPlan, planSquadMovement, translateSquad } from './squadMovement'
+import { CombatTarget, combatAttackObjectives, combatProtectedTarget, combatTargetPriority,
+    isCombatBarrier, selectCombatTarget } from './targets'
 import { combatTacticsPolicy } from 'settings/combatTactics'
 export { combatTacticsPolicy } from 'settings/combatTactics'
 
@@ -11,7 +13,7 @@ export interface CombatSquadOptions {
     formation?: CombatFormation
 }
 
-type Target = CombatUnit | AnyStructure
+type Target = CombatTarget
 type IntentState = { primary: boolean; ranged: boolean; move: boolean; healing?: { target: Creep; amount: number; range: number } }
 type SquadState = { order: string[]; lastSeen: number; retreatUntil: number }
 let intentTick: number | undefined
@@ -55,36 +57,6 @@ function orderedMembers(members: Creep[], options: CombatSquadOptions): { member
 function structure(target: Target): target is AnyStructure { return 'structureType' in target }
 function canDismantle(target: Target): target is AnyStructure {
     return structure(target) && target.structureType !== STRUCTURE_INVADER_CORE
-}
-
-function protectedTarget(target: Target, snapshot: CombatSnapshot): Target {
-    return snapshot.structures.find(candidate => candidate.structureType === STRUCTURE_RAMPART &&
-        combatRange(candidate.pos, target.pos) === 0) || target
-}
-
-function priority(target: Target): number {
-    const policy = combatTacticsPolicy.targeting
-    if (!structure(target)) {
-        const power = combatPower(target)
-        return power.heal > 0 ? policy.healer : power.attack + power.ranged > 0 ? policy.fighter : policy.civilian
-    }
-    if (target.structureType === STRUCTURE_TOWER) return policy.tower
-    if (target.structureType === STRUCTURE_SPAWN || target.structureType === STRUCTURE_INVADER_CORE) return policy.spawnOrCore
-    if (target.structureType === STRUCTURE_RAMPART || target.structureType === STRUCTURE_WALL) return policy.barrier
-    return policy.otherStructure
-}
-
-function chooseTarget(leader: Creep, snapshot: CombatSnapshot, mode: 'attack' | 'hold'): Target | undefined {
-    const candidates: Target[] = [...snapshot.enemies, ...(mode === 'attack' ? snapshot.structures : [])]
-    let selected: Target | undefined, best = Infinity
-    for (const candidate of candidates) {
-        const protectedCandidate = protectedTarget(candidate, snapshot)
-        const score = priority(candidate) * combatTacticsPolicy.targeting.priorityWeight +
-            combatRange(leader.pos, candidate.pos) * combatTacticsPolicy.targeting.rangeWeight +
-            Math.min(combatTacticsPolicy.targeting.maximumHitsPenalty, protectedCandidate.hits / combatTacticsPolicy.targeting.hitsScale)
-        if (score < best) { selected = protectedCandidate; best = score }
-    }
-    return selected
 }
 
 function snapshotFor(member: Creep): CombatSnapshot { return combatSnapshot(member.room) }
@@ -213,47 +185,53 @@ function unsafePositions(members: Creep[], positions: PositionPlan, target: Targ
     return false
 }
 
-function rangedTargets(member: Creep, snapshot: CombatSnapshot, mode: 'attack' | 'hold'): Target[] {
+function currentBarrier(target: Target, selected: Target | undefined): boolean {
+    return !structure(target) || !isCombatBarrier(target) || selected === undefined || target.id === selected.id
+}
+
+function rangedTargets(member: Creep, snapshot: CombatSnapshot, mode: 'attack' | 'hold', selected?: Target): Target[] {
     const targets = new Map<string, Target>()
-    for (const raw of [...snapshot.enemies, ...(mode === 'attack' ? snapshot.structures : [])]) {
-        const target = protectedTarget(raw, snapshot)
-        if (combatRange(member.pos, target.pos) <= 3) targets.set(target.id, target)
+    for (const raw of combatAttackObjectives(snapshot, mode, member.room)) {
+        const target = combatProtectedTarget(raw, snapshot)
+        if (currentBarrier(target, selected) && combatRange(member.pos, target.pos) <= 3) targets.set(target.id, target)
     }
     return [...targets.values()]
 }
 
-function safeMassAttack(member: Creep): boolean {
-    // Native mass attack would also hit whitelisted players and some neutral destructible objects.
+function safeMassAttack(member: Creep, selected: Target, reachable: Target[]): boolean {
+    // Native mass fire must respect the clearing stage and cannot open extra holes.
+    const allowed = new Set(reachable.filter(target => !structure(target) || !isCombatBarrier(target)).map(target => target.id))
+    if (structure(selected) && isCombatBarrier(selected)) allowed.add(selected.id)
     let protectedObjects = collateral.get(member.room.name)
     if (!protectedObjects) {
         protectedObjects = [...member.room.find(FIND_CREEPS), ...member.room.find(FIND_POWER_CREEPS)]
             .filter(creep => !creep.my && !isCombatHostile(creep))
         protectedObjects.push(...(member.room.structures || member.room.find(FIND_STRUCTURES)).filter(target =>
-            target.hits !== undefined && !('my' in target && target.my) && !isCombatHostile(target, member.room)))
+            target.hits !== undefined && target.hits > 0 && !('my' in target && target.my)))
         collateral.set(member.room.name, protectedObjects)
     }
-    return !protectedObjects.some(target => combatRange(member.pos, target.pos) <= 3)
+    return !protectedObjects.some(target => !allowed.has((target as Target).id) && combatRange(member.pos, target.pos) <= 3)
 }
 
 function fire(member: Creep, target: Target | undefined, snapshot: CombatSnapshot, mode: 'attack' | 'hold'): void {
     const power = combatPower(member), used = intent(member)
-    const reachable = rangedTargets(member, snapshot, mode)
+    const reachable = rangedTargets(member, snapshot, mode, target)
     const selected = target && combatRange(member.pos, target.pos) <= 3 ? target :
-        reachable.slice().sort((a, b) => priority(a) - priority(b) || a.hits - b.hits)[0]
+        reachable.slice().sort((a, b) => combatTargetPriority(a) - combatTargetPriority(b) || a.hits - b.hits)[0]
     if (!used.ranged && power.ranged > 0 && selected) {
         const damage = (object: Target, raw: number): number => structure(object) ? raw : effectiveDamage(object, raw)
         const single = damage(selected, power.ranged)
         const mass = reachable.reduce((sum, object) => sum + damage(object, power.ranged *
             (combatRange(member.pos, object.pos) <= 1 ? 1 : combatRange(member.pos, object.pos) === 2 ? 0.4 : 0.1)), 0)
-        if (mass > single * combatTacticsPolicy.massAttackAdvantage && safeMassAttack(member)) member.rangedMassAttack()
+        if (mass > single * combatTacticsPolicy.massAttackAdvantage && safeMassAttack(member, selected, reachable)) member.rangedMassAttack()
         else member.rangedAttack(selected)
         used.ranged = true
     }
     if (used.primary) return
     const adjacent = target && combatRange(member.pos, target.pos) <= 1 ? target :
-        [...snapshot.enemies, ...(mode === 'attack' ? snapshot.structures : [])].map(object => protectedTarget(object, snapshot))
-            .filter(object => combatRange(member.pos, object.pos) <= 1)
-            .sort((a, b) => priority(a) - priority(b) || a.hits - b.hits)[0]
+        combatAttackObjectives(snapshot, mode, member.room).map(object => combatProtectedTarget(object, snapshot))
+            .filter(object => currentBarrier(object, target) && combatRange(member.pos, object.pos) <= 1)
+            .sort((a, b) => combatTargetPriority(a) - combatTargetPriority(b) || a.hits - b.hits)[0]
     if (!adjacent) return
     if (canDismantle(adjacent) && power.dismantle > power.attack && power.dismantle > 0) {
         member.dismantle(adjacent); used.primary = true
@@ -293,10 +271,9 @@ function saferTranslation(members: Creep[], target: Target | undefined, retreat:
 function runSquad(active: Creep[], options: CombatSquadOptions, formation: CombatFormation): void {
     const { members, state } = orderedMembers(active, { ...options, formation })
     const leader = members[0], snapshot = snapshotFor(leader)
-    let target = chooseTarget(leader, snapshot, options.mode)
     const attackRange = members.some(member => combatPower(member).attack + combatPower(member).dismantle > 0) ? 1 : 3
-    if (target && options.mode === 'attack' && leader.pos.roomName === options.targetRoom)
-        target = squadBreachTarget(members, target.pos, attackRange, formation) || target
+    const targetingMode = leader.pos.roomName === options.targetRoom ? options.mode : 'hold'
+    const target = selectCombatTarget(members, snapshot, targetingMode, formation, attackRange)
     healSquad(members)
     const ticks = engagementTicks(members, target, snapshot)
     const brokenFormation = formation === 'quad' && members.length < 4 || formation === 'duo' && members.length < 2
@@ -305,7 +282,8 @@ function runSquad(active: Creep[], options: CombatSquadOptions, formation: Comba
     const retreating = state.retreatUntil > Game.time
     const hostileSafeMode = leader.room.controller?.safeMode && !leader.room.controller.my
     if (!hostileSafeMode) for (const member of members)
-        fire(member, target?.pos.roomName === member.pos.roomName ? target : undefined, snapshotFor(member), options.mode)
+        fire(member, target?.pos.roomName === member.pos.roomName ? target : undefined, snapshotFor(member),
+            member.pos.roomName === options.targetRoom ? options.mode : 'hold')
     if (members.some(member => member.fatigue > 0)) return
     if (retreating) {
         let retreat: PositionPlan | undefined

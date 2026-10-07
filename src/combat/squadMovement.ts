@@ -178,6 +178,7 @@ export function squadBreachTarget(members: readonly Creep[], goal: RoomPosition,
     if (!anchor || quad && members.some((member, index) => combatRange(member.pos, quadSeats(anchor)[index]) !== 0)) return undefined
     if (!search(anchor, goal, range, members, quad).incomplete) return undefined
     const route = search(anchor, goal, range, members, quad, true)
+    if (route.incomplete) return undefined
     for (const point of [anchor, ...route.path]) {
         for (const [dx, dy] of quad ? QUAD_OFFSETS : [[0, 0]]) {
             const barrier = data.barriers.get((point.x + dx) * 50 + point.y + dy)

@@ -56,6 +56,85 @@ test('structure attacks choose dismantle or melee once and can combine a separat
     assert.equal(actions(mine, 'rangedAttack').length, 1);
 });
 
+test('an unarmed enemy across the room prevents every attack slot from targeting a nearby tower', () => {
+    const w = createCombatWorld(), mine = w.unit('mine', ['attack', 'work', 'ranged_attack', 'move']);
+    const enemy = w.unit('worker', ['carry', 'move'], { my: false, x: 20 });
+    w.structure('tower', 'tower', { x: 11, energy: 0 });
+    run(w, [mine]);
+    assert.equal(actions(mine, 'attack', 'dismantle', 'rangedAttack', 'rangedMassAttack').length, 0);
+    assert.ok(destination(w, mine).getRangeTo(enemy.pos) < mine.pos.getRangeTo(enemy.pos));
+});
+
+test('all squad members share the creep stage instead of independently dismantling adjacent buildings', () => {
+    const w = createCombatWorld();
+    const first = w.unit('first', ['attack', 'work', 'ranged_attack', 'move']);
+    const second = w.unit('second', ['attack', 'work', 'ranged_attack', 'move'], { x: 11, y: 11 });
+    w.unit('worker', ['carry', 'move'], { my: false, x: 25 });
+    w.structure('storage', 'storage', { x: 12, y: 11 });
+    run(w, [first, second], { formation: 'duo' });
+    for (const member of [first, second])
+        assert.equal(actions(member, 'attack', 'dismantle', 'rangedAttack', 'rangedMassAttack').length, 0);
+});
+
+test('mass fire cannot damage nearby buildings or open an additional wall while clearing creeps', () => {
+    for (const type of ['storage', 'constructedWall', 'rampart']) {
+        const w = createCombatWorld(), mine = w.unit('mine', ['ranged_attack', 'move']);
+        w.unit('first', ['move'], { my: false, x: 11, y: 10 });
+        w.unit('second', ['move'], { my: false, x: 10, y: 11 });
+        w.structure('extra', type, { x: 11, y: 11 });
+        run(w, [mine]);
+        assert.equal(actions(mine, 'rangedMassAttack').length, 0, type);
+        assert.equal(actions(mine, 'rangedAttack').length, 1, type);
+        assert.notEqual(actions(mine, 'rangedAttack')[0].target, 'extra', type);
+    }
+});
+
+test('a covered enemy uses its rampart without an adjacent wall becoming a melee fallback', () => {
+    const w = createCombatWorld(), mine = w.unit('mine', ['attack', 'work', 'ranged_attack', 'move']);
+    w.unit('worker', ['move'], { my: false, x: 13 });
+    w.structure('cover', 'rampart', { x: 13 });
+    w.structure('extra-wall', 'constructedWall', { x: 11 });
+    run(w, [mine]);
+    assert.equal(actions(mine, 'rangedAttack')[0]?.target, 'cover');
+    assert.equal(actions(mine, 'attack', 'dismantle', 'rangedMassAttack').length, 0);
+});
+
+test('members do not select a second covered enemy as an alternative opening while approaching the chosen rampart', () => {
+    const w = createCombatWorld();
+    const first = w.unit('first', ['attack', 'ranged_attack', 'move']);
+    const second = w.unit('second', ['attack', 'ranged_attack', 'move'], { x: 9, y: 9 });
+    w.unit('healer', ['heal', 'move'], { my: false, x: 14, y: 10 });
+    w.structure('chosen-cover', 'rampart', { x: 14, y: 10 });
+    w.unit('worker', ['move'], { my: false, x: 7, y: 9 });
+    w.structure('other-cover', 'rampart', { x: 7, y: 9 });
+    run(w, [first, second], { formation: 'duo' });
+    for (const member of [first, second])
+        assert.equal(actions(member, 'attack', 'dismantle', 'rangedAttack', 'rangedMassAttack').length, 0);
+});
+
+test('only residual walls and ramparts leave every offensive intent idle', () => {
+    const w = createCombatWorld(), mine = w.unit('mine', ['attack', 'work', 'ranged_attack', 'move']);
+    w.structure('wall', 'constructedWall', { x: 11 });
+    w.structure('rampart', 'rampart', { x: 10, y: 11 });
+    run(w, [mine]);
+    assert.equal(actions(mine, 'attack', 'dismantle', 'rangedAttack', 'rangedMassAttack').length, 0);
+});
+
+test('unowned roads and containers are cleared after creeps while transit room infrastructure is preserved', () => {
+    for (const type of ['road', 'container']) {
+        const w = createCombatWorld(), mine = w.unit('mine', ['work', 'ranged_attack', 'move']);
+        w.structure('objective', type, { x: 11, owner: null, my: undefined });
+        run(w, [mine]);
+        assert.equal(actions(mine, 'dismantle')[0]?.target, 'objective', type);
+        assert.equal(actions(mine, 'rangedAttack')[0]?.target, 'objective', type);
+    }
+    const w = createCombatWorld(), mine = w.unit('mine', ['work', 'ranged_attack', 'move']);
+    w.structure('transit-road', 'road', { x: 11, owner: null, my: undefined });
+    w.room('W2N1');
+    run(w, [mine], { targetRoom: 'W2N1' });
+    assert.equal(actions(mine, 'attack', 'dismantle', 'rangedAttack', 'rangedMassAttack').length, 0);
+});
+
 test('ranged healing occupies ranged and primary intent slots instead of being overwritten by fire', () => {
     const w = createCombatWorld();
     const mine = w.unit('healer', ['heal', 'ranged_attack', 'move']);
@@ -145,6 +224,8 @@ test('an inaccessible enemy spawn is reached by dismantling a reachable wall ins
     w.structures.splice(w.structures.indexOf(barrier), 1); w.byId.delete(barrier.id);
     w.advance(); run(w, [mine]);
     assert.ok(destination(w, mine).getRangeTo(spawn.pos) < mine.pos.getRangeTo(spawn.pos));
+    assert.equal(actions(mine, 'dismantle').length, 0, 'the open route takes precedence over every remaining wall');
+    assert.equal(w.structures.filter(object => object.structureType === 'constructedWall').length, 49);
 });
 
 test('Invader Cores are attacked with legal weapons and never receive a dismantle intent', () => {
