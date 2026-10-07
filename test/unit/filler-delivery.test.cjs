@@ -57,6 +57,8 @@ function world(level = 6) {
         FIND_MY_CREEPS: 'my-creeps', STRUCTURE_LINK: 'link', STRUCTURE_CONTAINER: 'container', STRUCTURE_STORAGE: 'storage',
         STRUCTURE_EXTENSION: 'extension', STRUCTURE_SPAWN: 'spawn', STRUCTURE_TOWER: 'tower', STRUCTURE_LAB: 'lab',
         STRUCTURE_NUKER: 'nuker', STRUCTURE_POWER_SPAWN: 'powerSpawn' }, modules: {
+        'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+        'runtime/creepIndex': { getRoomProcessors: () => [] },
         utils: { getDistance: (first, second) => first.getRangeTo(second) },
         'creep/developmentLogistics': { controllerEnergyBuffer: value => value.controller.level < 8 ? value.controllerLink ||
             value.containers.find(container => container.pos.inRangeTo(value.controller.pos, 3)) : undefined },

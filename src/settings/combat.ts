@@ -1,5 +1,7 @@
 /** Mission limits are deliberately bounded; failed raids must not drain a room indefinitely. */
 export const combatPolicy = {
+    // Lower numbers spawn first. Keep mining, filling and boost logistics ahead of expedition bodies.
+    spawnPriority: { fighter: 3.5, scout: 3.5, controller: 3.5, loot: 5.5 },
     planning: { primaryParts: [4, 8, 12, 16, 20], healParts: [2, 6, 10, 14, 18], heavyToughParts: 10, lightToughParts: 4,
         boostMineralEnergyWeight: 0.5, minimumBucket: 2000, minimumCpuHeadroom: 25,
         maximumCpu: 10, remainingCpuReserve: 15, cpuCheckInterval: 16 },

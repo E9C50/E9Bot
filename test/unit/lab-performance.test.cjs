@@ -23,6 +23,7 @@ function world() {
             REACTIONS: { A: { B: 'product' }, B: { A: 'product' } }, LAB_REACTION_AMOUNT: 5,
             PWR_OPERATE_LAB: 5, POWER_INFO: { 5: { effect: [2, 4, 6, 8, 10] } } },
         modules: {
+            'creep/boosting': { getActiveRoomBoostRequests: () => [] },
             'settings/creep': { roleAdvEnum: { PROCESSER: 'processer' } },
             'settings/settings': { STRUCTURE_PRIVATEKEY_PERFIX: '_', STRUCTURE_MEMORYKEY_PERFIX: 'IDOF_', creepWhiteList: [] },
             'settings/labs': { reactionSource: { product: ['A', 'B'] } },

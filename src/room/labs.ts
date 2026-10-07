@@ -1,5 +1,6 @@
 import { boostConfig } from 'settings/boost'
-import { getRoomBoostRequests, usableBoostLabs } from 'creep/boosting'
+import { getActiveRoomBoostRequests, usableBoostLabs } from 'creep/boosting'
+import { prioritizeLabBoostJobs } from './labBoostPriority'
 import { getRoomProcessors } from 'runtime/creepIndex'
 import { reactionSource } from 'settings/labs'
 import { roomPolicy } from 'settings/roomPolicy'
@@ -75,6 +76,7 @@ function setLabReaction(room: Room, resource: ResourceConstant | undefined): voi
 }
 
 export function updateLabReactionConfig(room: Room): void {
+    if (prioritizeLabBoostJobs(room)) return
     const interval = hasPendingRoomBoost(room) ? roomPolicy.labs.updateInterval :
         cpuRecoveryInterval('labPlanning', roomPolicy.labs.updateInterval)
     if (!roomWorkDue(room.name, interval, roomPolicy.labs.staggerUpdates === true)) return
@@ -191,7 +193,7 @@ function getBoostType(resourceType: string): BoostTypeConstant | undefined {
 }
 
 export function updateLabBoostConfig(room: Room): void {
-    const requests = getRoomBoostRequests(room)
+    const requests = getActiveRoomBoostRequests(room)
     const boostNeed: RoomMemory['boostNeed'] = {}
     const priorities = new Map<ResourceConstant, number>()
     for (const request of requests) {
@@ -200,7 +202,13 @@ export function updateLabBoostConfig(room: Room): void {
     }
     // Initialization clears this each tick; standalone callers must also get a fresh aggregate.
     room.memory.boostNeed = boostNeed
-    if (!roomWorkDue(room.name, roomPolicy.labs.updateInterval, roomPolicy.labs.staggerUpdates === true) || room.labs.length == 0) return
+    const needsAssignment = requests.some(request => request.priority !== 2 && !room.labs.some(lab =>
+        room.memory.roomLabConfig.singleLabConfig[lab.id]?.boostMode &&
+        room.memory.roomLabConfig.singleLabConfig[lab.id].resourceType === request.resource))
+    if ((!needsAssignment && !roomWorkDue(room.name, roomPolicy.labs.updateInterval, roomPolicy.labs.staggerUpdates === true)) || room.labs.length == 0) {
+        prioritizeLabBoostJobs(room, requests)
+        return
+    }
     const config = room.memory.roomLabConfig
     const previous = { ...config.singleLabConfig }
     const labs = usableBoostLabs(room)
@@ -236,4 +244,5 @@ export function updateLabBoostConfig(room: Room): void {
         const current = config.singleLabConfig[job.labId]
         return current?.boostMode === true && current.resourceType === job.resourceType
     })
+    prioritizeLabBoostJobs(room, requests)
 }

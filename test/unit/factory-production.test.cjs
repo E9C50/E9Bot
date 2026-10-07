@@ -59,6 +59,8 @@ function world(options = {}) {
         RESOURCE_ENERGY: 'energy', RESOURCE_BATTERY: 'battery', RESOURCE_GHODIUM: 'G',
         STRUCTURE_TERMINAL: 'terminal', OK: 0,
     }, modules: options.realNetwork ? {} : {
+        'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+        'runtime/creepIndex': { getRoomProcessors: () => [] },
         './resourceNetwork': {
             getOutgoingResourceAmount: (name, resource) => options.outgoing?.[resource] || 0,
             getTerminalResourceAmount: (target, resource) => target.terminal.store[resource] || 0,

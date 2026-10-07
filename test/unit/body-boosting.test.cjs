@@ -419,9 +419,11 @@ test('ordinary boost aggregation skips the live-name set until an accepted spawn
     const pending = w.plan();
     w.reserveBoostPlan(w.home, 'accepted', pending);
     const requests = w.getRoomBoostRequests(w.home);
-    assert.equal(namesAdded, 20, 'accepted reservations turn on name deduplication immediately within the same tick');
+    assert.equal(namesAdded, 0, 'native bodies are filtered before room indexing and name-set allocation');
     assert.equal(requests.length, 1); assert.equal(requests[0].parts, 2); assert.equal(requests[0].priority, 1);
     assert.equal(w.getRoomBoostRequests(w.home, pending).length, 0, 'the exact plan identity remains excludable');
+    w.creep('accepted', [], w.plan(0), 'filler');
+    assert.equal(w.getRoomBoostRequests(w.home).length, 0, 'a live native body owns its accepted name without joining the boost index');
     w.game.time++;
     namesAdded = 0;
     assert.equal(w.getRoomBoostRequests(w.home).length, 0);

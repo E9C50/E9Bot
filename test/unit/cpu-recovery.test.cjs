@@ -146,7 +146,7 @@ function labPlanningWorld() {
         },
         'settings/boost': { boostConfig: {} },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
-        'creep/boosting': { getRoomBoostRequests: () => requests, usableBoostLabs: () => [] },
+        'creep/boosting': { getActiveRoomBoostRequests: () => requests, usableBoostLabs: () => [] },
     } });
     const room = { name: 'E31N2', labs: [{ id: 'lab', store: {} }], getResource: () => 1000,
         storage: { store: { get product() { productReads++; return 1000; } } },
@@ -169,7 +169,7 @@ test('bucket recovery defers expensive Lab recipe scans without clearing the exi
     assert.equal(w.reads(), 2, 'ordinary ten-tick planning resumes immediately when the bucket recovers');
 });
 
-test('pending boost demand refreshes each tick and preserves the ordinary Lab planning schedule', () => {
+test('pending boost demand refreshes each tick while ordinary Lab planning is paused even during bucket recovery', () => {
     const w = labPlanningWorld();
     w.requests.push({ resource: 'XGH2O', parts: 1, priority: 0 });
     for (let tick = 1; tick <= 100; tick++) {
@@ -179,5 +179,5 @@ test('pending boost demand refreshes each tick and preserves the ordinary Lab pl
         assert.deepEqual({ ...w.room.memory.boostNeed }, { XGH2O: 30 });
         w.updateLabReactionConfig(w.room);
     }
-    assert.equal(w.reads(), 10);
+    assert.equal(w.reads(), 0);
 });

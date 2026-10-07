@@ -1,5 +1,6 @@
 import { structurePolicy } from 'settings/structures'
 import { reactionSource } from "settings/labs"
+import { prioritizeLabBoostJobs } from 'room/labBoostPriority'
 
 const energyQueueRuns = new WeakMap<Room, { tick: number; shard: string }>()
 interface ReactionSources {
@@ -107,6 +108,7 @@ export default class LabExtension extends StructureLab {
     }
 
     public init(): void {
+        if (prioritizeLabBoostJobs(this.room)) return
         if (Game.time % structurePolicy.lab.jobInterval != 0) return
         if (this.room.memory.roomFillJob.labOut == undefined) this.room.memory.roomFillJob.labOut = []
         if (this.room.memory.roomFillJob.labInEnergy == undefined) this.room.memory.roomFillJob.labInEnergy = []
@@ -175,6 +177,7 @@ export default class LabExtension extends StructureLab {
     }
 
     public doWork(): void {
+        if (prioritizeLabBoostJobs(this.room)) return
         const thisLabConfig = this.room.memory.roomLabConfig.singleLabConfig[this.id]
         if (thisLabConfig == undefined || !thisLabConfig.boostMode) {
             this.labReactionWork()

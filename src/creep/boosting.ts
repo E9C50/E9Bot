@@ -1,5 +1,6 @@
 import { boostBodyPart, boostConfig, roleBoostConfig } from 'settings/boost'
 import { bodyPolicy } from 'settings/bodyPolicy'
+import { combatSpawnAllowed } from 'combat/spawning'
 
 type BoostStep = CreepBoostPlan['steps'][number]
 export interface BoostRequest extends BoostStep { priority: number }
@@ -56,36 +57,54 @@ function remainingSteps(plan: CreepBoostPlan, counts: BodyBoostCounts): BoostSte
 
 let currentTick: number | undefined
 let currentShard: string | undefined
+type RoomMember = { name: string; creep: Creep }
+let rawMembers: RoomMember[] | undefined
 let creepsByRoom = new Map<string, Array<{ name: string; creep: Creep }>>()
 let indexed = false
-let reservations = new Map<string, { roomName: string; plan: CreepBoostPlan }>()
+let boostCreepsByRoom = new Map<string, RoomMember[]>()
+let boostIndexed = false
+let reservations = new Map<string, { roomName: string; plan: CreepBoostPlan;
+    combat?: Pick<CreepMemory, 'combatTaskId' | 'combatGeneration' | 'combatJob'> }>()
 let claimedLabs = new Set<string>()
 let attemptedCreeps = new Set<string>()
 
 function syncTick(): void {
     if (currentTick === Game.time && currentShard === Game.shard.name) return
     currentTick = Game.time; currentShard = Game.shard.name
-    creepsByRoom = new Map(); indexed = false; reservations = new Map(); claimedLabs = new Set(); attemptedCreeps = new Set()
+    rawMembers = undefined; creepsByRoom = new Map(); indexed = false; boostCreepsByRoom = new Map(); boostIndexed = false
+    reservations = new Map(); claimedLabs = new Set(); attemptedCreeps = new Set()
 }
 
-function roomCreeps(roomName: string): Array<{ name: string; creep: Creep }> {
+function roomCreeps(roomName: string, boostOnly = false): RoomMember[] {
     syncTick()
-    if (!indexed) {
+    if (rawMembers === undefined) {
+        rawMembers = []
         for (const name in Game.creeps) {
-            const creep = Game.creeps[name]
-            const home = creep.memory.spawnRoom || creep.room.name
-            const group = creepsByRoom.get(home)
-            if (group == undefined) creepsByRoom.set(home, [{ name, creep }])
-            else group.push({ name, creep })
+            rawMembers.push({ name, creep: Game.creeps[name] })
         }
-        indexed = true
     }
-    return creepsByRoom.get(roomName) || []
+    const index = boostOnly ? boostCreepsByRoom : creepsByRoom
+    if (!(boostOnly ? boostIndexed : indexed)) {
+        for (const member of rawMembers) {
+            const { creep } = member
+            // Ordinary native bodies never need room getters or body scans for Lab demand.
+            // The separate full index still retains them for real logistics preflight.
+            if (boostOnly && (creep.memory.boostPlan ? !pendingLabPlan(creep.memory.boostPlan) :
+                !roleBoostConfig[creep.memory.role]?.length)) continue
+            const home = creep.memory.spawnRoom || creep.room.name
+            const group = index.get(home)
+            if (group == undefined) index.set(home, [member])
+            else group.push(member)
+        }
+        if (boostOnly) boostIndexed = true
+        else indexed = true
+    }
+    return index.get(roomName) || []
 }
 
 /** Current live bodies and accepted spawn intents only; old catalogs never reserve forever. */
 export function getRoomBoostRequests(room: Room, excludePlan?: CreepBoostPlan): BoostRequest[] {
-    const members = roomCreeps(room.name)
+    const members = roomCreeps(room.name, true)
     const result: BoostRequest[] = []
     const liveNames = reservations.size > 0 ? new Set<string>() : undefined
     for (const { name, creep } of members) {
@@ -100,16 +119,74 @@ export function getRoomBoostRequests(room: Room, excludePlan?: CreepBoostPlan): 
         for (const step of remainingSteps(plan, counts)) result.push({ ...step, priority: stored == undefined ? 2 : 0 })
     }
     for (const [name, reservation] of reservations) {
-        if (reservation.roomName != room.name || liveNames?.has(name) || reservation.plan === excludePlan) continue
+        if (reservation.roomName != room.name || liveNames?.has(name) || Game.creeps[name] || reservation.plan === excludePlan) continue
         for (const step of reservation.plan.steps) result.push({ ...step, priority: 1 })
     }
     return result
 }
 
+function pendingLabPlan(plan: CreepBoostPlan): boolean {
+    return validPlan(plan) && !plan.completed && !plan.failed && plan.steps.length > 0 &&
+        !(plan.startedAt !== undefined && Game.time - plan.startedAt >= bodyPolicy.boost.timeoutTicks)
+}
+
+/** Lab ownership includes approved future fighters, but spawn preflight keeps its original live-only accounting. */
+export function getActiveRoomBoostRequests(room: Room): BoostRequest[] {
+    const approved = typeof Memory === 'undefined' ? [] : Object.values(Memory.combatTasks || {}).filter(task =>
+        task.homeRoom === room.name && task.plan !== undefined && combatSpawnAllowed({
+            combatTaskId: task.id, combatGeneration: task.generation, combatJob: 'fighter',
+        } as CreepMemory))
+    const result: BoostRequest[] = []
+    const seen = reservations.size > 0 || approved.length > 0 ? new Set<string>() : undefined
+    for (const { name, creep } of roomCreeps(room.name, true)) {
+        seen?.add(name)
+        const stored = creep.memory.boostPlan
+        if (stored && !pendingLabPlan(stored)) continue
+        if (!stored && !roleBoostConfig[creep.memory.role]?.length) continue
+        // Old flag war roles now retire instead of calling their former prepare boost hook.
+        if (!stored && !creep.memory.combatTaskId && ['attacker', 'healer', 'dismantler', 'integrate', 'rAttacker', 'cAttacker'].includes(creep.memory.role)) continue
+        if (!combatSpawnAllowed(creep.memory) || creep.room.name !== room.name) continue
+        const counts = countBody(creep), plan = stored || legacyPlan(creep, counts)
+        if (!pendingLabPlan(plan)) continue
+        for (const step of remainingSteps(plan, counts)) result.push({ ...step, priority: stored ? 0 : 2 })
+    }
+    for (const [name, reservation] of reservations) {
+        if (reservation.roomName !== room.name || seen?.has(name) || Game.creeps[name] || !pendingLabPlan(reservation.plan) ||
+            reservation.combat && !combatSpawnAllowed(reservation.combat as CreepMemory) ||
+            room.memory.creepConfig?.[name] && !combatSpawnAllowed(room.memory.creepConfig[name])) continue
+        seen?.add(name)
+        for (const step of reservation.plan.steps) result.push({ ...step, priority: 1 })
+    }
+    for (const task of approved) {
+        for (let index = 0; index < task.plan!.members.length; index++) {
+            const member = task.plan!.members[index]
+            if (!pendingLabPlan(member.boostPlan)) continue
+            const logicalName = `combat_${task.id}_${task.generation}_fighter_${index}`
+            const name = task.memberNames?.[index] || Object.keys(room.memory.creepConfig || {}).find(name =>
+                room.memory.creepConfig[name].name === logicalName &&
+                room.memory.creepConfig[name].combatGeneration === task.generation)
+            if (name && (seen?.has(name) || Game.creeps[name])) continue
+            if (name) seen?.add(name)
+            for (const step of member.boostPlan.steps) result.push({ ...step, priority: 1 })
+        }
+    }
+    return result
+}
+
+/** Re-evaluate accepted spawns, plan cancellation and live completion within this tick. */
+export function hasActiveRoomBoost(room: Room): boolean {
+    return getActiveRoomBoostRequests(room).length > 0
+}
+
 /** Call only after spawnCreep returns OK; next tick Game.creeps owns the reservation. */
 export function reserveBoostPlan(room: Room, name: string, plan: CreepBoostPlan): void {
     syncTick()
-    if (validPlan(plan) && !plan.failed && !plan.completed && plan.steps.length > 0) reservations.set(name, { roomName: room.name, plan })
+    if (validPlan(plan) && !plan.failed && !plan.completed && plan.steps.length > 0) {
+        const config = room.memory.creepConfig?.[name]
+        const combat = config?.combatTaskId ? { combatTaskId: config.combatTaskId,
+            combatGeneration: config.combatGeneration, combatJob: config.combatJob } : undefined
+        reservations.set(name, { roomName: room.name, plan, combat })
+    }
 }
 
 export function usableBoostLabs(room: Room): StructureLab[] {

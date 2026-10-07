@@ -52,6 +52,8 @@ function world(roleName, data = {}) {
         STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_ROAD:'road', STRUCTURE_RAMPART:'rampart',
         LOOK_STRUCTURES:'structures',LOOK_CREEPS:'creeps',FIND_MINERALS:'minerals',TERRAIN_MASK_WALL:1,
         WORK:'work',HARVEST_POWER:2,CONTAINER_DECAY:5000,CREEP_LIFE_TIME:1500, ERR_NOT_IN_RANGE: -9 }, modules: {
+        'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+        'runtime/creepIndex': { getRoomProcessors: () => [] },
         utils: { getDistance: distance, getClosestTarget() { throw new Error('Candidate filtering and closest selection must be one pass'); } },
         './RoleBaseUpgrader': () => ({ target() { actions.push({ type: 'upgrade' }); return true; } }),
     } });

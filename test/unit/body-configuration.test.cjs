@@ -74,7 +74,10 @@ function processorWorld({ missingLab = false } = {}) {
         transferToTarget(target, resource) { calls.push(['put', target.id, resource]); return true; } };
     let withdrawn = 0;
     const behavior = createSourceLoader({ globals: { OK: 0, ERR_NOT_IN_RANGE: -9, Game: { getObjectById: () => missingLab ? null : lab } },
-        modules: { 'room/resourceNetwork': {
+        modules: {
+            'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+            'runtime/creepIndex': { getRoomProcessors: () => [] },
+            'room/resourceNetwork': {
             getTerminalResourceAmount: (_, resource) => (terminal.store[resource] || 0) - withdrawn,
             recordTerminalWithdrawal: (_, resource, amount) => { if (resource === 'KH2O') withdrawn += amount; },
             isWarehouseRoom: () => false,

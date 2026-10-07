@@ -71,6 +71,8 @@ interface Creep {
 }
 
 interface CreepMemory {
+    /** Keep returning preempted Lab cargo until a native transfer actually succeeds. */
+    labBoostCargoReturn?: boolean
     displayName: string
     name: string
     role: CreepRoleConstant

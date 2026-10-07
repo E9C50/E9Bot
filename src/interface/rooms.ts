@@ -69,6 +69,8 @@ interface RoomMemory {
     teamConfig: { [teamId: string]: TeamConfig }
 
     boostNeed: { [resourceType: string]: number }
+    /** Clears boost-only Lab deliveries when the last active request is released. */
+    labBoostPaused?: boolean
 
     resourceAmount: { [resourceType: string]: number }
     terminalAmount: { [resourceType: string]: number }

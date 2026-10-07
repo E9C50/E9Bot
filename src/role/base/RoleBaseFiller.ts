@@ -7,6 +7,24 @@ import { loadDevelopmentHauler } from 'creep/developmentHauling'
 import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
 import { retireSupersededStorageFiller } from 'creep/storageFillerLifecycle'
+import { boostLabEnergyDeficit, prioritizeLabBoostJobs, recordBoostLabEnergyTransfer } from 'room/labBoostPriority'
+
+/** A full 33-CARRY load must not be poured into a boost that needs only a few hundred energy. */
+function fillActiveBoostEnergy(creep: Creep): boolean {
+    if (!prioritizeLabBoostJobs(creep.room) || !(creep.store[RESOURCE_ENERGY] > 0)) return false
+    const jobs = creep.room.memory.roomFillJob.labInEnergy || []
+    const target = closestFillJob(creep, jobs) as StructureLab | undefined
+    if (!target) return false
+    const amount = Math.min(creep.store[RESOURCE_ENERGY], boostLabEnergyDeficit(creep.room, target))
+    if (amount <= 0) return false
+    const result = creep.transfer(target, RESOURCE_ENERGY, amount)
+    if (result === OK) {
+        recordBoostLabEnergyTransfer(creep.room, target, amount)
+        if (boostLabEnergyDeficit(creep.room, target) === 0)
+            creep.room.memory.roomFillJob.labInEnergy = jobs.filter(id => id !== target.id)
+    } else if (result === ERR_NOT_IN_RANGE) creep.moveTo(target, { range: 1 })
+    return true
+}
 
 /** Controller Links receive energy from other Links, never from a local hauler. */
 function controllerDeliveryContainer(room: Room): StructureContainer | undefined {
@@ -113,6 +131,7 @@ function runDevelopingFiller(creep: Creep, data: FillerData): boolean {
     const collecting = loadDevelopmentHauler(creep, data, buffer?.id)
     if (creep.memory.working) {
         if (storage !== undefined && (creep.memory.developmentHauler?.mineId || data.mineId)) return deliverHaulerEnergy(creep)
+        if (fillActiveBoostEnergy(creep)) return true
         const target = developingFillTarget(creep, buffer)
         if (target != undefined) return developingTransfer(creep, target)
         if (storage != undefined && storage.id != data.sourceId && storage.store.getFreeCapacity(RESOURCE_ENERGY) > 0) return developingTransfer(creep, storage)
@@ -139,6 +158,7 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         return true
     },
     prepare: function (creep: Creep): boolean {
+        prioritizeLabBoostJobs(creep.room)
         return !retireSupersededStorageFiller(creep)
     },
     source(creep) {
@@ -207,6 +227,8 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         }
 
         if (storage !== undefined && (creepData.mineId || creep.memory.developmentHauler?.mineId)) return deliverHaulerEnergy(creep)
+
+        if (fillActiveBoostEnergy(creep)) return true
 
         // 如果有lab需要填充，那就去
         if (fillJobs.labInEnergy != undefined && fillJobs.labInEnergy.length > 0) {

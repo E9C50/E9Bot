@@ -50,6 +50,8 @@ function world() {
         STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower',
         OK: 0, ERR_NOT_IN_RANGE: -9, ERR_NO_PATH: -2,
     }, modules: { utils: { getDistance: (a, b) => a.getRangeTo(b), getClosestTarget: () => undefined },
+        'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+        'runtime/creepIndex': { getRoomProcessors: () => [] },
         'settings/runtime': { runtimePolicy: { warModeScope: 'room' } } } });
     const pickup = loader.load('creep/haulerPickup'), delivery = loader.load('creep/haulerDelivery');
     function cached(unit, dst = source.pos) { routes[unit.name] = { dst }; steps[unit.name] = { x: 11, y: 10, roomName: unit.room.name, index: 1 }; }

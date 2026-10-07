@@ -81,7 +81,8 @@ function world(level = 3) {
             STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_LINK: 'link',
             BUILD_POWER: 5, CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
         },
-        modules: { utils: {
+        modules: { 'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+            'runtime/creepIndex': { getRoomProcessors: () => [] }, utils: {
             getDistance: (a, b) => a.getRangeTo(b),
             getClosestTarget: (origin, values) => values.reduce((closest, item) => !closest || origin.getRangeTo(item) < origin.getRangeTo(closest) ? item : closest, undefined)
         } }

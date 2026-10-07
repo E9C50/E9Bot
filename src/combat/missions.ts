@@ -386,7 +386,7 @@ function publish(task: CombatTask, job: NonNullable<CreepMemory['combatJob']>, r
     if (config) {
         config.combatTaskId = task.id; config.combatJob = job; config.bodyProfile = profile
         config.combatGeneration = task.generation
-        config.spawnPriority = job === 'fighter' ? 8 : 9
+        config.spawnPriority = combatPolicy.spawnPriority[job]
         if (!task.names.includes(name)) task.names.push(name)
     }
     return name

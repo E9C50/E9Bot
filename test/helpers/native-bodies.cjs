@@ -8,6 +8,6 @@ const globals = {
 };
 const modules = {
     'settings/boost': { boostConfig: {}, boostBodyPart: {}, boostTypeEnum: {}, roleBoostConfig: {} },
-    'creep/boosting': { canPrepareBoosts: () => false, reserveBoostPlan() {} },
+    'creep/boosting': { canPrepareBoosts: () => false, reserveBoostPlan() {}, getActiveRoomBoostRequests: () => [] },
 };
 module.exports = { globals, modules };

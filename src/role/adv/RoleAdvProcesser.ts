@@ -2,6 +2,30 @@ import { rolePolicy } from "settings/rolePolicy"
 import { runFactoryLogistics } from 'room/factory'
 import { basicMinerals, ordinaryResourceTarget } from 'settings/resourcePolicy'
 import { getTerminalResourceAmount, isWarehouseRoom, recordTerminalWithdrawal } from 'room/resourceNetwork'
+import { boostLabWithdrawalAmount, labBoostWasReleased, prioritizeLabBoostJobs } from 'room/labBoostPriority'
+import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from 'room/evacuation'
+
+/** During boost preemption, return obsolete cargo only on successful native transfers. */
+function returnPausedCargo(creep: Creep): boolean {
+    const resource = Object.keys(creep.store).find(resource => creep.store[resource] > 0) as ResourceConstant | undefined
+    if (!resource) { creep.memory.working = false; delete creep.memory.labBoostCargoReturn; return true }
+    creep.memory.labBoostCargoReturn = true
+    const room = creep.room
+    const stock = [room.storage, room.terminal].find(stock => stock &&
+        (stock === room.terminal ? getEvacuationIncomingCapacity(room) : stock.store.getFreeCapacity(resource) || 0) > 0)
+    if (!stock) return true
+    const free = stock === room.terminal ? getEvacuationIncomingCapacity(room) : stock.store.getFreeCapacity(resource) || 0
+    const amount = Math.min(creep.store[resource], free)
+    const result = creep.transfer(stock, resource, amount)
+    if (result === OK) {
+        if (stock === room.terminal) reserveEvacuationIncoming(room, amount)
+        if (amount === creep.store.getUsedCapacity()) {
+            creep.memory.working = false
+            delete creep.memory.labBoostCargoReturn
+        }
+    } else if (result === ERR_NOT_IN_RANGE) creep.moveTo(stock)
+    return true
+}
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -12,7 +36,12 @@ export default (data: CreepData): ICreepConfig => ({
     },
     source(creep) {
         const fillJobs = creep.room.memory.roomFillJob
-        if (creep.memory.factoryLogistics && runFactoryLogistics(creep)) return true
+        const paused = prioritizeLabBoostJobs(creep.room)
+        if (creep.memory.labBoostCargoReturn || (labBoostWasReleased(creep.room) || paused && creep.memory.factoryLogistics &&
+            !(creep.store[creep.memory.factoryLogistics.resourceType] > 0)) && creep.store.getUsedCapacity() > 0)
+            return returnPausedCargo(creep)
+        const boostWork = paused && !!(fillJobs.labOut?.length || fillJobs.labInMineral?.length)
+        if (!boostWork && creep.memory.factoryLogistics && runFactoryLogistics(creep)) return true
 
         // 检查有没有掉落的资源需要捡
         // if (creep.pickupDroppedResource(true, 40)) return true
@@ -20,6 +49,7 @@ export default (data: CreepData): ICreepConfig => ({
         // 身上有东西就先放下
         const deposit = creep.room.storage || creep.room.terminal
         if (deposit != undefined && creep.store.getUsedCapacity() > 0) {
+            if (paused) return returnPausedCargo(creep)
             creep.transferToTarget(deposit, Object.keys(creep.store).find(resource => creep.store[resource] > 0) as ResourceConstant)
             return true
         }
@@ -29,6 +59,15 @@ export default (data: CreepData): ICreepConfig => ({
             const labId = fillJobs.labOut.filter(labId => Game.getObjectById<StructureLab>(labId)?.mineralType != undefined)[0]
             const lab = Game.getObjectById(labId) as StructureLab
             if (!lab?.mineralType) { fillJobs.labOut = []; return true }
+            if (paused) {
+                const amount = Math.min(creep.store.getFreeCapacity(), lab.store[lab.mineralType] || 0,
+                    boostLabWithdrawalAmount(creep.room, lab))
+                if (amount <= 0) { fillJobs.labOut = fillJobs.labOut.filter(id => id !== labId); return true }
+                const result = creep.withdraw(lab, lab.mineralType, amount)
+                if (result === OK) creep.memory.working = true
+                else if (result === ERR_NOT_IN_RANGE) creep.moveTo(lab)
+                return true
+            }
             if (creep.takeFromTarget(lab, lab.mineralType as ResourceConstant)) {
                 creep.memory.working = true
                 fillJobs.labOut = fillJobs.labOut.filter(id => id !== labId)
@@ -110,7 +149,12 @@ export default (data: CreepData): ICreepConfig => ({
     },
     target(creep) {
         const fillJobs = creep.room.memory.roomFillJob
-        if (creep.memory.factoryLogistics && runFactoryLogistics(creep)) return true
+        const paused = prioritizeLabBoostJobs(creep.room)
+        if (creep.memory.labBoostCargoReturn || (labBoostWasReleased(creep.room) || paused && creep.memory.factoryLogistics &&
+            !(creep.store[creep.memory.factoryLogistics.resourceType] > 0)) && creep.store.getUsedCapacity() > 0)
+            return returnPausedCargo(creep)
+        const boostWork = paused && !!(fillJobs.labOut?.length || fillJobs.labInMineral?.length)
+        if (!boostWork && creep.memory.factoryLogistics && runFactoryLogistics(creep)) return true
         if (creep.store.getUsedCapacity() === 0) {
             creep.memory.working = false
             return true
@@ -124,6 +168,18 @@ export default (data: CreepData): ICreepConfig => ({
                 if (targetLab == undefined || !(creep.store[labInMineral[index].resourceType] > 0)) continue
                 if ((targetLab.mineralType == undefined || targetLab.mineralType === labInMineral[index].resourceType) &&
                     (targetLab.store.getFreeCapacity(labInMineral[index].resourceType) || 0) > 0) {
+                    if (paused) {
+                        const resource = labInMineral[index].resourceType
+                        const deficit = Math.max(0, (creep.room.memory.boostNeed[resource] || 0) - (targetLab.store[resource] || 0))
+                        const amount = Math.min(creep.store[resource], deficit, targetLab.store.getFreeCapacity(resource) || 0)
+                        if (amount <= 0) continue
+                        const result = creep.transfer(targetLab, resource, amount)
+                        if (result === OK) {
+                            if (amount === deficit) fillJobs.labInMineral = fillJobs.labInMineral.filter(job => job.labId !== targetLab.id)
+                            if (amount === creep.store.getUsedCapacity()) creep.memory.working = false
+                        } else if (result === ERR_NOT_IN_RANGE) creep.moveTo(targetLab)
+                        return true
+                    }
                     if (creep.transferToTarget(targetLab, labInMineral[index].resourceType)) {
                         fillJobs.labInMineral = fillJobs.labInMineral.filter(job => job.labId != targetLab.id)
                         creep.memory.working = false
@@ -132,6 +188,8 @@ export default (data: CreepData): ICreepConfig => ({
                 }
             }
         }
+
+        if (paused) return returnPausedCargo(creep)
 
         // 如果nuker需要G，并且已经携带，就送过去
         if (creep.room.nuker != undefined && fillJobs.nukerMineral && creep.store[RESOURCE_GHODIUM] > 0) {

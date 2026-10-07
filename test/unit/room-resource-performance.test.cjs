@@ -16,7 +16,8 @@ function labWorld({ reactionConfig = {}, reactionSource = {}, boostConfig = {}, 
     const game = { time: 10, shard: { name: 'test' }, creeps: {} };
     const logs = [];
     const loader = createSourceLoader({
-        globals: { Game: game, LAB_BOOST_MINERAL: 30, MAX_CREEP_SIZE: 50, console: { log: value => logs.push(value) } },
+        globals: { Game: game, LAB_BOOST_MINERAL: 30, LAB_BOOST_ENERGY: 20, RESOURCE_ENERGY: 'energy', MAX_CREEP_SIZE: 50,
+            console: { log: value => logs.push(value) } },
         modules: {
             'settings/labs': { reactionConfig, reactionSource },
             'settings/resourcePolicy': { t3Resources: Object.keys(reactionConfig), basicMinerals: [], ordinaryResourceTarget: () => 0, resourcePolicy: { t3Reserve: 10000 } },
@@ -29,6 +30,7 @@ function labWorld({ reactionConfig = {}, reactionSource = {}, boostConfig = {}, 
                     return amount;
                 },
                 getAvailableResource: () => 0, getGlobalResourceAmount: () => 0,
+                getTerminalResourceAmount: (room, resource) => room.terminal.store[resource] || 0,
                 getIncomingResourceAmount: () => 0, getOutgoingResourceAmount: () => 0, requestRoomResource: () => 0,
             },
             'settings/boost': { boostConfig, boostBodyPart, roleBoostConfig },
@@ -78,13 +80,13 @@ test('lab configuration refreshes each room once per period while daily boost de
 });
 
 function store(values = {}, onRead = () => {}) {
-    return new Proxy(values, { get: (target, resource) => {
+    return new Proxy({ getCapacity: resource => resource === 'energy' ? 2000 : 3000, ...values }, { get: (target, resource) => {
         onRead(resource);
         return target[resource] || 0;
     } });
 }
 
-test('reaction checks scan the empire once and reuse repeated reagents within one update', () => {
+test('reaction checks build each empire index once and reuse repeated reagents within one update', () => {
     const reactionConfig = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`product${index}`, 10000]));
     const reactionSource = Object.fromEntries(Object.keys(reactionConfig).map(resource => [resource, ['shared', 'other']]));
     const world = labWorld({ reactionConfig, reactionSource });
@@ -115,8 +117,8 @@ test('reaction checks scan the empire once and reuse repeated reagents within on
     sharedLabReads = 0;
     world.updateLabReactionConfig(world.room);
     assert.equal(world.room.memory.roomLabConfig.labReactionConfig, undefined);
-    assert.equal(creepRoomReads, 3, 'only processor memberships need their room read after one empire enumeration');
-    assert.equal(creepEnumerations, 1);
+    assert.equal(creepRoomReads, 3, 'boost probes skip irrelevant creep rooms; only processor memberships need their room read');
+    assert.equal(creepEnumerations, 2, 'one boost candidate scan and one shared processor index per tick');
     assert.equal(sharedLabReads, 1);
     assert.equal(world.logs.length, 0);
     world.game.time += 10;
@@ -125,7 +127,7 @@ test('reaction checks scan the empire once and reuse repeated reagents within on
     world.updateLabReactionConfig(world.room);
     assert.equal(world.room.memory.roomLabConfig.labReactionConfig, 'product0', 'a later tick must read fresh stores');
     assert.equal(creepRoomReads, 6);
-    assert.equal(creepEnumerations, 2);
+    assert.equal(creepEnumerations, 4, 'both indexes refresh once when the game tick changes');
 });
 
 test('reaction retention counts product and reagents in storage, terminal, labs and local processors', () => {
@@ -154,14 +156,14 @@ test('boost updates count each unboosted body part once and track lab reassignme
     const boostConfig = { boostBuild: ['B1', 'B2', 'B3'], boostUpgrade: ['U1', 'U2', 'U3'], boostMove: ['M1', 'M2', 'M3'] };
     const world = labWorld({
         boostConfig, boostBodyPart: { boostBuild: 'work', boostUpgrade: 'work', boostMove: 'move' },
-        roleBoostConfig: { attacker: ['boostBuild', 'boostUpgrade', 'boostMove'] }
+        roleBoostConfig: { builder: ['boostBuild', 'boostUpgrade', 'boostMove'] }
     });
     let partReads = 0;
     const body = ['work', 'work', 'move', 'work', 'carry'].map((type, index) => ({
         get type() { partReads++; return type; }, boost: index === 3 ? 'alreadyBoosted' : undefined,
         hits: index === 1 ? 0 : 100
     }));
-    world.game.creeps.unit = { room: { name: world.room.name }, memory: { role: 'attacker' }, body };
+    world.game.creeps.unit = { room: { name: world.room.name }, memory: { role: 'builder' }, body };
     world.room.storage.store = store({ B3: 1000, U3: 1000, M3: 1000 });
     world.room.labs = ['source1', 'source2', 'first', 'second', 'third'].map(id => ({ id, store: store() }));
     world.room.memory.roomLabConfig.singleLabConfig.first = { boostMode: false, boostType: 'boostUpgrade', resourceType: 'U3' };

@@ -31,7 +31,7 @@ function world() {
             'settings/roomPolicy': { roomPolicy: { labs: { updateInterval: 10, staggerUpdates: false } } },
             'runtime/cpuRecovery': { cpuRecoveryInterval: (_, normal) => normal, hasPendingRoomBoost: () => false },
             'runtime/creepIndex': { getRoomProcessors: () => [] },
-            'creep/boosting': { getRoomBoostRequests: () => [], usableBoostLabs: () => [] },
+            'creep/boosting': { getActiveRoomBoostRequests: () => [], usableBoostLabs: () => [] },
             'room/factory': { runFactoryLogistics: () => false },
         },
     });

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function world() {
     const actions = [], memory = { warMode: {}, combatTasks: {} };
@@ -93,6 +94,56 @@ test('force selection publishes exact-tier team configurations and waits for eve
     assert.ok(!w.actions.some(action => action[0] === 'fight' || action[0] === 'return'));
     w.game.creeps[names[1]].goBoost = () => true; w.runCombatUnits();
     assert.equal(w.actions.filter(action => action[0] === 'fight').length, 1);
+});
+
+function taskQueue(w) {
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: w.game, Memory: w.memory, RESOURCE_ENERGY: 'energy' },
+        modules: { role: { isRoleSupported: () => true } } });
+    w.home.containers = [];
+    w.home.storage.id = 'stock';
+    w.game.creeps.residentFiller = { room: w.home, getActiveBodyparts: () => 1,
+        memory: { role: 'filler', spawnRoom: w.home.name, data: { sourceId: 'stock' } } };
+    w.game.creeps.residentHarvester = { room: w.home, memory: { role: 'harvester' } };
+    const priorities = loader.load('settings/creep').spawnPriority;
+    return { priorities, build: () => Array.from(loader.load('creep/spawnQueue').buildSpawnQueue(w.home)) };
+}
+
+test('all mission fighters and the pending fourth spawn before repairs while essential logistics stay ahead', () => {
+    const w = world(), template = { role: 'integrate', profile: { boostTier: 0 }, body: ['move'],
+        boostPlan: { tier: 0, steps: [] }, energy: 50 };
+    w.setPlan({ formation: 'quad', members: Array(4).fill(template), energy: 200 });
+    const task = w.create(); w.runCombatTasks(); w.publish();
+    const queue = taskQueue(w);
+    for (const role of ['manager', 'harvester', 'filler', 'processer', 'builder', 'upgrader', 'repairer', 'miner'])
+        w.home.memory.creepConfig[role] = { role, spawnPriority: queue.priorities[role], data: { sourceId: 'stock' } };
+    let names = queue.build();
+    assert.deepEqual(names.slice(0, 4), ['manager', 'harvester', 'filler', 'processer']);
+    for (const name of task.memberNames) {
+        assert.ok(names.indexOf(name) < names.indexOf('builder'));
+        assert.ok(names.indexOf(name) < names.indexOf('repairer'));
+    }
+    for (const name of task.memberNames.slice(0, 3)) w.spawn(name);
+    names = queue.build();
+    assert.ok(names.indexOf(task.memberNames[3]) < names.indexOf('repairer'));
+    assert.equal(task.spent, 0); assert.equal(task.wave, 1); assert.equal(task.plan.energy, 200);
+    assert.equal(queue.priorities.integrate, 3, 'the ordinary role policy remains intact');
+    assert.equal(queue.priorities.attacker, 14);
+});
+
+test('mission scout, controller attack and loot demand use elevated task priorities', () => {
+    for (const [phase, job, expected] of [['recon', 'scout', 3.5], ['controller', 'controller', 3.5], ['loot', 'loot', 5.5]]) {
+        const w = world(); if (phase === 'recon') delete w.game.rooms.W2N1;
+        const task = w.create(); w.runCombatTasks();
+        task.phase = phase; delete task.reason;
+        if (phase === 'loot') task.intel.loot = 1000;
+        w.publish();
+        const configs = Object.values(w.home.memory.creepConfig);
+        assert.ok(configs.length > 0);
+        for (const config of configs) { assert.equal(config.combatJob, job); assert.equal(config.spawnPriority, expected); }
+        const queue = taskQueue(w);
+        w.home.memory.creepConfig.repairer = { role: 'repairer', spawnPriority: queue.priorities.repairer, data: {} };
+        assert.ok(queue.build().indexOf(configs[0].name) < queue.build().indexOf('repairer'));
+    }
 });
 
 test('ready fighters park while a missing teammate or another native boost intent is still pending', () => {
