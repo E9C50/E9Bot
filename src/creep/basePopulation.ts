@@ -90,14 +90,11 @@ export function releaseBaseCreepConfig(): void {
         // 根据矿产情况发布矿工
         room.sources.forEach((source) => {
             if (source.energy == 0) return
-            let canHarvesterPos: number = source.pos.getFreeSpace().length
-            canHarvesterPos = Math.min(
-                canHarvesterPos,
+            // 三级之后每个矿一个矿工
+            const canHarvesterPos = room.level > populationPolicy.base.singleHarvesterAfterLevel ? 1 : Math.min(
+                source.pos.getFreeSpace().length,
                 populationPolicy.base.maximumHarvestersPerSource
             )
-            // 三级之后每个矿一个矿工
-            if (room.level > populationPolicy.base.singleHarvesterAfterLevel)
-                canHarvesterPos = 1
             const linked = room.links.length > 0 && sourceLink(room, source) !== undefined
             for (let i = 0; i < canHarvesterPos; i++) {
                 const creepMemory: HarvesterData = { sourceId: source.id }

@@ -7,9 +7,10 @@ const inspected = new WeakMap<Room, number>()
 export function cleanupSourceLinkContainers(room: Room): void {
     if (!sourceLinkPolicy.enabled || !room.controller?.my || inspected.get(room) === Game.time) return
     inspected.set(room, Game.time)
-    const structures = room.structures || room.find(FIND_STRUCTURES)
+    const containers = room.containers || (room.structures || room.find(FIND_STRUCTURES))
+        .filter(item => item.structureType === STRUCTURE_CONTAINER)
     const sites = room.constructionSites || room.find(FIND_MY_CONSTRUCTION_SITES)
-    for (const item of [...structures, ...sites]) {
+    for (const item of [...containers, ...sites]) {
         if (item.structureType !== STRUCTURE_CONTAINER || ('my' in item && item.my === false) ||
             !redundantSourceContainer(room, item.pos.x, item.pos.y)) continue
         const result = 'progressTotal' in item ? (item as ConstructionSite).remove() : item.destroy()

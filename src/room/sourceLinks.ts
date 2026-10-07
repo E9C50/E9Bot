@@ -6,6 +6,8 @@ interface LinkIndex {
     shard: string
     links: StructureLink[]
     blocked: Set<number>
+    structures?: Structure[]
+    checkedSeats: Map<number, boolean>
     terrain: RoomTerrain
     sources: Source[]
     selected: Map<string, StructureLink | undefined>
@@ -17,26 +19,42 @@ function indexFor(room: Room): LinkIndex {
     let index = indexes.get(room)
     const shard = Game.shard?.name || ''
     if (index?.tick === Game.time && index.shard === shard) return index
-    const structures = room.structures || room.find(FIND_STRUCTURES)
     const sources = room.sources || room.find(FIND_SOURCES)
     const minerals = room.mineral ? [room.mineral] : room.find(FIND_MINERALS)
     const blocked = new Set<number>()
     const links: StructureLink[] = []
-    for (const item of structures) {
-        if (item.structureType === STRUCTURE_ROAD || item.structureType === STRUCTURE_CONTAINER ||
-            item.structureType === STRUCTURE_RAMPART && ((item as StructureRampart).my !== false || (item as StructureRampart).isPublic)) continue
-        blocked.add(tile(item.pos.x, item.pos.y))
-    }
     for (const item of [...sources, ...minerals, ...(room.controller ? [room.controller] : [])]) blocked.add(tile(item.pos.x, item.pos.y))
-    for (const item of room.links || structures) {
+    for (const item of room.links || room.structures || room.find(FIND_STRUCTURES)) {
         if (item.structureType !== STRUCTURE_LINK) continue
         const link = item as StructureLink
         if (link.my !== false && (!link.isActive || link.isActive())) links.push(link)
     }
     index = { tick: Game.time, shard, links,
-        terrain: room.getTerrain(), blocked, sources, selected: new Map() }
+        terrain: room.getTerrain(), blocked, sources, selected: new Map(), checkedSeats: new Map() }
     indexes.set(room, index)
     return index
+}
+
+/** Only candidate source/Link seats need static obstruction checks, shared across this room's mines. */
+function seatIsOpen(room: Room, index: LinkIndex, x: number, y: number): boolean {
+    const key = tile(x, y)
+    if (index.blocked.has(key) || (index.terrain.get(x, y) & TERRAIN_MASK_WALL) !== 0) return false
+    const previous = index.checkedSeats.get(key)
+    if (previous !== undefined) return previous
+    let open = true
+    const nativeLookup = typeof room.lookForAt === 'function' && typeof LOOK_STRUCTURES !== 'undefined'
+    // Standalone Room adapters may provide only structure arrays; native rooms use the tile lookup.
+    const structures = nativeLookup ? room.lookForAt(LOOK_STRUCTURES, x, y) :
+        index.structures || (index.structures = room.structures || room.find(FIND_STRUCTURES))
+    for (const item of structures) {
+        if (!nativeLookup && (item.pos.x !== x || item.pos.y !== y)) continue
+        if (item.structureType === STRUCTURE_ROAD || item.structureType === STRUCTURE_CONTAINER ||
+            item.structureType === STRUCTURE_RAMPART && ((item as StructureRampart).my !== false || (item as StructureRampart).isPublic)) continue
+        open = false
+        break
+    }
+    index.checkedSeats.set(key, open)
+    return open
 }
 
 /** Ignore temporary creep occupancy: a miner can wait for its static harvesting seat. */
@@ -49,8 +67,7 @@ export function sourceLink(room: Room, source: Source): StructureLink | undefine
         if (Math.max(Math.abs(source.pos.x - link.pos.x), Math.abs(source.pos.y - link.pos.y)) > sourceLinkPolicy.sourceRange) continue
         for (let x = Math.max(1, source.pos.x - 1); x <= Math.min(48, source.pos.x + 1); x++) {
             for (let y = Math.max(1, source.pos.y - 1); y <= Math.min(48, source.pos.y + 1); y++) {
-                if (Math.max(Math.abs(x - link.pos.x), Math.abs(y - link.pos.y)) > 1 || index.blocked.has(tile(x, y)) ||
-                    (index.terrain.get(x, y) & TERRAIN_MASK_WALL) !== 0) continue
+                if (Math.max(Math.abs(x - link.pos.x), Math.abs(y - link.pos.y)) > 1 || !seatIsOpen(room, index, x, y)) continue
                 index.selected.set(source.id, link)
                 return link
             }

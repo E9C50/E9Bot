@@ -272,6 +272,7 @@ test('a failed scout cannot dispatch work and is retried after the configured de
 
 test('expired scout leases enter retry backoff instead of releasing work', () => {
     const w = world(); const mission = ready(w, { roundTrip: false });
+    Object.assign(scoutLease(w), { seenAt: w.clock.now, lastShard: 'shard1', departed: true });
     scoutLease(w).expiresAt = w.clock.now - 1;
     w.advance(); dispatch(w);
     assert.equal(mission.scouting.status, 'failed');

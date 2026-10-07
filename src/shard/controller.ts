@@ -7,11 +7,28 @@ import { isPortalTravelData, isRecord } from './types'
 import { runPortalDiscovery, getKnownPortals, getPortalIntelStatus } from './portalIntel'
 import { updateMissionRouting } from './routing'
 import { acceptScoutProof, failMissionScouting, isMissionVerified, refreshMissionScouting, requiresRouteScouting, routeSignature, scoutNeedsReturn } from './verification'
-import { acceptPortalExplorationReport, failPortalExploration, keepPortalExplorer, refreshPortalExploration, releasePortalExplorer } from './explorationControl'
+import { acceptPortalExplorationReport, failPortalExploration, keepPortalExplorer, prioritizeLowBucketScout, refreshPortalExploration, releasePortalExplorer, reserveLowBucketScoutDemand } from './explorationControl'
 export { recordShardDelivery } from './state'
 
 const roles: Record<ShardUnitKind, ShardRoleConstant> = { claimer: 'sClaimer', builder: 'sBuilder', hauler: 'sHauler', scout: 'sScout' }
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
+
+/** 本地非孵化单位或远端存在证据确认出生后，才启动 scout 的源任务时钟。 */
+function confirmScoutBirth(mission: ShardMission, lease: ShardUnitLease, now: number, data?: ShardUnitData): void {
+    if (lease.kind != 'scout') return
+    if (mission.leases['explorer:0']?.name == lease.name) {
+        const progress = mission.exploration
+        if (progress == undefined || !['pending', 'exploring'].includes(progress.status)) return
+        progress.status = 'exploring'
+        if (progress.startedAt == undefined) progress.startedAt = now
+        if (data?.exploration != undefined && data.exploration.startedAt <= 0) data.exploration.startedAt = progress.startedAt
+    } else {
+        const progress = mission.scouting
+        if (progress == undefined || !['pending', 'scouting'].includes(progress.status)) return
+        progress.status = 'scouting'
+        if (progress.startedAt == undefined) progress.startedAt = now
+    }
+}
 
 function tasks(): Record<string, ShardMission> {
     return Memory.shardMissions || (Memory.shardMissions = {})
@@ -186,6 +203,7 @@ function acceptReport(mission: ShardMission, report: ShardMissionReport): void {
         const unit = report.units.find((item) => item.name == lease.name)
         if (unit != undefined) {
             if (unit.kind != lease.kind) continue
+            confirmScoutBirth(mission, lease, report.updatedAt)
             if (unit.done && lease.kind != 'scout') { delete mission.leases[slot]; continue }
             lease.seenAt = now
             lease.expiresAt = now + interShardPolicy.leaseDuration
@@ -262,6 +280,7 @@ export function runShardController(): void {
             lease.departed = false
             lease.locationUpdatedAt = now
             const data = creep.memory.data as ShardUnitData
+            if (!creep.spawning) confirmScoutBirth(mission, lease, now, data)
             lease.leaving = data.transferPreparedAt != undefined
             if (data.lastError) mission.lastError = data.lastError
             if (lease.kind != 'scout') acceptRouteIssue(mission, data.routeIssue)
@@ -306,6 +325,7 @@ export function runShardController(): void {
                         typeof ack.expiresAt != 'number' || ack.expiresAt <= now || ack.createdAt <= (lease.acknowledgedAt || 0) ||
                         (!mission.task.autoRoute && !mission.task.autoReturn && ![...mission.task.route, ...(mission.task.returnRoute || [])].some((hop) => hop.shard == ack.toShard && hop.destinationShard == peer))) continue
                     lease.acknowledgedAt = ack.createdAt
+                    confirmScoutBirth(mission, lease, ack.createdAt)
                     lease.lastShard = peer
                     lease.departed = true
                     lease.locationUpdatedAt = ack.createdAt
@@ -367,6 +387,14 @@ export function releaseShardCreepConfig(): void {
         }
         if (requiresRouteScouting(mission.task) && mission.scouting?.status == 'scouting') {
             const scout = mission.leases['scout:0']
+            const live = scout == undefined ? undefined : Game.creeps[scout.name]
+            if (scout != undefined && !scout.departed && (scout.lastShard == undefined || scout.lastShard == Game.shard.name)) {
+                if (live?.spawning || (live == undefined && scout.seenAt == undefined && mission.scouting.startedAt == scout.createdAt)) {
+                    // 排队或正在孵化的存量任务也清除旧的提前计时。
+                    delete mission.scouting.startedAt
+                } else if (live != undefined && !live.spawning) confirmScoutBirth(mission, scout, now, live.memory.data as ShardUnitData)
+                if (scout.seenAt == undefined) scout.expiresAt = now + interShardPolicy.leaseDuration
+            }
             if (scout != undefined && Game.creeps[scout.name] == undefined &&
                 (scout.expiresAt <= now || (scout.seenAt != undefined && scout.lastShard == Game.shard.name && !scout.departed && !scout.leaving))) {
                 failMissionScouting(mission, 'scout 死亡或租约超时，等待重新侦察')
@@ -398,6 +426,7 @@ export function releaseShardCreepConfig(): void {
                     lease = undefined
                 }
                 if (lease == undefined) {
+                    if (kind == 'scout' && !reserveLowBucketScoutDemand()) continue
                     const generation = ++mission.generation
                     const displayName = `${mission.task.key}_${kind}_${slot}_${generation}_${mission.createdAt}`
                     lease = mission.leases[slotKey] = {
@@ -413,7 +442,7 @@ export function releaseShardCreepConfig(): void {
                 }
                 if (kind == 'scout') {
                     const scouting = mission.scouting!
-                    if (scouting.status == 'pending') { scouting.status = 'scouting'; scouting.startedAt = now }
+                    if (scouting.status == 'pending') scouting.status = 'scouting'
                     data.scouting = {
                         revision: scouting.revision, leg: 'outbound', elapsedTicks: 0,
                         outboundRoute: mission.task.route.map((hop) => ({ ...hop })),
@@ -421,6 +450,7 @@ export function releaseShardCreepConfig(): void {
                     }
                 }
                 addCreepConfig(source, roles[kind], lease.displayName, data)
+                if (kind == 'scout') prioritizeLowBucketScout(source, lease.name)
             }
         }
         if (requiresRouteScouting(mission.task)) command(mission)

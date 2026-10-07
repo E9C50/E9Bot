@@ -293,3 +293,28 @@ test('arrival acknowledgment allows replacement after grace when a unit dies bef
     assert.equal(replacement.generation, lease.generation + 1);
     assert.ok(w.now() - acknowledgedAt < policy.leaseDuration);
 });
+
+test('a native low-bucket scout sorts ahead of optional growth while essential floor and worker priorities stay intact', () => {
+    const w = world();
+    Object.assign(w.game.cpu, { bucket: 1, limit: 20, tickLimit: 21, getUsed: () => 18 });
+    w.api.createShardTask(input({ verifyRoute: true }));
+    w.api.createShardTask(input({ id: 'workers', verifyRoute: false }));
+    w.api.releaseShardCreepConfig();
+    const scout = Object.entries(w.home.memory.creepConfig).find(([, config]) => config.role === 'sScout');
+    assert.ok(scout); assert.equal(scout[1].spawnPriority, 3.75);
+    assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === 'shard0:settle').length, 1,
+        'the unverified mission still publishes only a scout');
+    const workers = Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === 'shard0:workers');
+    assert.equal(workers.find(config => config.role === 'sClaimer').spawnPriority, 9);
+    assert.equal(workers.filter(config => config.role === 'sBuilder').every(config => config.spawnPriority === 12), true);
+    w.home.containers = []; w.home.sources = [];
+    w.home.memory.creepConfig.floor = { role: 'filler', spawnPriority: 3.5, data: {} };
+    w.home.memory.creepConfig.growthBuilder = { role: 'builder', spawnPriority: 4, data: {} };
+    w.home.memory.creepConfig.growthUpgrader = { role: 'upgrader', spawnPriority: 5, data: {} };
+    w.game.creeps.harvester = { room: w.home, memory: { role: 'harvester' } };
+    w.game.creeps.filler = { room: w.home, memory: { role: 'filler' } };
+    const queue = w.loader.load('creep/spawnQueue').buildSpawnQueue(w.home);
+    assert.deepEqual(Array.from(queue.slice(0, 4)), ['floor', scout[0], 'growthBuilder', 'growthUpgrader']);
+    const normal = world(); normal.api.createShardTask(input({ verifyRoute: true })); normal.api.releaseShardCreepConfig();
+    assert.equal(Object.values(normal.home.memory.creepConfig).find(config => config.role === 'sScout').spawnPriority, 8);
+});

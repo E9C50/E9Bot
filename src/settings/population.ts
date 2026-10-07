@@ -1,6 +1,7 @@
 /** 需求发布与孵化策略。身体模板、角色优先级仍在 creep.ts。 */
 export const populationPolicy = {
     refreshInterval: 5,
+    maximumNameCacheEntries: 1024,
     maximumJobFlags: 20,
     maximumRemoteRooms: 10,
     bootstrap: {

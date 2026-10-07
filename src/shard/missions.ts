@@ -64,6 +64,9 @@ export interface ShardUnitData extends PortalTravelData {
         stage: 'outbound' | 'return'
         startedAt: number
         elapsedTicks: number
+        /** CPU waits consume native lifespan, but not the active exploration timeout. */
+        cpuWaitStartedAt?: number
+        cpuWaitMilliseconds?: number
         visitedRooms: string[]
         visitedShards: string[]
         /** 已在当前 shard 从当前位置选择的入口，过门后重新选择下一段。 */
@@ -140,6 +143,7 @@ export interface ShardMission {
         entryRoute: PortalHop[]
         visitedRooms: string[]
         lastReportAt?: number
+        cpuWaitMilliseconds?: number
     }
     scouting?: {
         revision: string
@@ -214,6 +218,7 @@ export interface PortalExplorationReport {
     roomName: string
     updatedAt: number
     elapsedTicks: number
+    cpuWaitMilliseconds?: number
     visitedRooms: string[]
     route?: PortalHop[]
     lastError?: string

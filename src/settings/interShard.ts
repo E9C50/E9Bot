@@ -22,6 +22,16 @@ export const interShardPolicy = {
     claimRetryInterval: 20,
     defaultTargetLevel: 4,
     arrivalHistoryTtl: 24 * 60 * 60 * 1000,
+    // Empty Bucket still permits one bounded candidate/scout step; full graph work stays deferred.
+    lowBucketPlanning: {
+        minimumCpuHeadroom: 2,
+        maximumPlanningCpu: 0.75,
+        maximumPlansPerTick: 1,
+        maximumLocalRouteChecks: 2,
+        maximumCandidates: 8,
+        maximumScoutDemandsPerTick: 1,
+        scoutSpawnPriority: 3.75,
+    },
     portalDiscovery: {
         enabled: true,
         scanInterval: 5,

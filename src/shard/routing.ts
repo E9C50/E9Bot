@@ -6,6 +6,8 @@ import { PortalHop, isPortalTravelData, isRecord } from './types'
 import { cancelCreepTransfers, getLocalShardState, readRemoteShardState } from './transport'
 import { requiresRouteScouting, routeSignature } from './verification'
 import type { PortalRecord } from './portalTypes'
+import { isLowBucketPlanning, lowBucketPlanningReady, reserveLowBucketPlanning } from './planningBudget'
+import { planLowBucketPortalRoute } from './lowBucketRoutes'
 
 function portalKey(hop: PortalHop): string { return `${hop.shard}/${hop.roomName}/${hop.x}/${hop.y}` }
 
@@ -35,6 +37,17 @@ function reservePlan(): 'bucket' | 'budget' | undefined {
     return undefined
 }
 
+function candidateRoute(sourceShard: string, sourceRoom: string, targetShard: string, targetRoom: string,
+    portals: readonly PortalRecord[]): { plan?: { route: PortalHop[]; cost: number }; deferred?: 'bucket' | 'budget' } {
+    if (isLowBucketPlanning('routing')) {
+        const limits = reserveLowBucketPlanning()
+        if (!limits) return { deferred: lowBucketPlanningReady() ? 'budget' : 'bucket' }
+        return { plan: planLowBucketPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals, limits) }
+    }
+    const deferred = reservePlan()
+    return { deferred, plan: deferred === undefined ? planPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals) : undefined }
+}
+
 /** 规划仅消费实际观察记录；找不到入口时保持任务，等待下一轮发现。 */
 export function updateMissionRouting(mission: ShardMission, force = false): void {
     const task = mission.task
@@ -53,27 +66,34 @@ export function updateMissionRouting(mission: ShardMission, force = false): void
     let returnCost = mission.routing?.returnCost
     let deferred: 'bucket' | 'budget' | undefined
     let incompletePlan = false
-    if (task.autoRoute && (changed || !outboundKnown)) {
-        deferred = reservePlan()
-        const plan = deferred == undefined ? planPortalRoute(task.sourceShard, task.sourceRoom, task.targetShard, task.targetRoom, portals) : undefined
+    const lowBucket = isLowBucketPlanning('routing')
+    let planned = false
+    if (task.autoRoute && ((!lowBucket && changed) || !outboundKnown)) {
+        planned = true
+        const candidate = candidateRoute(task.sourceShard, task.sourceRoom, task.targetShard, task.targetRoom, portals)
+        deferred = candidate.deferred
+        const plan = candidate.plan
         if (plan == undefined) incompletePlan = true
         if (plan != undefined || !outboundKnown) { task.route = plan?.route || []; cost = plan?.cost }
     }
-    if (task.autoReturn && (changed || !returnKnown)) {
-        const returningDeferred = reservePlan()
-        deferred = deferred || returningDeferred
-        const plan = returningDeferred == undefined ? planPortalRoute(task.targetShard, task.targetRoom, task.sourceShard, task.sourceRoom, portals) : undefined
+    if (task.autoReturn && ((!lowBucket && changed) || !returnKnown)) {
+        planned = true
+        const candidate = candidateRoute(task.targetShard, task.targetRoom, task.sourceShard, task.sourceRoom, portals)
+        deferred = deferred || candidate.deferred
+        const plan = candidate.plan
         if (plan == undefined) incompletePlan = true
         if (plan != undefined || !returnKnown) { task.returnRoute = plan?.route; returnCost = plan?.cost }
     }
+    // Keep a known route usable while Bucket recovers; do not claim its policy migration was recomputed.
+    if (lowBucket && changed && !planned) incompletePlan = true
     const ready = task.route.length > 0 && (!task.autoReturn || !!task.returnRoute?.length)
     const intel = getPortalIntelStatus()
     mission.routing = {
         status: ready ? 'ready' : 'waiting', updatedAt: Date.now(),
         nextAttemptTick: Game.time + (deferred == 'budget' ? 1 : interShardPolicy.portalRouting.retryInterval),
         cost, returnCost,
-        portalSignature: deferred == undefined && !incompletePlan ? signature : mission.routing?.portalSignature,
-        message: ready ? undefined : (deferred == 'bucket' ? 'CPU Bucket 不足，暂缓自动规划' : deferred == 'budget' ? '本 tick 路线规划预算已用完，等待下一 tick' : !task.route.length ? '等待 Observer 发现连通目标的 Portal 路线' : '等待 Observer 发现可用返程路线') +
+        portalSignature: deferred == undefined && !incompletePlan ? (lowBucket ? `lowBucket:${signature}` : signature) : mission.routing?.portalSignature,
+        message: ready ? undefined : (deferred == 'bucket' ? 'CPU 余量不足，暂缓自动规划' : deferred == 'budget' ? '本 tick 路线规划预算已用完，等待下一 tick' : !task.route.length ? '等待 Observer 发现连通目标的 Portal 路线' : '等待 Observer 发现可用返程路线') +
             (intel.observers == 0 ? '；当前 shard 没有可用 Observer' : ''),
     }
 }
@@ -141,13 +161,13 @@ export function ensureUnitRoute(creep: Creep, data: ShardUnitData, force = false
         delete data.lastError
         return true
     }
-    const deferred = reservePlan()
-    const plan = deferred == undefined ? planPortalRoute(Game.shard.name, creep.room.name, targetShard, targetRoom, portals) : undefined
+    const candidate = candidateRoute(Game.shard.name, creep.room.name, targetShard, targetRoom, portals)
+    const deferred = candidate.deferred, plan = candidate.plan
     if (plan == undefined) {
         clearTravelPreparation(data)
         data.routeRetryShard = Game.shard.name
         data.routeRetryAt = Game.time + (deferred == 'budget' ? 1 : interShardPolicy.portalRouting.retryInterval)
-        data.lastError = deferred == 'bucket' ? 'CPU Bucket 不足，暂缓自动规划' : deferred == 'budget' ? '等待下一 tick 路线规划预算' : '等待发现可用 Portal，自动重新规划路线'
+        data.lastError = deferred == 'bucket' ? 'CPU 余量不足，暂缓自动规划' : deferred == 'budget' ? '等待下一 tick 路线规划预算' : '等待发现可用 Portal，自动重新规划路线'
         return false
     }
     data.route = plan.route

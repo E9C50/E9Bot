@@ -6,6 +6,11 @@ import type { PortalHop } from './types'
 interface RoomPoint { x: number; y: number }
 export interface ExplorationPlanningOptions {
     maximumPlanningCpu?: number
+    maximumLocalRouteChecks?: number
+    minimumCpuHeadroom?: number
+    maximumCandidates?: number
+    /** Scout candidates use geometry; actual movement and verification establish reachability. */
+    candidateOnly?: boolean
     /** Bounds the search area without anchoring walking distances to the original arrival room. */
     searchOriginRoom?: string
     /** Stop once unqueried rooms cannot improve the nearest result. */
@@ -14,6 +19,7 @@ export interface ExplorationPlanningOptions {
 interface Budget {
     within(): boolean
     reserveNative(): boolean
+    maximumCandidates: number
 }
 
 let lastPlanning: { tick: number; shard: string; deferred: boolean } | undefined
@@ -95,25 +101,30 @@ export function getExplorationItinerary(sourceShard: string, targetShard: string
 function budget(options: ExplorationPlanningOptions = {}): Budget {
     const policy = interShardPolicy.portalExploration
     const maximumPlanningCpu = Math.min(policy.maximumPlanningCpu, options.maximumPlanningCpu ?? policy.maximumPlanningCpu)
+    const maximumLocalRouteChecks = Math.min(policy.maximumLocalRouteChecks, options.maximumLocalRouteChecks ?? policy.maximumLocalRouteChecks)
+    const minimumCpuHeadroom = options.minimumCpuHeadroom ?? policy.minimumCpuHeadroom
+    const maximumCandidates = Math.min(policy.maximumCandidates, options.maximumCandidates ?? policy.maximumCandidates)
     const cpu = typeof Game == 'undefined' ? undefined : Game.cpu
     const start = typeof cpu?.getUsed == 'function' ? cpu.getUsed() : undefined
     let nativeChecks = 0
     const within = (): boolean => {
         if (!Number.isFinite(maximumPlanningCpu) || maximumPlanningCpu <= 0 ||
-            !Number.isInteger(policy.maximumLocalRouteChecks) || policy.maximumLocalRouteChecks < 0) { deferPlanning(); return false }
+            !Number.isInteger(maximumLocalRouteChecks) || maximumLocalRouteChecks < 0 ||
+            !Number.isInteger(maximumCandidates) || maximumCandidates < 1 ||
+            !Number.isFinite(minimumCpuHeadroom) || minimumCpuHeadroom < 0) { deferPlanning(); return false }
         if (start == undefined) return true
         const current = cpu!.getUsed(), limit = cpu!.tickLimit ?? cpu!.limit
         const available = Number.isFinite(current) && current - start < maximumPlanningCpu &&
-            !(Number.isFinite(limit) && limit - current < policy.minimumCpuHeadroom)
+            !(Number.isFinite(limit) && limit - current < minimumCpuHeadroom)
         if (!available) deferPlanning()
         return available
     }
     const reserveNative = (): boolean => {
-        if (!within() || nativeChecks >= policy.maximumLocalRouteChecks) { deferPlanning(); return false }
+        if (!within() || nativeChecks >= maximumLocalRouteChecks) { deferPlanning(); return false }
         nativeChecks++
         return true
     }
-    return { within, reserveNative }
+    return { within, reserveNative, maximumCandidates }
 }
 
 /** Commit only the nearest local crossing; the scout chooses the following door after landing. */
@@ -134,7 +145,7 @@ export function selectExplorationPortal(currentShard: string, currentRoom: strin
     const local = valid.filter(value => value.shard == currentShard)
     const direct = local.filter(value => value.destinationShard == goalShard)
     if (direct.length > 0) {
-        const result = nearestPortal(currentRoom, direct, planning)
+        const result = nearestPortal(currentRoom, direct, planning, options.candidateOnly)
         if (result != undefined) return result
         if (isExplorationPlanningDeferred()) return undefined
         valid = valid.filter(value => value.shard != currentShard || value.destinationShard != goalShard)
@@ -143,7 +154,7 @@ export function selectExplorationPortal(currentShard: string, currentRoom: strin
     const order = itinerary(currentShard, goalShard, valid, excluded), next = order?.[1]
     if (next == undefined || excluded.has(next)) return undefined
     const candidates = valid.filter(value => value.shard == currentShard && value.destinationShard == next)
-    return nearestPortal(currentRoom, candidates, planning)
+    return nearestPortal(currentRoom, candidates, planning, options.candidateOnly)
 }
 
 let walkingTick: number | undefined
@@ -167,8 +178,9 @@ function walkingContext(): (name: string) => boolean {
     }
 }
 
-function nearestPortal(currentRoom: string, portals: readonly PortalRecord[], planning: Budget): PortalHop | undefined {
-    const current = point(currentRoom)!, allowed = walkingContext()
+function nearestPortal(currentRoom: string, portals: readonly PortalRecord[], planning: Budget, candidateOnly = false): PortalHop | undefined {
+    const current = point(currentRoom)!, avoided = new Set(findPathAvoidRooms)
+    const allowed = candidateOnly ? (name: string): boolean => !avoided.has(name) : walkingContext()
     if (!allowed(currentRoom)) return undefined
     const candidates = portals.filter(value => allowed(value.roomName)).map(value => {
         const entrance = point(value.roomName)!
@@ -180,7 +192,12 @@ function nearestPortal(currentRoom: string, portals: readonly PortalRecord[], pl
         // Landing-room and final-room distances are deliberately absent: scout
         // exploration chooses one actual local entrance and replans after crossing.
         if (best != undefined && candidate.estimated >= best.distance) break
-        if (!planning.within() || attempts++ >= interShardPolicy.portalExploration.maximumCandidates) { deferPlanning(); return undefined }
+        if (!planning.within() || attempts++ >= planning.maximumCandidates) { deferPlanning(); return undefined }
+        if (candidateOnly) {
+            const portal = candidate.portal
+            return { shard: portal.shard, roomName: portal.roomName, x: portal.x, y: portal.y,
+                destinationShard: portal.destinationShard, destinationRoom: portal.destinationRoom }
+        }
         const distance = localWalk(currentRoom, candidate.portal.roomName, planning, allowed)
         if (distance == undefined) return undefined
         if (!Number.isFinite(distance)) continue
@@ -238,17 +255,19 @@ export function getExplorationRooms(currentRoom: string, visitedRooms: readonly 
         !Number.isSafeInteger(origin.y - policy.searchRadius) || !Number.isSafeInteger(origin.y + policy.searchRadius)) return []
     const planning = budget(options)
     if (!planning.within()) return []
-    const allowed = walkingContext()
+    const avoided = new Set(findPathAvoidRooms)
+    const allowed = options.candidateOnly ? (name: string): boolean => !avoided.has(name) : walkingContext()
     if (!allowed(currentRoom)) return []
     const excluded = new Set([...visitedRooms, ...excludedRooms]), candidates: Array<{ name: string; estimated: number }> = []
-    const horizontal = highwayCoordinates(origin.x, policy.searchRadius, policy.maximumCandidates)
-    const vertical = highwayCoordinates(origin.y, policy.searchRadius, policy.maximumCandidates)
+    const horizontal = highwayCoordinates(origin.x, policy.searchRadius, planning.maximumCandidates)
+    const vertical = highwayCoordinates(origin.y, policy.searchRadius, planning.maximumCandidates)
     for (const x of horizontal) for (const y of vertical) {
         if (!planning.within()) return []
         const name = roomName(x, y)
         if (!excluded.has(name) && allowed(name)) candidates.push({ name, estimated: Math.abs(x - current.x) + Math.abs(y - current.y) })
     }
     candidates.sort((a, b) => a.estimated - b.estimated || a.name.localeCompare(b.name))
+    if (options.candidateOnly) return planning.within() ? candidates.slice(0, options.nearestOnly ? 1 : planning.maximumCandidates).map(value => value.name) : []
     const result: Array<{ name: string; distance: number; estimated: number }> = []
     let bestDistance = Infinity
     const ordered = (): string[] => result.sort((a, b) => a.distance - b.distance || a.estimated - b.estimated || a.name.localeCompare(b.name)).map(value => value.name)
@@ -258,7 +277,7 @@ export function getExplorationRooms(currentRoom: string, visitedRooms: readonly 
         const nearestProven = candidate.estimated >= bestDistance
         if (options.nearestOnly && nearestProven) break
         if (!planning.within()) return nearestProven ? ordered() : []
-        if (result.length >= policy.maximumCandidates) break
+        if (result.length >= planning.maximumCandidates) break
         const distance = localWalk(currentRoom, candidate.name, planning, allowed)
         if (distance == undefined) {
             if (!planning.within()) return nearestProven ? ordered() : []

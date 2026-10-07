@@ -7,6 +7,7 @@ import { isPortalTravelData, isRecord, PortalHop } from './types'
 import { travelPortalRoute } from './travel'
 import { scoutMovementOptions } from './scoutMovement'
 import { getScoutDanger } from './scoutSafety'
+import { isLowBucketPlanning, lowBucketPlanningReady, reserveLowBucketPlanning } from './planningBudget'
 
 type Progress = NonNullable<ShardUnitData['exploration']>
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
@@ -21,6 +22,20 @@ function clearPreparation(data: ShardUnitData): void {
 function clearSearch(progress: Progress): void {
     delete progress.searchOrigin; delete progress.searchTarget; delete progress.targetStartedTick
     delete progress.lastPosition; progress.stuckTicks = 0
+}
+function cpuWaitMilliseconds(progress: Progress): number {
+    return (progress.cpuWaitMilliseconds || 0) + (progress.cpuWaitStartedAt === undefined ? 0 : Math.max(0, Date.now() - progress.cpuWaitStartedAt))
+}
+function resumeAfterCpuWait(progress: Progress): void {
+    if (progress.cpuWaitStartedAt !== undefined) {
+        progress.cpuWaitMilliseconds = cpuWaitMilliseconds(progress)
+        delete progress.cpuWaitStartedAt
+    }
+}
+function waitForCpu(progress: Progress, elapsed: number, wasWaiting: boolean): void {
+    if (!wasWaiting) progress.elapsedTicks = Math.max(0, progress.elapsedTicks - elapsed)
+    if (progress.cpuWaitStartedAt === undefined) progress.cpuWaitStartedAt = Date.now()
+    progress.stuckTicks = 0; delete progress.lastPosition
 }
 function retire(data: ShardUnitData, creep: Creep): void {
     data.done = true; data.phase = 'done'
@@ -50,6 +65,7 @@ export function reportPortalExploration(data: ShardUnitData, creep: Creep, statu
     const report: PortalExplorationReport = {
         missionId: data.missionId, sourceShard: data.task.sourceShard, explorerName: creep.name, revision: progress.revision,
         status, shard: Game.shard.name, roomName: creep.room.name, updatedAt: now, elapsedTicks: progress.elapsedTicks,
+        cpuWaitMilliseconds: cpuWaitMilliseconds(progress),
         visitedRooms: progress.visitedRooms.slice(-policy().maximumVisitedRooms), route: data.route.map(copyHop),
         ...(message === undefined ? {} : { lastError: message }), ...(failedHop === undefined ? {} : { failedHop: copyHop(failedHop) }),
     }
@@ -96,7 +112,8 @@ function exclude(progress: Progress, roomName: string): void {
 }
 
 function budgetReady(): boolean {
-    return Game.cpu.bucket >= policy().minimumBucket && (!Number.isFinite(Game.cpu.tickLimit) || Game.cpu.tickLimit - Game.cpu.getUsed() >= policy().minimumCpuHeadroom)
+    return isLowBucketPlanning() ? lowBucketPlanningReady() :
+        (!Number.isFinite(Game.cpu.tickLimit) || Game.cpu.tickLimit - Game.cpu.getUsed() >= policy().minimumCpuHeadroom)
 }
 
 function followPortal(data: ShardUnitData, creep: Creep): boolean {
@@ -109,7 +126,9 @@ function followPortal(data: ShardUnitData, creep: Creep): boolean {
 }
 
 function run(data: ShardUnitData, creep: Creep): boolean {
-    const progress = data.exploration!, elapsed = advanceClock(progress)
+    const progress = data.exploration!, wasWaiting = progress.cpuWaitStartedAt !== undefined, elapsed = advanceClock(progress)
+    if (progress.startedAt <= 0) progress.startedAt = Date.now()
+    if (wasWaiting) progress.elapsedTicks = Math.max(0, progress.elapsedTicks - elapsed)
     const source = data.task.sourceShard === Game.shard.name ? Memory.shardMissions?.[data.missionId] : undefined
     const command = source === undefined ? readRemoteShardState(data.task.sourceShard)?.reports?.[data.missionId] : undefined
     const state = source?.state || (isRecord(command) ? command.state : undefined)
@@ -128,7 +147,7 @@ function run(data: ShardUnitData, creep: Creep): boolean {
         const hop = data.route[data.hopIndex]
         return fail(data, creep, danger, hop?.roomName === creep.room.name ? hop : undefined)
     }
-    if (progress.elapsedTicks > policy().maximumSearchTicks || Date.now() - progress.startedAt > policy().maximumAge) return fail(data, creep, 'Portal 探索超过允许时长', data.route[data.hopIndex])
+    if (progress.elapsedTicks > policy().maximumSearchTicks || Date.now() - progress.startedAt - cpuWaitMilliseconds(progress) > policy().maximumAge) return fail(data, creep, 'Portal 探索超过允许时长', data.route[data.hopIndex])
     if (creep.ticksToLive !== undefined && creep.ticksToLive < policy().minimumRemainingTicks) return fail(data, creep, '探门单位剩余寿命不足', data.route[data.hopIndex])
     if (progress.reportPending && !reportPortalExploration(data, creep, 'exploring', data.lastError)) return false
     runPortalDiscovery()
@@ -149,7 +168,9 @@ function run(data: ShardUnitData, creep: Creep): boolean {
     progress.lastPosition = { shard: Game.shard.name, roomName: creep.room.name, x: creep.pos.x, y: creep.pos.y }
     if (progress.stuckTicks >= policy().stuckTicks) return fail(data, creep, '探门单位长时间没有移动', data.route[data.hopIndex])
     if (data.hopIndex < data.route.length) {
-        if (progress.selectedPortalHop === data.hopIndex || (progress.stage === 'outbound' && data.task.autoRoute === false)) return followPortal(data, creep)
+        if (progress.selectedPortalHop === data.hopIndex || (progress.stage === 'outbound' && data.task.autoRoute === false)) {
+            resumeAfterCpuWait(progress); return followPortal(data, creep)
+        }
         // Existing scouts may carry a full prefix chosen using total journey cost.
         // Keep crossed hops; select only the next door from the actual current room.
         data.route = data.route.slice(0, data.hopIndex)
@@ -157,6 +178,7 @@ function run(data: ShardUnitData, creep: Creep): boolean {
     }
     const goal = progress.stage === 'return' && progress.returnGoal !== undefined ? progress.returnGoal : { shard: progress.goalShard, roomName: progress.goalRoom }
     if (Game.shard.name === goal.shard) {
+        resumeAfterCpuWait(progress)
         if (creep.room.name !== goal.roomName) {
             const code = creep.moveTo(new RoomPosition(25, 25, goal.roomName), { ...scoutMovementOptions, range: 20 })
             if (code === ERR_NO_PATH) return fail(data, creep, '探门单位无法从 Portal 落地房间抵达目标', data.route[data.route.length - 1])
@@ -175,16 +197,31 @@ function run(data: ShardUnitData, creep: Creep): boolean {
     // selected entrance or crossroad. Otherwise a safe scout can freeze at an exit.
     if (!budgetReady()) {
         if (progress.searchTarget !== undefined && !progress.visitedRooms.includes(`${Game.shard.name}/${progress.searchTarget}`)) {
+            resumeAfterCpuWait(progress)
             const code = creep.moveTo(new RoomPosition(25, 25, progress.searchTarget), { ...scoutMovementOptions, range: 20 })
             if (code === ERR_NO_PATH) { exclude(progress, progress.searchTarget); data.lastError = '探索房间无路可达，暂时跳过'; return false }
             if (code !== OK && code !== ERR_TIRED) return fail(data, creep, `探门移动失败: ${code}`)
             delete data.lastError; return false
         }
-        progress.stuckTicks = 0; delete progress.lastPosition; data.lastError = 'CPU 不足，暂缓主动探门'; return false
+        waitForCpu(progress, elapsed, wasWaiting); data.lastError = 'CPU 不足，暂缓主动探门'; return false
     }
+    const limits = isLowBucketPlanning() ? reserveLowBucketPlanning() : undefined
+    if (isLowBucketPlanning() && limits === undefined) {
+        if (progress.searchTarget !== undefined && !progress.visitedRooms.includes(`${Game.shard.name}/${progress.searchTarget}`)) {
+            resumeAfterCpuWait(progress)
+            const code = creep.moveTo(new RoomPosition(25, 25, progress.searchTarget), { ...scoutMovementOptions, range: 20 })
+            if (code === ERR_NO_PATH) { exclude(progress, progress.searchTarget); data.lastError = '探索房间无路可达，暂时跳过'; return false }
+            if (code !== OK && code !== ERR_TIRED) return fail(data, creep, `探门移动失败: ${code}`)
+            delete data.lastError; return false
+        }
+        waitForCpu(progress, elapsed, wasWaiting); data.lastError = '本 tick 探门预算已用完，等待下一 tick'; return false
+    }
+    resumeAfterCpuWait(progress)
     const planningCpu = Game.cpu.getUsed()
-    const planningBudget = (): boolean => budgetReady() && Game.cpu.getUsed() - planningCpu < policy().maximumPlanningCpu
-    const planningOptions = () => ({ maximumPlanningCpu: Math.max(0, policy().maximumPlanningCpu - (Game.cpu.getUsed() - planningCpu)) })
+    const maximumPlanningCpu = limits?.maximumPlanningCpu ?? policy().maximumPlanningCpu
+    const planningBudget = (): boolean => budgetReady() && Game.cpu.getUsed() - planningCpu < maximumPlanningCpu
+    const planningOptions = () => ({ ...limits, ...(limits == undefined ? {} : { candidateOnly: true }),
+        maximumPlanningCpu: Math.max(0, maximumPlanningCpu - (Game.cpu.getUsed() - planningCpu)) })
     progress.excludedRooms = (progress.excludedRooms || []).filter(entry => entry.until > Date.now())
     const excluded = progress.excludedRooms.filter(entry => entry.shard === Game.shard.name).map(entry => entry.roomName)
     const portals = getKnownPortals([data.task.sourceShard, progress.goalShard, goal.shard]).filter(hop => hop.shard !== Game.shard.name || !excluded.includes(hop.roomName))
@@ -196,8 +233,8 @@ function run(data: ShardUnitData, creep: Creep): boolean {
         clearPreparation(data); delete progress.searchTarget; delete progress.targetStartedTick
         return followPortal(data, creep)
     }
-    if (isExplorationPlanningDeferred()) { progress.stuckTicks = 0; delete progress.lastPosition; data.lastError = '本 tick 探门预算已用完，等待下一 tick'; return false }
-    if (!planningBudget()) { data.lastError = 'CPU 不足，等待下一 tick 选择探索房间'; return false }
+    if (isExplorationPlanningDeferred()) { waitForCpu(progress, elapsed, wasWaiting); data.lastError = '本 tick 探门预算已用完，等待下一 tick'; return false }
+    if (!planningBudget()) { waitForCpu(progress, elapsed, wasWaiting); data.lastError = 'CPU 不足，等待下一 tick 选择探索房间'; return false }
     if (progress.searchOrigin === undefined) progress.searchOrigin = { shard: Game.shard.name, roomName: creep.room.name }
     if (progress.searchTarget !== undefined && progress.visitedRooms.includes(`${Game.shard.name}/${progress.searchTarget}`)) {
         delete progress.searchTarget; delete progress.targetStartedTick
@@ -212,16 +249,16 @@ function run(data: ShardUnitData, creep: Creep): boolean {
         let candidates = getExplorationRooms(creep.room.name, visited, excluded, {
             ...planningOptions(), searchOriginRoom: progress.searchOrigin.roomName, nearestOnly: true,
         })
-        if (!candidates.length && isExplorationPlanningDeferred()) { progress.stuckTicks = 0; delete progress.lastPosition; data.lastError = '本 tick 探索房间预算已用完，等待下一 tick'; return false }
+        if (!candidates.length && isExplorationPlanningDeferred()) { waitForCpu(progress, elapsed, wasWaiting); data.lastError = '本 tick 探索房间预算已用完，等待下一 tick'; return false }
         if (!candidates.length && creep.room.name !== progress.searchOrigin.roomName && planningBudget()) {
             progress.searchOrigin.roomName = creep.room.name
             candidates = getExplorationRooms(creep.room.name, visited, excluded, {
                 ...planningOptions(), searchOriginRoom: progress.searchOrigin.roomName, nearestOnly: true,
             })
-            if (!candidates.length && isExplorationPlanningDeferred()) { progress.stuckTicks = 0; delete progress.lastPosition; return false }
+            if (!candidates.length && isExplorationPlanningDeferred()) { waitForCpu(progress, elapsed, wasWaiting); return false }
         }
         if (!candidates.length) {
-            if (!planningBudget()) { progress.stuckTicks = 0; delete progress.lastPosition; return false }
+            if (!planningBudget()) { waitForCpu(progress, elapsed, wasWaiting); return false }
             return fail(data, creep, '限定探索范围内没有尚未访问的可达高速路交叉房')
         }
         progress.searchTarget = candidates[0]; progress.targetStartedTick = Game.time
@@ -238,6 +275,8 @@ function valid(data: CreepData): data is ShardUnitData {
     return typeof progress.revision === 'string' && progress.revision.length > 0 && typeof progress.goalShard === 'string' && !!progress.goalShard &&
         typeof progress.goalRoom === 'string' && ROOM_NAME.test(progress.goalRoom) && ['outbound', 'return'].includes(progress.stage) &&
         Number.isFinite(progress.startedAt) && integer(progress.elapsedTicks) && Array.isArray(progress.visitedRooms) && progress.visitedRooms.every(name => typeof name === 'string') &&
+        (progress.cpuWaitStartedAt === undefined || (Number.isFinite(progress.cpuWaitStartedAt) && progress.cpuWaitStartedAt >= 0)) &&
+        (progress.cpuWaitMilliseconds === undefined || (Number.isFinite(progress.cpuWaitMilliseconds) && progress.cpuWaitMilliseconds >= 0)) &&
         Array.isArray(progress.visitedShards) && progress.visitedShards.every(name => typeof name === 'string') &&
         (progress.selectedPortalHop === undefined || integer(progress.selectedPortalHop)) &&
         (progress.lastTick === undefined || integer(progress.lastTick)) &&

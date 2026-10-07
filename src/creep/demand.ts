@@ -1,9 +1,24 @@
 import { sha1String } from 'utils'
 import { spawnPriority, warModeRole } from 'settings/creep'
 import { isRoleSupported } from 'role'
+import { populationPolicy } from 'settings/population'
+
+// Demand refreshes reuse the same names; retain only immutable hashes, never live Creep objects.
+const names = new Map<string, string>()
 
 export function createCreepName(role: CreepRoleConstant, name: string): string {
-    return role.toUpperCase() + '_' + sha1String(name)
+    const configured = populationPolicy.maximumNameCacheEntries
+    const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 0
+    while (names.size > maximum) names.delete(names.keys().next().value!)
+    const key = `${role}\0${name}`
+    const previous = names.get(key)
+    if (previous !== undefined) return previous
+    const result = role.toUpperCase() + '_' + sha1String(name)
+    if (maximum > 0) {
+        if (names.size >= maximum) names.delete(names.keys().next().value!)
+        names.set(key, result)
+    }
+    return result
 }
 
 /**

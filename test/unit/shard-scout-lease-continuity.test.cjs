@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 const copy = value => JSON.parse(JSON.stringify(value));
 
-function world(exploring = false) {
+function world(exploring = false, { lite = false, dispatch = true } = {}) {
     const clock = { now: 1000000 }, cancelled = [], local = { version: 1, transfers: {}, acks: {}, reports: {}, scoutProofs: {}, explorationReports: {} };
     const peers = Object.fromEntries(['shard1', 'shard2'].map(shard => [shard, { version: 1, transfers: {}, acks: {}, reports: {}, scoutProofs: {} }]));
     const route = [{ shard: 'shard3', roomName: 'W0N0', x: 10, y: 10, destinationShard: 'shard2', destinationRoom: 'W1N1' },
@@ -20,7 +20,7 @@ function world(exploring = false) {
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, Date: class extends Date { static now() { return clock.now; } },
         FIND_MY_SPAWNS: 'my-spawns', console: { log() {} } }, modules: {
         'creep/demand': { createCreepName: (role, name) => `${role}:${name}`,
-            addCreepConfig(room, role, name, data) { const key = `${role}:${name}`; room.memory.creepConfig[key] = { role, name, data }; return key; } },
+            addCreepConfig(room, role, name, data) { const key = `${role}:${name}`; room.memory.creepConfig[key] = { role, name, data, spawnPriority: role === 'sScout' ? 8 : 12 }; return key; } },
         './routing': { updateMissionRouting() {} },
         './transport': { getLocalShardState: () => local, readRemoteShardState: shard => peers[shard], markShardStateDirty() {},
             restoreArrivingCreeps() {}, getShardTransportError: () => undefined, cancelCreepTransfers: creep => cancelled.push(creep.name) },
@@ -31,7 +31,8 @@ function world(exploring = false) {
     } });
     const api = loader.load('shard/controller'), exploration = loader.load('shard/explorationControl'), policy = loader.load('settings/interShard').interShardPolicy;
     policy.peers = ['shard1', 'shard2']; policy.reportInterval = 1;
-    api.releaseShardCreepConfig();
+    if (lite) Object.assign(game.cpu, { bucket: 1, limit: 20, tickLimit: 21, getUsed: () => 18 });
+    if (dispatch) api.releaseShardCreepConfig();
     const lease = () => mission.leases[exploring ? 'explorer:0' : 'scout:0'];
     const advance = milliseconds => { clock.now += milliseconds; game.time++; };
     function unit(name = lease().name, extra = {}) {
@@ -51,8 +52,59 @@ function world(exploring = false) {
     const explorationReport = (creep, updatedAt, extra = {}) => ({ missionId: task.key, sourceShard: 'shard3', explorerName: creep.name,
         revision: mission.exploration.revision, status: 'failed', shard: 'shard3', roomName: creep.room.name,
         updatedAt, elapsedTicks: 10, visitedRooms: ['shard3/W1N7'], route: copy(creep.memory.data.route), lastError: 'old threat', ...extra });
-    return { loader, api, exploration, policy, game, clock, home, task, mission, local, peers, route, cancelled, lease, advance, unit, report, failure, explorationReport };
+    return { loader, api, exploration, policy, game, memory, clock, home, task, mission, local, peers, route, cancelled, lease, advance, unit, report, failure, explorationReport };
 }
+
+test('a queued route scout retains its lease across CPU waits and begins the mission clock only after actual birth', () => {
+    const w = world(false, { lite: true }), name = w.lease().name, revision = w.mission.scouting.revision;
+    assert.equal(w.mission.scouting.startedAt, undefined);
+    assert.equal(w.home.memory.creepConfig[name].spawnPriority, 3.75);
+    w.advance(w.policy.leaseDuration + w.policy.routeScouting.maximumScoutingAge + 1);
+    w.api.runShardController(); w.api.releaseShardCreepConfig();
+    assert.equal(w.lease().name, name); assert.equal(w.mission.scouting.revision, revision);
+    assert.equal(w.mission.scouting.startedAt, undefined); assert.equal(w.mission.scouting.status, 'scouting');
+    const creep = w.unit(name, { spawning: true });
+    w.advance(w.policy.routeScouting.maximumScoutingAge + 1); w.api.runShardController(); w.api.releaseShardCreepConfig();
+    assert.equal(w.mission.scouting.startedAt, undefined);
+    creep.spawning = false; w.api.runShardController();
+    assert.equal(w.mission.scouting.startedAt, w.clock.now);
+    w.advance(w.policy.routeScouting.maximumScoutingAge); w.api.releaseShardCreepConfig();
+    assert.equal(w.mission.scouting.status, 'failed', 'a born scout still has the existing mission-age limit');
+});
+
+test('explorers and route scouts share one low-bucket new-demand quota while verified workers retain their gate', () => {
+    const w = world(true, { lite: true, dispatch: false });
+    const second = { task: { ...w.task, id: 'second', key: 'shard3:second', route: copy(w.route), autoRoute: false },
+        state: 'active', createdAt: w.clock.now, generation: 0, leases: {}, energyDelivered: 0, routing: { status: 'ready', updatedAt: w.clock.now } };
+    w.memory.shardMissions[second.task.key] = second;
+    w.api.releaseShardCreepConfig();
+    const explorer = w.lease();
+    assert.ok(explorer); assert.equal(second.leases['scout:0'], undefined);
+    assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.role !== 'sScout').length, 0);
+    w.advance(1000); w.home.memory.creepConfig = {}; w.api.releaseShardCreepConfig();
+    assert.equal(w.lease().name, explorer.name); assert.ok(second.leases['scout:0']);
+    assert.equal(w.home.memory.creepConfig[second.leases['scout:0'].name].spawnPriority, 3.75);
+    assert.equal(Object.values(w.home.memory.creepConfig).some(config => config.role === 'sBuilder'), false);
+    Object.assign(second.scouting, { status: 'verified', outbound: true, verifiedAt: w.clock.now });
+    w.advance(1000); w.api.releaseShardCreepConfig();
+    assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.role === 'sBuilder').length, 1);
+});
+
+test('missing route scout demand waits below two CPU headroom and keeps normal bucket priority unchanged', () => {
+    const low = world(false, { lite: true, dispatch: false });
+    low.game.cpu.getUsed = () => 19.5; low.api.releaseShardCreepConfig();
+    assert.equal(low.lease(), undefined); assert.equal(Object.keys(low.home.memory.creepConfig).length, 0);
+    const normal = world();
+    assert.equal(normal.home.memory.creepConfig[normal.lease().name].spawnPriority, 8);
+});
+
+test('remote arrival evidence starts the clock when source never observed the born scout locally', () => {
+    const w = world(), lease = w.lease();
+    assert.equal(w.mission.scouting.startedAt, undefined); w.advance(2000);
+    w.peers.shard2.acks.arrival = { creepName: lease.name, fromShard: 'shard2', toShard: 'shard3', createdAt: w.clock.now, expiresAt: w.clock.now + 200000 };
+    w.api.runShardController();
+    assert.equal(w.mission.scouting.startedAt, w.clock.now); assert.equal(lease.departed, true);
+});
 
 test('newer final-shard unit status cannot be overwritten by an older intermediate-shard snapshot', () => {
     const w = world(); w.advance(2000);

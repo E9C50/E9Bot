@@ -47,6 +47,17 @@ test('blueprint builder also rejects redundant source Container positions before
     assert.equal(w.calls.length, 0);
 });
 
+test('source Container cleanup uses the Container group without traversing unrelated room structures', () => {
+    const w = world();
+    w.room.containers = [w.container];
+    w.room.links = [w.link];
+    w.room.lookForAt = () => [];
+    w.loader.globals.LOOK_STRUCTURES = 'structures';
+    Object.defineProperty(w.room, 'structures', { get() { throw new Error('unrelated roads and ramparts are not cleanup candidates'); } });
+    w.cleanup(w.room);
+    assert.deepEqual(w.calls, [['destroy', 'container', 11, 10], ['remove', 'container', 9, 10]]);
+});
+
 test('inactive, foreign and statically inaccessible source Links retain Container logistics', () => {
     for (const options of [{ active: false }, { my: false }, { walls: [[11, 9], [11, 10], [11, 11]] }]) {
         const w = world(options); w.cleanup(w.room);

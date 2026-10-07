@@ -8,11 +8,35 @@ import { isPortalTravelData, isRecord } from './types'
 import { routeSignature } from './verification'
 import { cancelCreepTransfers } from './transport'
 import { getScoutDanger } from './scoutSafety'
+import { isLowBucketPlanning, lowBucketPlanningReady } from './planningBudget'
 
 let planningTick = -1
 let planningShard = ''
 let plansUsed = 0
+let scoutDemandTick = -1
+let scoutDemandShard = ''
+let scoutDemandsUsed = 0
 const SCOUT_SAFETY_VERSION = 1
+
+/** 低 bucket 的新 scout 共用每 tick 名额；已有租约重发配置不消耗名额。 */
+export function reserveLowBucketScoutDemand(): boolean {
+    if (!isLowBucketPlanning()) return true
+    if (!lowBucketPlanningReady()) return false
+    if (scoutDemandTick != Game.time || scoutDemandShard != Game.shard.name) {
+        scoutDemandTick = Game.time; scoutDemandShard = Game.shard.name; scoutDemandsUsed = 0
+    }
+    const maximum = interShardPolicy.lowBucketPlanning?.maximumScoutDemandsPerTick || 0
+    if (scoutDemandsUsed >= maximum) return false
+    scoutDemandsUsed++
+    return true
+}
+
+/** 仅未出生的必要 scout 提高优先级，存活单位及正常 bucket 沿用角色默认值。 */
+export function prioritizeLowBucketScout(source: Room, name: string): void {
+    if (!isLowBucketPlanning() || Game.creeps[name] != undefined) return
+    const config = source.memory.creepConfig?.[name], priority = interShardPolicy.lowBucketPlanning?.scoutSpawnPriority
+    if (config != undefined && typeof priority == 'number' && Number.isFinite(priority)) config.spawnPriority = priority
+}
 
 function healthyExplorer(creep: Creep | undefined, mission: ShardMission): creep is Creep {
     if (creep == undefined || creep.spawning || creep.memory.role != 'sScout' || !isShardUnitData(creep.memory.data)) return false
@@ -36,7 +60,7 @@ function explorerData(mission: ShardMission, now: number): ShardUnitData {
         exploration: {
             revision: progress.revision, goalShard: mission.task.targetShard, goalRoom: mission.task.targetRoom,
             returnGoal: mission.task.autoReturn ? { shard: mission.task.sourceShard, roomName: mission.task.sourceRoom } : undefined,
-            stage: 'outbound', startedAt: now, elapsedTicks: 0,
+            stage: 'outbound', startedAt: progress.startedAt ?? 0, elapsedTicks: 0,
             visitedRooms: progress.visitedRooms.slice(), visitedShards: [mission.task.sourceShard], status: 'exploring',
             excludedRooms: (mission.blockedPortals || []).filter((entry) => entry.until > now).map((entry) => ({
                 shard: entry.hop.shard, roomName: entry.hop.roomName, until: entry.until,
@@ -128,7 +152,25 @@ export function refreshPortalExploration(mission: ShardMission): void {
             }
         }
     }
-    if (previous?.status == 'exploring' && previous.startedAt != undefined && now - previous.startedAt >= policy.maximumAge) {
+    const lease = mission.leases['explorer:0'], live = lease == undefined ? undefined : Game.creeps[lease.name]
+    if (previous != undefined && ['pending', 'exploring'].includes(previous.status) && lease != undefined && !lease.departed &&
+        (lease.lastShard == undefined || lease.lastShard == Game.shard.name)) {
+        if (live?.spawning || (live == undefined && lease.seenAt == undefined && previous.startedAt == lease.createdAt)) {
+            // 兼容旧版排队时已经开始的时钟；等待孵化不算探索寿命。
+            delete previous.startedAt
+        } else if (live != undefined && !live.spawning && previous.startedAt == undefined) {
+            previous.status = 'exploring'; previous.startedAt = now
+            const data = live.memory.data as ShardUnitData
+            if (data.exploration != undefined) data.exploration.startedAt = now
+        }
+        const data = live?.memory.data as ShardUnitData | undefined, waiting = data?.exploration
+        if (waiting != undefined && waiting.revision == previous.revision) {
+            const currentWait = waiting.cpuWaitStartedAt == undefined ? 0 : Math.max(0, now - waiting.cpuWaitStartedAt)
+            previous.cpuWaitMilliseconds = Math.max(previous.cpuWaitMilliseconds || 0, (waiting.cpuWaitMilliseconds || 0) + currentWait)
+        }
+    }
+    if (previous?.status == 'exploring' && previous.startedAt != undefined &&
+        now - previous.startedAt - (previous.cpuWaitMilliseconds || 0) >= policy.maximumAge) {
         failPortalExploration(mission, '主动探门超时，等待重新派出 scout')
     }
     if (previous != undefined && (previous.status == 'pending' || previous.status == 'exploring' || now < (previous.retryAt || 0))) return
@@ -147,16 +189,22 @@ export function refreshPortalExploration(mission: ShardMission): void {
         }
         if (candidate != undefined) { rearmExplorer(mission, candidate, now); return }
     }
-    if (Game.cpu.bucket < policy.minimumBucket || (Number.isFinite(Game.cpu.tickLimit) && Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom)) return
-    if (planningTick != Game.time || planningShard != Game.shard.name) { planningTick = Game.time; planningShard = Game.shard.name; plansUsed = 0 }
-    if (plansUsed >= policy.maximumPlansPerTick) return
-    plansUsed++
-    const blocked = new Set((mission.blockedPortals || []).filter((entry) => entry.until > now).map((entry) => routeSignature([entry.hop])))
-    const portals = getKnownPortals([mission.task.sourceShard, mission.task.targetShard]).filter((hop) => !blocked.has(routeSignature([hop])))
-    const task = mission.task
-    const outboundKnown = task.route.length > 0 && (!task.autoRoute || isPortalRouteKnown(task.route, portals))
-    const entryRoute = outboundKnown && !task.autoRoute ? task.route.map((hop) => ({ ...hop })) :
-        planExplorationEntry(task.sourceShard, task.sourceRoom, task.targetShard, task.targetRoom, portals)
+    let entryRoute: ShardMission['task']['route'] = []
+    if (isLowBucketPlanning()) {
+        // 低预算先发布一只 MOVE scout，从出生后的真实位置逐段探门。
+        if (!lowBucketPlanningReady()) return
+    } else {
+        if (Number.isFinite(Game.cpu.tickLimit) && Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) return
+        if (planningTick != Game.time || planningShard != Game.shard.name) { planningTick = Game.time; planningShard = Game.shard.name; plansUsed = 0 }
+        if (plansUsed >= policy.maximumPlansPerTick) return
+        plansUsed++
+        const blocked = new Set((mission.blockedPortals || []).filter((entry) => entry.until > now).map((entry) => routeSignature([entry.hop])))
+        const portals = getKnownPortals([mission.task.sourceShard, mission.task.targetShard]).filter((hop) => !blocked.has(routeSignature([hop])))
+        const task = mission.task
+        const outboundKnown = task.route.length > 0 && (!task.autoRoute || isPortalRouteKnown(task.route, portals))
+        entryRoute = outboundKnown && !task.autoRoute ? task.route.map((hop) => ({ ...hop })) :
+            planExplorationEntry(task.sourceShard, task.sourceRoom, task.targetShard, task.targetRoom, portals)
+    }
     mission.exploration = {
         revision: `${mission.createdAt}:explore:${++mission.generation}`, safetyVersion: SCOUT_SAFETY_VERSION, status: 'pending', entryRoute,
         visitedRooms: previous?.visitedRooms.slice(-policy.maximumVisitedRooms) || [], updatedAt: now,
@@ -179,20 +227,22 @@ export function releasePortalExplorer(mission: ShardMission, source: Room): void
     const progress = mission.exploration
     if (progress == undefined || progress.status == 'failed' || progress.status == 'complete' || now < (progress.retryAt || 0)) return
     let lease = mission.leases['explorer:0']
+    if (lease != undefined && lease.seenAt == undefined && !lease.departed && !lease.leaving &&
+        (lease.lastShard == undefined || lease.lastShard == Game.shard.name)) lease.expiresAt = now + interShardPolicy.leaseDuration
     if (lease != undefined && Game.creeps[lease.name] == undefined &&
         (lease.expiresAt <= now || (lease.seenAt != undefined && lease.lastShard == Game.shard.name && !lease.departed && !lease.leaving))) {
         failPortalExploration(mission, '探门 scout 死亡或失联，等待重试')
         return
     }
-    if (Game.cpu.bucket < policy.minimumBucket && (lease == undefined || Game.creeps[lease.name] == undefined)) return
     if (lease == undefined) {
+        if (!reserveLowBucketScoutDemand()) return
         const generation = ++mission.generation
         const displayName = `${mission.task.key}_explorer_${generation}_${mission.createdAt}`
         lease = mission.leases['explorer:0'] = {
             name: createCreepName('sScout', displayName), displayName, kind: 'scout', generation,
             createdAt: now, expiresAt: now + interShardPolicy.leaseDuration,
         }
-        progress.status = 'exploring'; progress.startedAt = now
+        progress.status = 'exploring'
     }
     if (lease.departed || (lease.lastShard != undefined && lease.lastShard != Game.shard.name)) return
     const live = Game.creeps[lease.name]
@@ -204,6 +254,7 @@ export function releasePortalExplorer(mission: ShardMission, source: Room): void
         delete source.memory.creepConfig[name]
         source.memory.creepConfig[lease.name].displayName = lease.name
     }
+    prioritizeLowBucketScout(source, lease.name)
 }
 
 /** 情报报告只维护探索状态，绝不代替完整路线的 scoutProof。 */
@@ -215,6 +266,8 @@ export function acceptPortalExplorationReport(mission: ShardMission, value: unkn
         typeof value.updatedAt != 'number' || !Number.isFinite(value.updatedAt) || value.updatedAt < lease.createdAt || value.updatedAt > now ||
         now - value.updatedAt >= policy.reportMaxAge || value.updatedAt < (progress.updatedAt || 0) || value.updatedAt <= (progress.lastReportAt ?? -Infinity) ||
         !['exploring', 'failed', 'complete'].includes(String(value.status)) || !Number.isInteger(value.elapsedTicks) || (value.elapsedTicks as number) < 0 ||
+        (value.cpuWaitMilliseconds != undefined && (typeof value.cpuWaitMilliseconds != 'number' ||
+            !Number.isFinite(value.cpuWaitMilliseconds) || value.cpuWaitMilliseconds < 0)) ||
         !Array.isArray(value.visitedRooms) || value.visitedRooms.length > policy.maximumVisitedRooms ||
         !value.visitedRooms.every((room) => typeof room == 'string' && /^[^/]+\/[WE]\d+[NS]\d+$/.test(room)) ||
         (value.route != undefined && (!Array.isArray(value.route) || value.route.length > interShardPolicy.portalRouting.maximumHops ||
@@ -224,6 +277,8 @@ export function acceptPortalExplorationReport(mission: ShardMission, value: unkn
         report.roomName != (mission.task.autoReturn ? mission.task.sourceRoom : mission.task.targetRoom))) return false
     if (report.failedHop != undefined && (!isRecord(report.failedHop) || !report.route?.some((hop) => routeSignature([hop]) == routeSignature([report.failedHop!])))) return false
     progress.updatedAt = report.updatedAt
+    if (progress.startedAt == undefined) progress.startedAt = report.updatedAt
+    progress.cpuWaitMilliseconds = Math.max(progress.cpuWaitMilliseconds || 0, report.cpuWaitMilliseconds || 0)
     progress.lastReportAt = report.updatedAt
     progress.lastShard = peer; progress.lastRoom = report.roomName
     progress.visitedRooms = Array.from(new Set([...progress.visitedRooms, ...report.visitedRooms])).slice(-policy.maximumVisitedRooms)

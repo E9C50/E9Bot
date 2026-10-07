@@ -79,6 +79,17 @@ test('a room with a Spawn and construction but no logistics publishes one Source
     assert.equal(builders[0].data.sourceId, newRoom.sources[0].id);
 });
 
+test('mature one-miner-per-source publication skips discarded walkability and creep-occupancy scans', () => {
+    const mature = room('mature');
+    mature.level = 8;
+    mature.sources[0].pos.getFreeSpace = () => { throw new Error('mature miner quota does not depend on temporary occupancy'); };
+    const { loader, demands } = populationWorld([mature]);
+    loader.load('creep/basePopulation').releaseBaseCreepConfig();
+    const miners = demands.filter(item => item.role === 'harvester');
+    assert.equal(miners.length, 1);
+    assert.equal(miners[0].data.sourceId, mature.sources[0].id);
+});
+
 test('normal Container and Storage builder demands do not gain bootstrap duplicates', () => {
     for (const type of ['container', 'storage']) {
         const mature = room('mature');

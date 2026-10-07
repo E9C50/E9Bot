@@ -250,6 +250,60 @@ test('low CPU pauses discovery movement, and helper budget exhaustion cannot fal
     assert.equal(w.moves.length, 1);
 });
 
+function enableLowBucket(w) {
+    w.config.lowBucketPlanning = { minimumCpuHeadroom: 2, maximumPlanningCpu: 0.75,
+        maximumPlansPerTick: 1, maximumLocalRouteChecks: 2, maximumCandidates: 8 };
+    w.game.cpu.bucket = 0; w.game.cpu.limit = 20; w.game.cpu.tickLimit = 21; w.cpu.used = 1.5;
+}
+
+test('zero bucket scouts select one lightweight nearest crossroads candidate with bounded shared options', () => {
+    const w = world({ prefix: false }); enableLowBucket(w); w.role.source(w.creep);
+    assert.equal(w.moves.at(-1).roomName, 'W0N0');
+    assert.equal(w.helpers.selections[0].options.candidateOnly, true);
+    assert.equal(w.helpers.selections[0].options.minimumCpuHeadroom, 2);
+    assert.equal(w.helpers.selections[0].options.maximumPlanningCpu, 0.75);
+    assert.equal(w.helpers.scans[0].options.maximumCandidates, 8);
+    assert.equal(w.data.done, undefined); assert.deepEqual(w.local.scoutProofs, { evidence: { keep: true } });
+});
+
+test('zero bucket scouts select a known next-shard door instead of searching farther crossroads', () => {
+    const w = world({ prefix: false }); enableLowBucket(w); w.intel.known.push(copy(w.first)); w.role.source(w.creep);
+    assert.deepEqual(copy(w.data.route), [w.first]); assert.equal(w.travel.calls.at(-1).hop, 0);
+    assert.equal(w.helpers.scans.length, 0); assert.equal(w.data.scouting, undefined);
+    assert.deepEqual(w.local.scoutProofs, { evidence: { keep: true } });
+});
+
+test('a shared low bucket planning reservation pauses only new selection until the following tick', () => {
+    const w = world({ prefix: false }); enableLowBucket(w);
+    assert.ok(w.loader.load('shard/planningBudget').reserveLowBucketPlanning());
+    w.role.source(w.creep);
+    assert.equal(w.helpers.selections.length, 0); assert.equal(w.moves.length, 0);
+    assert.equal(w.progress.cpuWaitStartedAt, w.clock.now);
+    w.game.time++; w.role.source(w.creep);
+    assert.equal(w.moves.at(-1).roomName, 'W0N0'); assert.equal(w.progress.cpuWaitStartedAt, undefined);
+});
+
+test('CPU headroom waiting does not consume active tick or wall search timeout and resumes movement', () => {
+    const w = world({ prefix: false }); enableLowBucket(w); w.cpu.used = 20;
+    w.role.source(w.creep); assert.equal(w.progress.cpuWaitStartedAt, w.clock.now);
+    w.clock.now += w.config.portalExploration.maximumAge + 1000;
+    w.game.time += w.config.portalExploration.maximumSearchTicks + 10;
+    w.role.source(w.creep);
+    assert.equal(w.progress.elapsedTicks, 0); assert.equal(w.progress.status, 'exploring'); assert.equal(w.data.done, undefined);
+    w.clock.now += 50; w.game.time++; w.cpu.used = 1.5; w.role.source(w.creep);
+    assert.equal(w.moves.at(-1).roomName, 'W0N0'); assert.equal(w.progress.cpuWaitStartedAt, undefined);
+    assert.equal(w.progress.cpuWaitMilliseconds, w.config.portalExploration.maximumAge + 1050);
+    assert.equal(w.progress.elapsedTicks, 0); assert.equal(w.data.done, undefined);
+});
+
+test('a queued explorer zero start sentinel begins its wall timeout at its first actual run', () => {
+    const w = world({ prefix: false }); w.progress.startedAt = 0;
+    w.clock.now += w.config.portalExploration.maximumAge * 3;
+    w.role.source(w.creep);
+    assert.equal(w.progress.startedAt, w.clock.now); assert.equal(w.data.done, undefined);
+    assert.equal(w.moves.at(-1).roomName, 'W0N0');
+});
+
 test('clock uses local deltas plus one arrival tick and never compares tick counters across shards', () => {
     const w = world(); w.game.time = 900000; w.role.source(w.creep);
     w.game.time += 7; w.creep.pos.x++; w.role.source(w.creep);

@@ -383,15 +383,16 @@ test('mission and in-transit planning share a per-tick budget and deferred units
     assert.equal(u.data.routeRetryAt, undefined);
 });
 
-test('low CPU Bucket delays mission and unit replanning without losing their state', () => {
+test('insufficient tick headroom delays mission and unit replanning without losing their state', () => {
     const w = world();
     w.game.cpu.bucket = w.policy.portalRouting.minimumBucket - 1;
+    w.game.cpu.tickLimit = 21; w.game.cpu.getUsed = () => 20;
     w.intel.portals = copy(outward);
     w.plan('shard0', 'W1N1', 'shard1', 'W3N3', outward);
     w.plan('shard0', 'W2N2', 'shard1', 'W3N3', outward);
     w.api.createShardTask('W1N1', 'shard1/W3N3', { explorePortals: false });
     assert.equal(w.mission().routing.status, 'waiting');
-    assert.match(w.mission().routing.message, /Bucket/);
+    assert.match(w.mission().routing.message, /CPU/);
     w.api.releaseShardCreepConfig();
     assert.equal(Object.keys(w.mission().leases).length, 0);
     const u = unit(w, 'hauler', { energy: 70, data: { route: [] } });
@@ -400,10 +401,51 @@ test('low CPU Bucket delays mission and unit replanning without losing their sta
     assert.equal(u.creep.store.energy, 70);
     assert.equal(u.data.routeRetryAt, w.game.time + w.policy.portalRouting.retryInterval);
     w.game.cpu.bucket = 10000;
+    w.game.cpu.getUsed = () => 0;
     w.advance(w.policy.portalRouting.retryInterval);
     w.api.runShardController();
     assert.equal(w.mission().routing.status, 'ready');
     assert.equal(w.routing.ensureUnitRoute(u.creep, u.data), true);
+});
+
+test('bucket one uses observed candidate doors and releases only its verification scout before any worker', () => {
+    const w = world(); w.game.cpu.bucket = 1; w.game.cpu.limit = 20; w.game.cpu.tickLimit = 21; w.game.cpu.getUsed = () => 1.5;
+    w.intel.portals = outward.map((hop, index) => ({ ...hop, id: `portal-${index}`, observedAt: 1000000 }));
+    w.api.createShardTask('W1N1', 'shard1/W3N3', { builders: 1 });
+    assert.equal(w.mission().routing.status, 'ready'); assert.deepEqual(copy(w.mission().task.route), outward);
+    assert.match(w.mission().routing.portalSignature, /^lowBucket:/);
+    assert.equal(w.calls.filter(call => call.type === 'plan').length, 0, 'no full graph/native walk planner runs');
+    w.api.releaseShardCreepConfig();
+    const configs = Object.values(w.home.memory.creepConfig);
+    assert.equal(configs.length, 1); assert.equal(configs[0].role, 'sScout'); assert.equal(configs[0].spawnPriority, 3.75);
+    assert.equal(w.mission().scouting.status, 'scouting'); assert.equal(w.mission().scouting.startedAt, undefined, 'queue time is not scouting time');
+    assert.equal(Object.values(w.mission().leases).some(lease => lease.kind !== 'scout'), false);
+});
+
+test('one lightweight allowance per tick finishes outbound then return instead of replanning outbound forever', () => {
+    const w = world(); w.game.cpu.bucket = 0; w.game.cpu.limit = 20; w.game.cpu.tickLimit = 21; w.game.cpu.getUsed = () => 1.5;
+    w.intel.portals = [...outward, ...returning].map((hop, index) => ({ ...hop, id: `portal-${index}`, observedAt: 1000000 }));
+    w.api.createShardTask('W1N1', 'shard1/W3N3', { haulers: 1 });
+    assert.deepEqual(copy(w.mission().task.route), outward); assert.equal(w.mission().task.returnRoute, undefined);
+    assert.equal(w.mission().routing.status, 'waiting'); assert.equal(w.mission().routing.nextAttemptTick, w.game.time + 1);
+    w.advance(); w.api.runShardController();
+    assert.deepEqual(copy(w.mission().task.route), outward); assert.deepEqual(copy(w.mission().task.returnRoute), returning);
+    assert.equal(w.mission().routing.status, 'ready'); assert.equal(w.calls.some(call => call.type === 'plan'), false);
+});
+
+test('recovered Bucket verifies a lightweight nearest-hop candidate with the native planner once', () => {
+    const w = world(); w.game.cpu.bucket = 0; w.game.cpu.limit = 20; w.game.cpu.tickLimit = 21; w.game.cpu.getUsed = () => 1.5;
+    w.intel.portals = outward.map((hop, index) => ({ ...hop, id: `portal-${index}`, observedAt: 1000000 }));
+    w.plan('shard0', 'W1N1', 'shard1', 'W3N3', outward);
+    w.api.createShardTask('W1N1', 'shard1/W3N3', { builders: 1 });
+    w.advance(50); w.api.runShardController();
+    assert.equal(w.calls.some(call => call.type === 'plan'), false, 'low Bucket retains a known candidate');
+    w.game.cpu.bucket = 10000; w.game.cpu.tickLimit = 100;
+    w.advance(50); w.api.runShardController();
+    assert.equal(w.calls.filter(call => call.type === 'plan').length, 1);
+    assert.doesNotMatch(w.mission().routing.portalSignature, /^lowBucket:/);
+    w.advance(50); w.api.runShardController();
+    assert.equal(w.calls.filter(call => call.type === 'plan').length, 1, 'unchanged ready routes are not repeatedly planned');
 });
 
 test('refreshing observation times avoids redundant planning while a newly discovered entrance can improve a ready route', () => {

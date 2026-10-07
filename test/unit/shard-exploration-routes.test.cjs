@@ -56,6 +56,37 @@ function world(overrides = {}) {
     return { ...api, policy, game, clock, cpu, calls, statuses, noPaths, routeOverrides, avoided, portal };
 }
 
+test('lightweight scout door selection uses nearest observed geometry without native map queries', () => {
+    const w = world(); w.cpu.bucket = 0; w.cpu.tickLimit = 21; w.cpu.used = 1.5;
+    w.game.map.getRoomStatus = () => { throw new Error('lightweight selection cannot scan native room status'); };
+    w.game.map.findRoute = () => { throw new Error('lightweight selection cannot invoke full local routing'); };
+    const far = w.portal('shard3', 'E40N40', 'shard2', 'E40N40');
+    const near = w.portal('shard3', 'E40N10', 'shard2', 'E40N10');
+    const options = { candidateOnly: true, minimumCpuHeadroom: 2, maximumPlanningCpu: 0.75,
+        maximumLocalRouteChecks: 0, maximumCandidates: 8 };
+    const hop = w.selectExplorationPortal('shard3', 'E41N8', 'shard1', 'E41N6', [far, near], [], options);
+    assert.equal(hop.roomName, near.roomName); assert.equal(hop.destinationShard, 'shard2');
+    assert.equal(w.isExplorationPlanningDeferred(), false);
+    w.avoided.push(near.roomName);
+    assert.equal(w.selectExplorationPortal('shard3', 'E41N8', 'shard1', 'E41N6', [far, near], [], options).roomName, far.roomName);
+    assert.equal(w.selectExplorationPortal('shard3', 'E41N8', 'shard1', 'E41N6', [], [], options), undefined);
+});
+
+test('lightweight scout crossroads use nearest static candidates and exclusions without native map queries', () => {
+    const w = world(); w.cpu.bucket = 0; w.cpu.tickLimit = 21; w.cpu.used = 1.5;
+    w.game.map.getRoomStatus = () => { throw new Error('lightweight scanning cannot query status'); };
+    w.game.map.findRoute = () => { throw new Error('lightweight scanning cannot route'); };
+    const options = { candidateOnly: true, nearestOnly: true, minimumCpuHeadroom: 2,
+        maximumPlanningCpu: 0.75, maximumLocalRouteChecks: 0, maximumCandidates: 8 };
+    assert.deepEqual(copy(w.getExplorationRooms('E41N8', [], [], options)), ['E40N10']);
+    w.avoided.push('E40N10');
+    const next = w.getExplorationRooms('E41N8', ['E40N0'], [], options);
+    assert.equal(next.length, 1); assert.notEqual(next[0], 'E40N10'); assert.notEqual(next[0], 'E40N0');
+    w.cpu.used = 20;
+    assert.deepEqual(copy(w.getExplorationRooms('E41N8', [], [], options)), []);
+    assert.equal(w.isExplorationPlanningDeferred(), true);
+});
+
 test('exploration helpers import without Game and shard heuristics never invent a portal hop', () => {
     const loader = createSourceLoader();
     const api = loader.load('shard/explorationRoutes');
