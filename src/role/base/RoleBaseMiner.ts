@@ -1,4 +1,5 @@
 import { getDistance } from "utils"
+import { cpuRecoveryWorkDue, hasPendingRoomBoost } from 'runtime/cpuRecovery'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -8,17 +9,15 @@ export default (data: CreepData): ICreepConfig => ({
         return true
     },
     source(creep) {
-        const creepData: MineralData = data as MineralData
-        const sourceTarget = Game.getObjectById<Mineral>(creepData.sourceId)
-        if (!sourceTarget) {
-            return false
-        }
-
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() == 0) {
             creep.memory.working = true
             return false
         }
+        if (!cpuRecoveryWorkDue(creep.room.name, 'mineral') && !hasPendingRoomBoost(creep.room)) return false
+        const creepData: MineralData = data as MineralData
+        const sourceTarget = Game.getObjectById<Mineral>(creepData.sourceId)
+        if (!sourceTarget) return false
 
         // 矿旁有容器时固定站在容器上，已在矿旁也要调整站位。
         const container = creep.room.containers.find(candidate => sourceTarget.pos.isNearTo(candidate))

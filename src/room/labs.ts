@@ -4,6 +4,7 @@ import { getRoomProcessors } from 'runtime/creepIndex'
 import { reactionConfig, reactionSource } from 'settings/labs'
 import { roomPolicy } from 'settings/roomPolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
+import { cpuRecoveryInterval, hasPendingRoomBoost } from 'runtime/cpuRecovery'
 
 /** Only this update's immutable game snapshot is reused; no data survives the call. */
 function createReactionResourceReader(room: Room): (resource: ResourceConstant) => number {
@@ -33,8 +34,10 @@ function hasReactionReagents(
 }
 
 export function updateLabReactionConfig(room: Room): void {
+    const interval = hasPendingRoomBoost(room) ? roomPolicy.labs.updateInterval :
+        cpuRecoveryInterval('labPlanning', roomPolicy.labs.updateInterval)
     if (
-        !roomWorkDue(room.name, roomPolicy.labs.updateInterval, roomPolicy.labs.staggerUpdates === true) ||
+        !roomWorkDue(room.name, interval, roomPolicy.labs.staggerUpdates === true) ||
         room.labs.length == 0
     )
         return

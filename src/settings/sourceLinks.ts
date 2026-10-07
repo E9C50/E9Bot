@@ -4,4 +4,5 @@ export const sourceLinkPolicy = {
     sourceRange: 2,
     containerRange: 1,
     inspectionInterval: 10,
+    maximumCachedRooms: 128,
 }

@@ -11,9 +11,53 @@ interface LinkIndex {
     terrain: RoomTerrain
     sources: Source[]
     selected: Map<string, StructureLink | undefined>
+    active: Map<string, boolean>
+    seats: Map<string, number>
 }
 const indexes = new WeakMap<Room, LinkIndex>()
 const tile = (x: number, y: number): number => x * 50 + y
+
+interface StaticLinkCache {
+    signature: string
+    active: Map<string, boolean>
+    seats: Map<string, number>
+}
+// Native Room/Source/Structure objects expire each tick. Only IDs, coordinates and booleans live here.
+const staticIndexes = new Map<string, StaticLinkCache>()
+let staticShard: string | undefined
+let staticTick: number | undefined
+
+function staticIndex(room: Room, links: StructureLink[], shard: string): { cache: StaticLinkCache; cacheActive: boolean } {
+    if (staticShard !== shard || staticTick !== undefined && Game.time < staticTick) staticIndexes.clear()
+    staticShard = shard; staticTick = Game.time
+    const maximum = Number.isSafeInteger(sourceLinkPolicy.maximumCachedRooms) && sourceLinkPolicy.maximumCachedRooms > 0 ?
+        sourceLinkPolicy.maximumCachedRooms : 0
+    // Runtime disable/resize applies to existing signatures as well as newly visible rooms.
+    while (staticIndexes.size > maximum) staticIndexes.delete(staticIndexes.keys().next().value)
+    const controller = room.controller
+    // Partial Room adapters cannot prove the native controller activation inputs; keep their live checks.
+    const cacheActive = controller?.my === true && controller.id !== undefined &&
+        controller.owner?.username !== undefined && Number.isInteger(controller.level)
+    let signature = `${controller?.id}/${controller?.level}/${controller?.my}/${controller?.owner?.username}/${controller?.pos.x}/${controller?.pos.y}`
+    // Link order matters for equal-distance ties in the engine's controller quota calculation.
+    for (const link of links) signature += `|${link.id}/${link.pos.x}/${link.pos.y}/${link.my}/${link.owner?.username}`
+    let cache = staticIndexes.get(room.name)
+    if (cache === undefined || cache.signature !== signature) {
+        cache = { signature, active: new Map(), seats: new Map() }
+        staticIndexes.set(room.name, cache)
+        while (staticIndexes.size > maximum) staticIndexes.delete(staticIndexes.keys().next().value)
+    }
+    return { cache, cacheActive }
+}
+
+function linkIsActive(index: LinkIndex, link: StructureLink): boolean {
+    if (link.my === false) return false
+    const previous = index.active.get(link.id)
+    if (previous !== undefined) return previous
+    const active = !link.isActive || link.isActive()
+    index.active.set(link.id, active)
+    return active
+}
 
 function indexFor(room: Room): LinkIndex {
     let index = indexes.get(room)
@@ -27,10 +71,12 @@ function indexFor(room: Room): LinkIndex {
     for (const item of room.links || room.structures || room.find(FIND_STRUCTURES)) {
         if (item.structureType !== STRUCTURE_LINK) continue
         const link = item as StructureLink
-        if (link.my !== false && (!link.isActive || link.isActive())) links.push(link)
+        links.push(link)
     }
+    const { cache, cacheActive } = staticIndex(room, links, shard)
     index = { tick: Game.time, shard, links,
-        terrain: room.getTerrain(), blocked, sources, selected: new Map(), checkedSeats: new Map() }
+        terrain: room.getTerrain(), blocked, sources, selected: new Map(), checkedSeats: new Map(),
+        active: cacheActive ? cache.active : new Map(), seats: cache.seats }
     indexes.set(room, index)
     return index
 }
@@ -65,9 +111,18 @@ export function sourceLink(room: Room, source: Source): StructureLink | undefine
     if (index.selected.has(source.id)) return index.selected.get(source.id)
     for (const link of index.links) {
         if (Math.max(Math.abs(source.pos.x - link.pos.x), Math.abs(source.pos.y - link.pos.y)) > sourceLinkPolicy.sourceRange) continue
+        if (!linkIsActive(index, link)) continue
+        const seatKey = `${source.id}/${source.pos.x}/${source.pos.y}/${link.id}`
+        const previous = index.seats.get(seatKey)
+        if (previous !== undefined && seatIsOpen(room, index, Math.floor(previous / 50), previous % 50)) {
+            index.selected.set(source.id, link)
+            return link
+        }
+        index.seats.delete(seatKey)
         for (let x = Math.max(1, source.pos.x - 1); x <= Math.min(48, source.pos.x + 1); x++) {
             for (let y = Math.max(1, source.pos.y - 1); y <= Math.min(48, source.pos.y + 1); y++) {
                 if (Math.max(Math.abs(x - link.pos.x), Math.abs(y - link.pos.y)) > 1 || !seatIsOpen(room, index, x, y)) continue
+                index.seats.set(seatKey, tile(x, y))
                 index.selected.set(source.id, link)
                 return link
             }
@@ -81,8 +136,11 @@ export function sourceLink(room: Room, source: Source): StructureLink | undefine
 export function hasSourceLinkTransport(room: Room, source: Source, buffer?: StructureLink | StructureContainer): boolean {
     const origin = sourceLink(room, source)
     if (origin === undefined) return false
+    const index = indexFor(room)
     const receiver = (target: StructureLink | undefined): boolean => target !== undefined && target.id !== origin.id &&
-        target.my !== false && (!target.isActive || target.isActive())
+        // An adapter-supplied receiver outside the complete Link list cannot share its topology proof.
+        (index.links.some(link => link.id === target.id) ? linkIsActive(index, target) :
+            target.my !== false && (!target.isActive || target.isActive()))
     const storage = room.storage
     if (storage !== undefined && storage.my !== false && (!storage.isActive || storage.isActive()) && receiver(room.centerLink)) return true
     return receiver(buffer?.structureType === STRUCTURE_LINK ? buffer as StructureLink : room.controllerLink)

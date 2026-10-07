@@ -6,6 +6,10 @@ function resourceStore(values = {}) {
     return new Proxy(values, { get(target, key) { return target[key] ?? 0; } });
 }
 
+function reagent(mineralType, amount = 100) {
+    return { mineralType, store: resourceStore({ A: amount, B: amount }) };
+}
+
 function world() {
     const members = {};
     let enumerations = 0;
@@ -15,7 +19,9 @@ function world() {
     };
     class Room { constructor(name) { this.name = name; } }
     const loader = createSourceLoader({
-        globals: { Room, StructureLab: class {}, Game: game, RESOURCE_ENERGY: 'energy' },
+        globals: { Room, StructureLab: class {}, Game: game, RESOURCE_ENERGY: 'energy',
+            REACTIONS: { A: { B: 'product' }, B: { A: 'product' } }, LAB_REACTION_AMOUNT: 5,
+            PWR_OPERATE_LAB: 5, POWER_INFO: { 5: { effect: [2, 4, 6, 8, 10] } } },
         modules: {
             'settings/creep': { roleAdvEnum: { PROCESSER: 'processer' } },
             'settings/settings': { STRUCTURE_PRIVATEKEY_PERFIX: '_', STRUCTURE_MEMORYKEY_PERFIX: 'IDOF_', creepWhiteList: [] },
@@ -45,7 +51,7 @@ function world() {
     function createLab(room, id) {
         const lab = new LabExtension();
         Object.assign(lab, {
-            id, room, store: resourceStore({ getFreeCapacity: () => 0 }), mineralType: undefined
+            id, room, store: resourceStore({ getFreeCapacity: resource => resource === 'product' ? 3000 : 0 }), mineralType: undefined
         });
         return lab;
     }
@@ -64,9 +70,9 @@ test('a destroyed reagent Lab pauses reactions until fresh configured IDs resolv
     let reactions = 0;
     lab.runReaction = () => reactions++;
     let source = null;
-    state.game.getObjectById = id => id === 'lab0' ? source : { mineralType: 'B' };
+    state.game.getObjectById = id => id === 'lab0' ? source : reagent('B');
     assert.doesNotThrow(() => lab.doWork()); assert.equal(reactions, 0);
-    source = { mineralType: 'A' }; state.game.time++;
+    source = reagent('A'); state.game.time++;
     lab.doWork(); assert.equal(reactions, 1);
     state.game.time++;
     state.game.getObjectById = id => id === 'lab1' ? null : source;
@@ -81,7 +87,7 @@ test('eleven ten-lab rooms resolve each reaction pair once while preserving all 
         const room = state.createRoom(`W${index + 1}N1`);
         const config = room.memory.roomLabConfig;
         config.sourceLab1 = `${room.name}-source1`; config.sourceLab2 = `${room.name}-source2`;
-        objects[config.sourceLab1] = { mineralType: 'A' }; objects[config.sourceLab2] = { mineralType: 'B' };
+        objects[config.sourceLab1] = reagent('A'); objects[config.sourceLab2] = reagent('B');
         for (let output = 0; output < 8; output++) {
             const lab = state.createLab(room, `${room.name}-${output}`);
             lab.cooldown = 0;
@@ -103,7 +109,7 @@ test('eleven ten-lab rooms resolve each reaction pair once while preserving all 
 
 test('reaction pairs refresh changed IDs immediately and keep reagent values live in the current tick', () => {
     const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
-    const first = { mineralType: undefined }, second = { mineralType: 'B' }, replacement = { mineralType: 'A' };
+    const first = reagent(undefined), second = reagent('B'), replacement = reagent('A');
     const objects = { lab0: first, lab1: second, replacement };
     let lookups = 0;
     const reactions = [];
@@ -116,10 +122,53 @@ test('reaction pairs refresh changed IDs immediately and keep reagent values liv
     assert.equal(lookups, 4); assert.equal(reactions[1][0], replacement);
     room.memory.roomLabConfig.sourceLab2 = 'missing'; lab.doWork(); lab.doWork();
     assert.equal(lookups, 6); assert.equal(reactions.length, 2, 'a missing configured reagent is safe and resolved only once this tick');
-    objects.missing = { mineralType: 'B' }; state.game.time++; lab.doWork();
+    objects.missing = reagent('B'); state.game.time++; lab.doWork();
     assert.equal(lookups, 8); assert.equal(reactions[2][1], objects.missing, 'the next tick sees a replacement at the previously missing ID');
     state.game.shard.name = 'second'; lab.doWork();
     assert.equal(lookups, 10, 'same-tick shard changes cannot reuse another shard snapshot');
+});
+
+test('reaction guards avoid native calls for shortages and full output, then resume from live stores', () => {
+    const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
+    const first = reagent('A', 4), second = reagent('B', 5);
+    state.game.getObjectById = id => id === 'lab0' ? first : second;
+    let reactions = 0, free = 5;
+    lab.cooldown = 0; lab.store.getFreeCapacity = () => free;
+    lab.runReaction = () => reactions++;
+    lab.doWork(); assert.equal(reactions, 0);
+    first.store.A = 5; second.store.B = 4;
+    lab.doWork(); assert.equal(reactions, 0);
+    second.store.B = 5; free = 4;
+    lab.doWork(); assert.equal(reactions, 0);
+    free = null; lab.doWork(); assert.equal(reactions, 0);
+    free = 5; lab.doWork(); assert.equal(reactions, 1, 'exact native batch succeeds without a new tick');
+});
+
+test('reaction compatibility rejects one mismatched reagent and accepts reverse reagent ordering', () => {
+    const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
+    const first = reagent('A'), second = reagent('invalid');
+    state.game.getObjectById = id => id === 'lab0' ? first : second;
+    let reactions = 0;
+    lab.cooldown = 0; lab.runReaction = () => reactions++;
+    lab.mineralType = 'product';
+    lab.doWork(); assert.equal(reactions, 0, 'one matching reagent is insufficient');
+    first.mineralType = 'B'; second.mineralType = 'A';
+    lab.doWork(); assert.equal(reactions, 1);
+    lab.mineralType = 'other'; lab.doWork(); assert.equal(reactions, 1, 'an incompatible output cannot receive product');
+});
+
+test('operated Labs check the larger native batch and ignore expired effects', () => {
+    const state = world(), room = state.createRoom('W1N1'), lab = state.createLab(room, 'output');
+    const first = reagent('A', 14), second = reagent('B', 15);
+    state.game.getObjectById = id => id === 'lab0' ? first : second;
+    let reactions = 0, free = 15;
+    lab.cooldown = 0; lab.store.getFreeCapacity = () => free; lab.runReaction = () => reactions++;
+    lab.effects = [{ effect: 5, level: 5, ticksRemaining: 1 }];
+    lab.doWork(); assert.equal(reactions, 0);
+    first.store.A = 15; free = 14; lab.doWork(); assert.equal(reactions, 0);
+    free = 15; lab.doWork(); assert.equal(reactions, 1);
+    first.store.A = 5; second.store.B = 5; free = 5;
+    lab.effects[0].ticksRemaining = 0; lab.doWork(); assert.equal(reactions, 2);
 });
 
 test('two rooms and multiple resource queries enumerate processors once per tick and read live stores', () => {

@@ -12,7 +12,8 @@ function world() {
             centerResourceSales: [], centerTerminalResources: ['X'] } } });
     const rooms = ['E31N2', 'E34N3', 'E35N1', 'E35N3', 'E36N2', 'E37N7', 'E38N5', 'E38N6', 'E41N7', 'E41N8', 'E37N5']
         .map(name => ({ name, storage: { store: { energy: 700000 } }, terminal: { cooldown: 0 }, memory: { terminalAmount: {} } }));
-    return { game, policy, rooms, ...loader.load('room/market'), queries: () => queries };
+    return { game, policy, rooms, ...loader.load('room/market'), queries: () => queries,
+        recovery: loader.load('settings/runtime').runtimePolicy.cpuRecovery };
 }
 
 test('market scans once per room in 25 ticks, spreads queries and refreshes central reserves every tick', () => {
@@ -42,4 +43,19 @@ test('direct selling remains immediate and scheduled scans still respect fresh c
     room.terminal.cooldown = 0;
     for (let tick = 51; tick <= 75; tick++) { w.game.time = tick; w.processRoomMarket(room); }
     assert.equal(w.queries(), 2);
+});
+
+test('empty-bucket market scans remain periodic and keep central resource reserves fresh', () => {
+    const w = world();
+    w.game.cpu = { bucket: 0 };
+    for (let tick = 1; tick <= 250; tick++) {
+        w.game.time = tick;
+        w.rooms[0].memory.terminalAmount.X = 0;
+        for (const room of w.rooms) w.processRoomMarket(room);
+        assert.equal(w.rooms[0].memory.terminalAmount.X, 5000);
+    }
+    assert.equal(w.queries(), 11);
+    w.recovery.enabled = false;
+    for (let tick = 251; tick <= 275; tick++) { w.game.time = tick; for (const room of w.rooms) w.processRoomMarket(room); }
+    assert.equal(w.queries(), 22, 'disabling recovery immediately restores the normal scan interval');
 });

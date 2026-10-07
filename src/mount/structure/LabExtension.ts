@@ -55,15 +55,24 @@ export default class LabExtension extends StructureLab {
         const { first: lab1, second: lab2 } = sourcePair(this.room, sourceLab1, sourceLab2)
         if (lab1 == undefined || lab2 == undefined) return
 
-        // 如果两个lab中有一个没有物质，就跳过
-        if (lab1.mineralType == undefined || lab2.mineralType == undefined) return
+        const firstType = lab1.mineralType, secondType = lab2.mineralType
+        if (firstType == null || secondType == null) return
+        const product = REACTIONS[firstType]?.[secondType]
+        const outputType = this.mineralType
+        if (product === undefined || outputType != null && outputType !== product) return
 
-        // 如果Lab有物质，但是两个SourceLab的物质不匹配，就跳过
-        const reactionSourceList = this.mineralType ? reactionSource[this.mineralType] : []
-
-        if (this.mineralType != undefined &&
-            (lab1.mineralType != undefined && lab1.mineralType != reactionSourceList[0]) &&
-            (lab2.mineralType != undefined && lab2.mineralType != reactionSourceList[1])) return
+        // Native runReaction checks room-wide RCL allocation even for empty/full labs.
+        // Read live stores first; operated labs consume a larger batch of both reagents.
+        let amount = LAB_REACTION_AMOUNT
+        for (const effect of this.effects || []) {
+            if (effect.effect === PWR_OPERATE_LAB && effect.ticksRemaining > 0 && 'level' in effect) {
+                amount += POWER_INFO[PWR_OPERATE_LAB].effect[effect.level - 1]
+                break
+            }
+        }
+        const capacity = this.store.getFreeCapacity(product)
+        if (lab1.store[firstType] < amount || lab2.store[secondType] < amount ||
+            capacity === null || capacity < amount) return
 
         this.runReaction(lab1, lab2);
     }

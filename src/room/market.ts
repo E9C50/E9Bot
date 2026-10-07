@@ -5,6 +5,7 @@ import {
     roomResourceSales,
 } from 'settings/roomPolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
+import { cpuRecoveryInterval } from 'runtime/cpuRecovery'
 
 export function sellResource(
     room: Room,
@@ -58,7 +59,7 @@ export function sellResource(
 
 /** 保持原出售尝试顺序；资源种类、阈值、价格和批次数量来自配置。 */
 export function processRoomMarket(room: Room): void {
-    const due = roomWorkDue(room.name, roomPolicy.market.scanInterval, roomPolicy.market.staggerScans)
+    const due = roomWorkDue(room.name, cpuRecoveryInterval('market', roomPolicy.market.scanInterval), roomPolicy.market.staggerScans)
     if (due) for (const sale of roomResourceSales)
         sellResource(
             room,

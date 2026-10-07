@@ -234,7 +234,7 @@ test('station resolution shares the room index and prepare/run lookup', () => {
     for (let index = 0; index < 5; index++) w.structure(`distant-${index}`, 'link', 30 + index, 30);
     const link = w.structure('source-link', 'link', 11, 11);
     for (let index = 0; index < 19; index++) w.tick();
-    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 19 * 6);
+    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 19, 'distant Links never need controller quota scans');
     assert.equal(link.activeChecks, 19);
 });
 
