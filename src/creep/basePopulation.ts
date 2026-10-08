@@ -91,7 +91,8 @@ export function releaseBaseCreepConfig(): void {
 
         // 根据矿产情况发布矿工
         room.sources.forEach((source) => {
-            if (source.energy == 0) return
+            // Batch miners spend most of a regeneration cycle waiting on an empty Source.
+            // Preserve their permanent birth slot so death while waiting can be replaced immediately.
             // 三级之后每个矿一个矿工
             const canHarvesterPos = room.level > populationPolicy.base.singleHarvesterAfterLevel ? 1 : Math.min(
                 source.pos.getFreeSpace().length,

@@ -7,6 +7,7 @@ interface RoomDelivery { room: Room; structures: AnyStoreStructure[]; workers?: 
 let tick = -1, shard = ''
 const rooms = new Map<string, RoomDelivery>()
 const committed = new Map<string, number>()
+let activation = new WeakMap<Receiver, boolean>()
 
 /** Haulers have no fixed work tile; every action, including idle and mineral work, must yield. */
 export function withHaulerTraffic(behavior: ICreepConfig): ICreepConfig {
@@ -33,6 +34,7 @@ export function withHaulerTraffic(behavior: ICreepConfig): ICreepConfig {
 function sync(): void {
     if (tick === Game.time && shard === Game.shard.name) return
     tick = Game.time; shard = Game.shard.name; rooms.clear(); committed.clear()
+    activation = new WeakMap()
 }
 
 function range(first: RoomPosition, second: RoomPosition): number {
@@ -40,9 +42,17 @@ function range(first: RoomPosition, second: RoomPosition): number {
 }
 
 function free(target: Receiver | undefined): number {
-    if (!target || 'structureType' in target && target.structureType === STRUCTURE_LINK || (target as OwnedStructure).my === false ||
-        'isActive' in target && !target.isActive()) return 0
-    return Math.max(0, target.store.getFreeCapacity(RESOURCE_ENERGY) - (committed.get(target.id) || 0))
+    if (!target || 'structureType' in target && target.structureType === STRUCTURE_LINK || (target as OwnedStructure).my === false) return 0
+    const capacity = Math.max(0, target.store.getFreeCapacity(RESOURCE_ENERGY) - (committed.get(target.id) || 0))
+    if (capacity <= 0) return 0
+    // Activation may scan every structure in the room. Share only this tick's result,
+    // while capacity and transfer commitments remain live for every carrier.
+    if ('isActive' in target) {
+        let active = activation.get(target)
+        if (active === undefined) { active = target.isActive(); activation.set(target, active) }
+        if (!active) return 0
+    }
+    return capacity
 }
 
 function inventory(room: Room): RoomDelivery {

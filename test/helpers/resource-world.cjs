@@ -11,7 +11,7 @@ function store(values = {}, capacity = 1000000) {
     return result;
 }
 
-function world(time = 30, policyOverrides = {}) {
+function world(time = 31, policyOverrides = {}) {
     const game = { time, shard: { name: 'shard3' }, rooms: {}, creeps: {},
         market: { calcTransactionCost: amount => Math.ceil(amount * 0.1) } };
     const incoming = new Map(), sends = [], logs = [];

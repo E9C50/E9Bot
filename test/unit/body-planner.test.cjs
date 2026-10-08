@@ -116,6 +116,43 @@ test('every role and terrain obey budget, native part names and the 50-part maxi
     assert.equal(w.calls.length, 0, 'explicit native bodies never inspect laboratories');
 });
 
+test('oversized worker CARRY preferences retain useful complete bodies instead of falling back to a tiny worker', () => {
+    const w = world({ level: 4, capacity: 1300 });
+    const plan = w.planCreepBody(w.room, config('upgrader', {
+        workParts: 20, carryParts: 25, maximumCost: 12900, terrain: 'plain', boostTier: 0,
+    }));
+    assert.equal(count(plan.body, 'work'), 5);
+    assert.equal(count(plan.body, 'carry'), 5);
+    assert.equal(count(plan.body, 'move'), 10);
+    assert.equal(cost(plan.body), 1250, 'one more WORK with its normal carrying load and full-speed MOVE exceeds room capacity');
+    const smallCarry = w.planCreepBody(w.room, config('upgrader', {
+        workParts: 3, carryParts: 1, maximumCost: 700, terrain: 'plain', boostTier: 0,
+    }));
+    assert.equal(count(smallCarry.body, 'work'), 3);
+    assert.equal(count(smallCarry.body, 'carry'), 1, 'an affordable explicit small inventory does not grow to the default ratio');
+    assert.ok(cost(smallCarry.body) <= 700);
+    w.room.energyCapacityAvailable = 200;
+    const emergency = w.planCreepBody(w.room, config('upgrader', { workParts: 20, carryParts: 25, terrain: 'plain', boostTier: 0 }));
+    assert.equal(cost(emergency.body), 200, 'the empty-room bootstrap still has its slower native fallback');
+});
+
+test('source CARRY preferences can shrink only while retaining four actual harvest batches', () => {
+    const w = world({ level: 4, capacity: 1300 });
+    const cfg = config('harvester', { stationary: true, workParts: 20, carryParts: 25, terrain: 'plain', boostTier: 0 });
+    const plan = w.planCreepBody(w.room, cfg);
+    assert.equal(count(plan.body, 'work'), 8);
+    assert.equal(count(plan.body, 'carry'), 2);
+    assert.equal(count(plan.body, 'move'), 8);
+    assert.equal(cost(plan.body), 1300);
+    assert.ok(count(plan.body, 'carry') * 50 >= count(plan.body, 'work') * 2 * 4);
+    w.room.energyCapacityAvailable = 12900;
+    const bounded = w.planCreepBody(w.room, config('harvester', {
+        stationary: true, workParts: 20, carryParts: 1, terrain: 'plain', boostTier: 0,
+    }));
+    assert.equal(count(bounded.body, 'carry'), 1);
+    assert.equal(count(bounded.body, 'work'), 6, 'an explicit one-CARRY cap cannot support a seventh four-batch WORK');
+});
+
 test('boost previews remain legal and accurately count every proposed compound across roles and budgets', () => {
     const w = world();
     for (const role of Object.keys(w.loader.load('settings/creep').bodyConfigs)) {
@@ -243,19 +280,20 @@ test('native hub manager plans all 50 parts even when its replacement must wait 
     assert.equal(cost(plan.body), 2500);
 });
 
-test('source work respects regeneration, neutral capacity and native harvest compounds', () => {
+test('source miners budget large harvest batches instead of limiting WORK to average regeneration income', () => {
     const w = world();
     const source = { id: 'source', room: w.room, energyCapacity: 3000, pos: position(10, 10) };
     w.objects.set(source.id, source);
     w.room.containers.push({ pos: position(10, 11) });
-    for (const [tier, work] of [[0, 5], [1, 2], [2, 1], [3, 1]]) {
+    for (const [tier, work] of [[0, 23], [1, 28], [2, 30], [3, 32]]) {
         const plan = w.previewCreepBody(w.room, config('harvester', { terrain: 'plain' }, { sourceId: source.id }), tier);
         assert.equal(count(plan.body, 'work'), work);
-        assert.equal(count(plan.body, 'carry'), 1);
+        assert.ok(count(plan.body, 'carry') * 50 * [1, 2, 3, 4][tier] >= work * 2 * [1, 3, 5, 7][tier] * 4);
         assert.equal(count(plan.body, 'move'), Math.ceil(work / [1, 2, 3, 4][tier]), 'travel excludes empty CARRY only');
     }
     source.energyCapacity = 1500;
-    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'work'), 3);
+    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'work'), 30,
+        'a smaller regeneration batch takes fewer actions; it does not require a smaller worker');
     source.energyCapacity = 3000;
     assert.equal(count(w.previewCreepBody(w.room, config('harvester', { workParts: 2 }, { sourceId: source.id }), 0).body, 'work'), 2);
 });
@@ -265,42 +303,45 @@ test('source without a confirmed station keeps carrying capacity and loaded move
     const source = { id: 'source', room: w.room, energyCapacity: 3000, pos: position(10, 10) };
     w.objects.set(source.id, source);
     const plan = w.planCreepBody(w.room, config('harvester', { terrain: 'plain' }, { sourceId: source.id }));
-    assert.equal(count(plan.body, 'work'), 5);
-    assert.equal(count(plan.body, 'carry'), 10);
-    assert.equal(count(plan.body, 'move'), 15);
+    assert.equal(count(plan.body, 'work'), 8);
+    assert.equal(count(plan.body, 'carry'), 16);
+    assert.equal(count(plan.body, 'move'), 24);
 });
 
-test('active PowerCreep source regeneration adds its period output before harvest boosts and WORK bounds', () => {
+test('large source bodies cover powered regeneration without rebuilding smaller bodies when effects expire', () => {
     const w = world();
     const source = { id: 'powered-source', room: w.room, energyCapacity: 3000, pos: position(10, 10),
         effects: [{ effect: 13, level: 5, ticksRemaining: 200 }] };
     w.objects.set(source.id, source);
     w.room.containers.push({ pos: position(10, 11) });
     const cfg = config('harvester', { terrain: 'road' }, { sourceId: source.id });
-    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'work'), 14);
-    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'carry'), 2, 'old batch and new batch both fit');
-    assert.equal(count(w.previewCreepBody(w.room, cfg, 1).body, 'work'), 5);
-    assert.equal(count(w.previewCreepBody(w.room, cfg, 3).body, 'work'), 2);
+    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'work'), 30);
+    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'carry'), 5, 'four native harvest batches fit');
+    assert.equal(count(w.previewCreepBody(w.room, cfg, 1).body, 'work'), 33);
+    assert.equal(count(w.previewCreepBody(w.room, cfg, 3).body, 'work'), 35);
     assert.equal(count(w.previewCreepBody(w.room, { ...cfg, bodyProfile: { workParts: 6 } }, 0).body, 'work'), 6);
     source.effects[0].ticksRemaining = 0;
-    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'work'), 5);
+    assert.equal(count(w.previewCreepBody(w.room, cfg, 0).body, 'work'), 30);
 });
 
 test('stationary source boost plans request only compounds required by selected physical WORK and capacity', () => {
-    const w = world({ prepare: plan => plan.steps.every(step => step.type === 'boostHarvest') });
+    const w = world({ prepare: () => true });
     const source = { id: 'source', room: w.room, energyCapacity: 3000, pos: position(10, 10) };
     w.objects.set(source.id, source);
     w.room.containers.push({ pos: position(10, 11) });
-    const cfg = config('harvester', { terrain: 'road', boostTier: 3 }, { sourceId: source.id });
+    const cfg = config('harvester', { terrain: 'road', boostTier: 1, workParts: 1 }, { sourceId: source.id });
     const plain = w.planCreepBody(w.room, cfg);
-    assert.equal(plain.boostPlan.tier, 3, 'XUHO2 alone prepares the 1WORK/1CARRY/1MOVE station miner');
+    assert.equal(plain.boostPlan.tier, 1, 'the explicitly small 1WORK body only benefits from its harvest compound');
     assert.deepEqual(Array.from(plain.boostPlan.steps, step => step.type), ['boostHarvest']);
     source.effects = [{ effect: 13, level: 5, ticksRemaining: 200 }];
     const powered = w.previewCreepBody(w.room, cfg, 3);
-    assert.equal(count(powered.body, 'work'), 2);
+    assert.equal(count(powered.body, 'work'), 1);
     assert.equal(count(powered.body, 'carry'), 1);
     assert.equal(count(powered.body, 'move'), 1);
     assert.deepEqual(Array.from(powered.boostPlan.steps, step => step.type), ['boostHarvest', 'boostCarry']);
+    const full = w.previewCreepBody(w.room, config('harvester', { terrain: 'road' }, { sourceId: source.id }), 3);
+    assert.equal(full.body.length, 50);
+    assert.deepEqual(Array.from(full.boostPlan.steps, step => step.type), ['boostMove', 'boostHarvest', 'boostCarry']);
     const manager = w.previewCreepBody(w.room, config('manager'), 3);
     assert.deepEqual(Array.from(manager.boostPlan.steps, step => step.type), ['boostCarry']);
 });
@@ -312,9 +353,9 @@ test('nearby source/controller buffers are stationary only when a permanent shar
     w.room.links.push({ my: true, pos: position(12, 10) });
     // The only shared x=11 column is rock. A link within range 2 is insufficient by itself.
     w.room.getTerrain = () => ({ get: (x) => x === 11 ? 1 : 0 });
-    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'carry'), 10);
+    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'carry'), 22);
     w.room.getTerrain = () => ({ get: () => 0 });
-    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'carry'), 1);
+    assert.equal(count(w.previewCreepBody(w.room, config('harvester', {}, { sourceId: source.id }), 0).body, 'carry'), 5);
     const supply = { id: 'supply', store: {}, pos: position(24, 20) };
     w.objects.set(supply.id, supply);
     w.room.lookForAt = (_type, x) => x === 23 ? [{ structureType: 'storage' }] : [];
@@ -337,12 +378,15 @@ test('one-MOVE scouts and plain claimers do not request useless MOVE compounds',
 test('mineral mining keeps large WORK, cooldown-sized batches and loaded movement', () => {
     const w = world();
     const plan = w.previewCreepBody(w.room, config('miner', { terrain: 'road' }), 0);
-    assert.equal(count(plan.body, 'work'), 20);
-    assert.equal(count(plan.body, 'carry'), 10);
-    assert.equal(count(plan.body, 'move'), 15);
+    assert.equal(plan.body.length, 50);
+    assert.equal(count(plan.body, 'work'), 24);
+    assert.equal(count(plan.body, 'carry'), 9);
+    assert.equal(count(plan.body, 'move'), 17);
     const boosted = w.previewCreepBody(w.room, config('miner', { terrain: 'road' }), 3);
-    assert.equal(count(boosted.body, 'work'), 20);
-    assert.ok(count(boosted.body, 'carry') * 50 * 4 >= 20 * 7 / 5 * 40 * 3);
+    assert.equal(boosted.body.length, 50);
+    assert.ok(count(boosted.body, 'work') > count(plan.body, 'work'));
+    assert.ok(count(boosted.body, 'carry') * 50 * 4 >= count(boosted.body, 'work') * 7,
+        'one complete boosted mineral harvest fits the cargo');
 });
 
 test('self-hauling mineral bodies budget travel and choose throughput over blind maximum WORK', () => {

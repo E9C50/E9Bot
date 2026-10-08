@@ -39,67 +39,48 @@ function world() {
         recordTerminalWithdrawal() {}, isWarehouseRoom: () => false,
         getGlobalResourceAmount: resource => (room.storage.store[resource] || 0) +
             (room.terminal.store[resource] || 0) + (factory.store[resource] || 0),
+        createResourceInventory: () => ({ globalAmount: resource => (room.storage.store[resource] || 0) +
+            (room.terminal.store[resource] || 0) + (factory.store[resource] || 0) }),
     } } });
     const api = loader.load('room/factory');
-    const due = () => loader.load('runtime/cpuRecovery').cpuRecoveryWorkDue(room.name, 'factoryPlanning');
-    const offDue = () => { while (due()) game.time++; };
-    return { room, factory, game, loader, api, scans, due, offDue };
+    return { room, factory, game, loader, api, scans };
 }
 
-test('factory recovery scans recipes only on its room phase while preserving running batches and reservations', () => {
+test('factory plans every tick even with an empty bucket and keeps reservations current', () => {
     const w = world();
     w.api.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction.resourceType, 'utrium_bar');
     w.game.cpu.bucket = 0;
     w.scans.capacity = 0;
-    let dueCount = 0;
     for (let tick = 1; tick <= 100; tick++) {
         w.game.time = tick;
-        const state = w.room.memory.factoryProduction;
-        const reserve = w.room.memory.productionReserve.factory;
-        const reads = w.scans.resources;
-        const due = w.due();
-        if (due) dueCount++;
         w.api.planFactoryProduction(w.factory);
-        if (!due) {
-            assert.equal(w.scans.resources, reads, 'deferred planning performs no inventory scans');
-            assert.equal(w.room.memory.factoryProduction, state);
-            assert.equal(w.room.memory.productionReserve.factory, reserve, 'terminal exports must retain the batch reservation');
-        }
+        assert.equal(w.room.memory.factoryProduction.resourceType, 'utrium_bar');
+        assert.equal(w.room.memory.productionReserve.factory.U, w.room.memory.factoryProduction.inputs.U);
     }
-    assert.equal(dueCount, 4);
-    assert.equal(w.scans.capacity, 4, '100 ticks perform four complete planning passes instead of 100');
+    assert.equal(w.scans.capacity, 100, 'low CPU does not change the production planning cadence');
 });
 
-test('factory extension and room-controller planning share the recovery gate', () => {
+test('factory extension still prepares a batch with an empty bucket', () => {
     const w = world();
     w.game.cpu.bucket = 0;
-    w.offDue();
-    w.api.planFactoryProduction(w.factory);
     w.loader.load('mount/structure/FactoryExtension').default.prototype.init.call(w.factory);
-    assert.equal(w.scans.capacity, 0);
-    assert.equal(w.room.memory.factoryProduction, undefined);
-    while (!w.due()) w.game.time++;
-    w.loader.load('mount/structure/FactoryExtension').default.prototype.init.call(w.factory);
+    assert.equal(w.scans.capacity, 1);
     assert.equal(w.room.memory.factoryProduction.resourceType, 'utrium_bar');
 });
 
-test('normal bucket immediately restores commodity preemption without waiting for the recovery phase', () => {
+test('newly available commodities preempt compression immediately even with an empty bucket', () => {
     const w = world();
     w.api.planFactoryProduction(w.factory);
     w.game.cpu.bucket = 0;
-    w.offDue();
     w.room.storage.store.silicon = 1000;
     w.room.storage.store.utrium_bar = 2000;
-    w.api.planFactoryProduction(w.factory);
-    assert.equal(w.room.memory.factoryProduction.mode, 'compression');
-    w.game.cpu.bucket = 1000;
     w.api.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction.resourceType, 'wire');
     assert.equal(w.room.memory.factoryProduction.mode, 'commodity');
 });
 
-test('invalid factories clear batch and reservations immediately even when recovery planning is deferred', () => {
+test('invalid factories clear batch and reservations immediately with an empty bucket', () => {
     const invalidate = [
         w => { w.room.memory.evacuation = {}; },
         w => { w.factory.my = false; },
@@ -112,7 +93,6 @@ test('invalid factories clear batch and reservations immediately even when recov
         w.api.planFactoryProduction(w.factory);
         w.room.memory.productionReserve.lab = { U: 1000 };
         w.game.cpu.bucket = 0;
-        w.offDue();
         change(w);
         w.api.planFactoryProduction(w.factory);
         assert.equal(w.room.memory.factoryProduction, undefined);

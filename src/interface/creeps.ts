@@ -101,6 +101,8 @@ interface CreepMemory {
     /** Spawn-selected compounds; tier 0 explicitly opts out of legacy role boosts. */
     boostPlan?: CreepBoostPlan
     development?: {
+        /** Automatic work quotas constrain scheduling, while spawning uses the full capacity body. */
+        fullBody?: boolean
         workParts?: number
         carryParts?: number
         travelTicks?: number

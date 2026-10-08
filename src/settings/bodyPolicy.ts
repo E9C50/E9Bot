@@ -4,15 +4,15 @@ export const bodyPolicy = {
     terrainFatigue: { road: 1, plain: 2, swamp: 10 },
     boost: { timeoutTicks: 300, logFailures: true },
     economy: {
-        maximumWorkerWorkParts: 20,
+        maximumWorkerWorkParts: 40,
         mobileCarryPerWork: 2,
         mobileUpgraderCarryPerWork: 1,
         stationaryEnergyTicks: 4,
-        sourceCarryBatches: 2,
+        sourceCarryBatches: 4,
         minimumCarryParts: 1,
         // A stationary mature hub uses the full native body: 49 CARRY + 1 MOVE.
         managerCarryParts: 49,
-        maximumMineralWorkParts: 20,
+        maximumMineralWorkParts: 40,
         mineralCarryPerWork: 0.5,
         mineralTravelMargin: 1.3,
         mineralFallbackRoundTripTicks: 40,

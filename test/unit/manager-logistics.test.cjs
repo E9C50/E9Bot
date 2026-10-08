@@ -15,13 +15,14 @@ function store(resources = {}, capacity = 300000) {
 
 function world({ terminal = {}, storage = { energy: 200000 }, goals = {}, carried = {},
     terminalCapacity = 300000, storageCapacity = 1000000, link, factory = () => false,
-    incoming = 0, terminalDebits = {} } = {}) {
+    incoming = 0, terminalDebits = {}, sources, energyCapacity = 12300, creepCapacity = 2450, ticksToLive = 1400 } = {}) {
     const calls = [], factoryCalls = [];
-    const room = { name: 'W1N1', memory: { terminalAmount: { ...goals } },
+    const room = { name: 'W1N1', memory: { terminalAmount: { ...goals } }, energyCapacityAvailable: energyCapacity,
+        ...(sources === undefined ? {} : { sources }),
         storage: { id: 'storage', store: store(storage, storageCapacity) },
         terminal: { id: 'terminal', store: store(terminal, terminalCapacity) },
         ...(link === undefined ? {} : { centerLink: { id: 'link', store: store({ energy: link }, 800) } }) };
-    const creep = { name: 'manager', room, memory: {}, store: store(carried, 2450),
+    const creep = { name: 'manager', room, memory: {}, ticksToLive, store: store(carried, creepCapacity),
         withdraw: (source, resource, amount) => { calls.push({ action: 'withdraw', id: source.id, resource, amount }); return 0; },
         transfer: (target, resource, amount) => { calls.push({ action: 'transfer', id: target.id, resource, amount }); return 0; } };
     const behavior = createSourceLoader({ globals: { RESOURCE_ENERGY: 'energy', OK: 0 }, modules: {
@@ -155,4 +156,91 @@ test('idle manager accepts adjacent factory work after terminal needs are satisf
     w.run();
     assert.deepEqual(w.calls, []);
     assert.deepEqual(w.factoryCalls, [true]);
+});
+
+test('idle manager coalesces small link arrivals while checking every tick', () => {
+    const w = world({ terminal: { energy: 50000 }, link: 100, sources: [{ energy: 2000 }] });
+    for (const energy of [100, 200, 300, 400, 500]) {
+        w.room.centerLink.store.energy = energy;
+        w.run();
+    }
+    assert.deepEqual(w.calls, [], 'five small arrivals need no successful native carry intents');
+    w.room.centerLink.store.energy = 600;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 600 }]);
+    w.calls.length = 0;
+    w.creep.store.energy = 600;
+    w.room.centerLink.store.energy = 0;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'transfer', id: 'storage', resource: 'energy', amount: 600 }]);
+});
+
+test('low local reserves release small idle link batches immediately', () => {
+    for (const [energyCapacity, energy] of [[300, 9999], [12300, 12000]]) {
+        const w = world({ terminal: { energy: 50000 }, link: 100, sources: [{ energy: 2000 }],
+            storage: { energy }, energyCapacity });
+        w.run();
+        assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 100 }]);
+    }
+});
+
+test('depleted sources and expiring managers flush partial final link batches', () => {
+    for (const option of [{ sources: [{ energy: 0 }, { energy: 0 }] }, { ticksToLive: 2 }]) {
+        const w = world({ terminal: { energy: 50000 }, link: 100, ...option });
+        w.run();
+        assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 100 }]);
+    }
+});
+
+test('small manager bodies drain when an arrival fills their own capacity', () => {
+    const w = world({ terminal: { energy: 50000 }, link: 100, creepCapacity: 100,
+        sources: [{ energy: 2000 }] });
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 100 }]);
+});
+
+test('small link arrivals cannot delay exact terminal or factory logistics', () => {
+    const energy = world({ terminal: { energy: 49999 }, link: 100, sources: [{ energy: 2000 }] });
+    energy.run();
+    assert.deepEqual(energy.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 1 }]);
+    const mineral = world({ terminal: { energy: 50000, XUH2O: 99 }, goals: { XUH2O: 100 }, link: 100,
+        storage: { energy: 200000, XUH2O: 100 }, sources: [{ energy: 2000 }] });
+    mineral.run();
+    assert.deepEqual(mineral.calls, [{ action: 'withdraw', id: 'storage', resource: 'XUH2O', amount: 1 }]);
+    const factory = world({ terminal: { energy: 50000 }, link: 100, sources: [{ energy: 2000 }], factory: () => true });
+    factory.run();
+    assert.deepEqual(factory.calls, []);
+    assert.deepEqual(factory.factoryCalls, [true]);
+});
+
+test('twelve small arrivals deliver the same 1200 energy in four successful carry actions', () => {
+    const w = world({ terminal: { energy: 50000 }, link: 0, sources: [{ energy: 2000 }] });
+    const initial = w.room.storage.store.energy;
+    let maximumLink = 0;
+    function tick(arrival) {
+        w.room.centerLink.store.energy += arrival;
+        maximumLink = Math.max(maximumLink, w.room.centerLink.store.energy);
+        const start = w.calls.length;
+        w.run();
+        // Native actions commit after role logic and cannot alter this tick's snapshots.
+        for (const action of w.calls.slice(start)) {
+            if (action.action === 'withdraw') {
+                w.room.centerLink.store.energy -= action.amount;
+                w.creep.store.energy = (w.creep.store.energy || 0) + action.amount;
+            } else {
+                w.creep.store.energy -= action.amount;
+                w.room.storage.store.energy += action.amount;
+            }
+        }
+    }
+    for (let i = 0; i < 12; i++) tick(100);
+    w.room.sources[0].energy = 0;
+    tick(0);
+    tick(0);
+    assert.equal(w.room.storage.store.energy - initial, 1200);
+    assert.equal(w.room.centerLink.store.energy, 0);
+    assert.equal(w.creep.store.energy, 0);
+    assert.equal(maximumLink, 600, '200 Link capacity remains for further arrivals');
+    assert.equal(w.calls.filter(action => action.action === 'withdraw').length, 2);
+    assert.equal(w.calls.filter(action => action.action === 'transfer').length, 2);
 });

@@ -19,7 +19,11 @@ export function getDevelopmentSpawnReserve(room: Room, role: CreepRoleConstant):
 /** Regeneration capacity, rather than the current depleted energy, sets miner quota. */
 export function getSourceMiningWorkTarget(source: Source): number {
     const capacity = source.energyCapacity
-    return Number.isFinite(capacity) && capacity > 0
-        ? Math.max(1, Math.min(developmentPolicy.mining.workPartsPerSource, Math.ceil(capacity / ENERGY_REGEN_TIME / HARVEST_POWER)))
-        : developmentPolicy.mining.workPartsPerSource
+    let income = Number.isFinite(capacity) && capacity > 0 ? capacity / ENERGY_REGEN_TIME :
+        developmentPolicy.mining.workPartsPerSource * HARVEST_POWER
+    for (const effect of source.effects || []) if (effect.effect === PWR_REGEN_SOURCE && effect.ticksRemaining > 0 && effect.level !== undefined) {
+        const power = POWER_INFO[PWR_REGEN_SOURCE]
+        income += power.effect[effect.level - 1] / power.period!
+    }
+    return Math.max(1, Math.ceil(income / HARVEST_POWER))
 }

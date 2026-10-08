@@ -20,27 +20,28 @@ function developmentConfig(room: Room, config: CreepMemory): { config: CreepMemo
             ...config,
             bodyProfile: {
                 ...preference,
-                workParts: bounded(preference.workParts, development.workParts),
-                carryParts: bounded(preference.carryParts, development.carryParts),
-                stationary: development.stationary === true,
+                workParts: development.fullBody ? preference.workParts : bounded(preference.workParts, development.workParts),
+                carryParts: development.fullBody ? preference.carryParts : bounded(preference.carryParts, development.carryParts),
+                stationary: preference.stationary ?? development.stationary === true,
                 maximumCost: Math.max(0, Math.min(capacity - reserve,
                     Number.isFinite(preference.maximumCost) ? preference.maximumCost! : capacity,
-                    Number.isFinite(development.maximumCost) ? development.maximumCost! : capacity)),
+                    !development.fullBody && Number.isFinite(development.maximumCost) ? development.maximumCost! : capacity)),
             },
         },
     }
 }
 
 export function selectCreepBody(room: Room, config: CreepMemory, forceSpawn: boolean): BodyPlan {
-    if (!config.development || !isDevelopingRoom(room)) return planCreepBody(room, config, forceSpawn)
+    const emergency = forceSpawn && needsEmergencyBody(room)
+    if (!config.development || !isDevelopingRoom(room)) return planCreepBody(room, config, emergency)
     const preference = { ...bodyPolicy.profiles[config.role], ...room.memory.bodyProfiles?.[config.role], ...config.bodyProfile }
     if (Object.keys(preference).length === 0) {
         const body = getDevelopmentBody(room, config)
         if (body !== undefined) return { body, boostPlan: { tier: 0, steps: [] } }
-        return planCreepBody(room, config, forceSpawn)
+        return planCreepBody(room, config, emergency)
     }
     const customized = developmentConfig(room, config)
-    const plan = planCreepBody(room, customized.config, needsEmergencyBody(room, config.role))
+    const plan = planCreepBody(room, customized.config, emergency)
     const cost = plan.body.reduce((total, part) => total + BODYPART_COST[part], 0)
     if (cost + customized.reserve > room.energyAvailable) return { body: [], boostPlan: { tier: 0, steps: [] } }
     return plan

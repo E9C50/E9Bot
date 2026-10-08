@@ -149,7 +149,7 @@ test('an absent carrier can restart on current energy and bypass a requested boo
     assert.equal(successor.store.getCapacity(), 200);
 });
 
-test('a physically disabled resident releases the other slot and cannot keep the needed carrier behind a full manager', () => {
+test('a physically disabled resident still requires a complete successor rather than a partial-energy birth', () => {
     for (const disabled of [{ carry: 0 }, { move: 0 }, { boostPlan: { tier: 3, steps: [], failed: true } }]) {
         const w = world(); const old = w.unit(w.names[0], disabled);
         w.release();
@@ -157,9 +157,12 @@ test('a physically disabled resident releases the other slot and cannot keep the
         w.room.memory.creepSpawnQueue = w.loader.load('creep/spawnQueue').buildSpawnQueue(w.room);
         assert.equal(w.room.memory.creepConfig[w.room.memory.creepSpawnQueue[0]].role, 'filler');
         w.spawn.doWork();
+        assert.equal(Object.values(w.game.creeps).find(c => c !== old), undefined);
+        w.room.energyAvailable = 2500;
+        w.spawn.doWork();
         const successor = Object.values(w.game.creeps).find(c => c !== old);
         assert.ok(successor && successor.spawning);
-        assert.equal(successor.body.length, 6);
+        assert.equal(successor.body.length, 50);
         assert.equal(w.lifecycle.retireSupersededStorageFiller(old), false);
     }
 });
@@ -186,6 +189,9 @@ test('two disabled slots can recycle one empty mobile wreck before reusing its e
     delete w.game.creeps[mobile.name];
     assert.deepEqual(Array.from(w.release()), w.names);
     w.spawn.doWork();
+    assert.equal(w.game.creeps[mobile.name], undefined, 'the immobile ordinary resident prevents partial-energy restart');
+    w.room.energyAvailable = 2500;
+    w.spawn.doWork();
     assert.ok(w.game.creeps[mobile.name].spawning);
     assert.equal(w.calls.filter(c => c[0] === 'spawn').length, 1);
     assert.equal(Object.keys(w.game.creeps).length, 2);
@@ -200,10 +206,13 @@ test('two immobile wrecks retain their fixed slots until healing or natural deat
     assert.equal(w.calls.length, 0, 'recovery never suicides an immobile resident or adds a third birth slot');
 });
 
-test('a lone carrier stalled on legacy boosting gets one native emergency colleague without losing its own demand', () => {
+test('a lone carrier stalled on legacy boosting keeps its demand while a full native colleague waits for energy', () => {
     const w = world(); const pending = w.unit(w.names[0], {
         boostPlan: { tier: 3, steps: [{ resource: 'XKH2O', parts: 4 }], completed: false } });
     w.release(); w.spawn.doWork();
+    assert.equal(Object.values(w.game.creeps).find(c => c !== pending), undefined);
+    w.room.energyAvailable = 2500;
+    w.spawn.doWork();
     const emergency = Object.values(w.game.creeps).find(c => c !== pending);
     assert.ok(emergency);
     assert.equal(emergency.memory.boostPlan.tier, 0);

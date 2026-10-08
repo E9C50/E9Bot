@@ -27,7 +27,7 @@ export const resourcePolicy = {
     minimumSendAmount: 1000,
     warehouseBalanceTolerance: 1000,
     distributionInterval: 30,
-    recoveryDistribution: { interval: 150, phase: 1, minimumBucket: 100, minimumHeadroom: 14 },
+    distributionPhase: 1,
     terminalFreeReserve: 10000,
 }
 

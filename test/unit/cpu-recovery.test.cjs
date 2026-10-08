@@ -5,9 +5,20 @@ const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 function recoveryWorld() {
     const game = { time: 1, shard: { name: 'shard3' }, cpu: { bucket: 999 } };
     const loader = createSourceLoader({ globals: { Game: game } });
+    loader.load('settings/runtime').runtimePolicy.cpuRecovery.enabled = true;
     const api = loader.load('runtime/cpuRecovery');
     return { game, loader, api, policy: loader.load('settings/runtime').runtimePolicy.cpuRecovery };
 }
+
+test('default low-bucket policy retains the ordinary cadence rather than trading throughput for CPU', () => {
+    const game = { time: 1, shard: { name: 'shard3' }, cpu: { bucket: 0 } };
+    const loader = createSourceLoader({ globals: { Game: game } });
+    const api = loader.load('runtime/cpuRecovery');
+    assert.equal(api.isCpuRecoveryActive(), false);
+    assert.equal(api.cpuRecoveryInterval('labPlanning', 10), 10);
+    assert.equal(api.cpuRecoveryInterval('market', 25), 25);
+    assert.equal(api.cpuRecoveryWorkDue('E31N2', 'factory'), true);
+});
 
 test('CPU recovery is configurable and only activates with a finite bucket below its threshold', () => {
     const { game, api, policy } = recoveryWorld();
@@ -103,7 +114,9 @@ function minerWorld() {
     const creep = { room, memory: {}, pos: {}, store: { H: 50, getFreeCapacity: () => free },
         harvest: () => actions.push('harvest'), moveTo: () => actions.push('move'), transferToTarget: () => actions.push('transfer') };
     w.game.getObjectById = id => { reads.lookups++; assert.equal(id, 'mineral'); return mineral; };
-    const loader = createSourceLoader({ globals: { Game: w.game }, modules: { utils: { getDistance: () => 1 } } });
+    const loader = createSourceLoader({ globals: { Game: w.game }, modules: {
+        'settings/runtime': w.loader.load('settings/runtime'), utils: { getDistance: () => 1 },
+    } });
     const role = loader.load('role/base/RoleBaseMiner').default({ sourceId: 'mineral' });
     return { ...w, creep, room, role, actions, reads, setFree: value => { free = value; } };
 }
@@ -140,6 +153,7 @@ function labPlanningWorld() {
         'settings/resourcePolicy': { t3Resources: ['product'], basicMinerals: [], ordinaryResourceTarget: () => 0, resourcePolicy: { t3Reserve: 1000 } },
         'room/resourceNetwork': {
             getResourceRooms: () => [], isWarehouseRoom: () => false,
+            createResourceInventory: () => ({ roomAmount: (room, resource) => room.storage.store[resource] || 0, globalAmount: () => 0 }),
             getRoomResourceAmount: (room, resource) => room.storage.store[resource] || 0,
             getAvailableResource: () => 0, getGlobalResourceAmount: () => 0,
             getIncomingResourceAmount: () => 0, getOutgoingResourceAmount: () => 0, requestRoomResource: () => 0,
@@ -151,6 +165,7 @@ function labPlanningWorld() {
     const room = { name: 'E31N2', labs: [{ id: 'lab', store: {} }], getResource: () => 1000,
         storage: { store: { get product() { productReads++; return 1000; } } },
         memory: { boostNeed: {}, roomLabConfig: { sourceLab1: 'one', sourceLab2: 'two', singleLabConfig: {} } } };
+    loader.load('settings/runtime').runtimePolicy.cpuRecovery.enabled = true;
     return { game, room, requests, reads: () => productReads, ...loader.load('room/labs') };
 }
 

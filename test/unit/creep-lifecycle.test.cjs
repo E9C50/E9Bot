@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function loadRegistry() {
     // Registry tests isolate factories; development wrappers are exercised with native globals separately.
@@ -103,8 +104,9 @@ function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'emp
     const errors = [];
     const game = { creeps, rooms: {}, shard: { name: 'test' }, cpu: { getUsed: () => 0 } };
     const loader = createSourceLoader({
-        globals: { Game: game, Memory: { warMode }, console: { log: message => errors.push(message) } },
+        globals: { ...nativeBodies.globals, Game: game, Memory: { warMode }, console: { log: message => errors.push(message) } },
         modules: {
+            ...nativeBodies.modules,
             ...(targetDismantle ? { './targetDismantle': { runTargetDismantle: targetDismantle } } : {}),
             // Framework factories run independently of real builder job discovery.
             'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },

@@ -91,6 +91,7 @@ function world({ storage = { energy: 600000 }, terminal = { energy: 50000 },
     const resourcePolicy = loader.load('settings/resourcePolicy').resourcePolicy;
     // These tests isolate competing explicit transfers from unrelated automatic balancing.
     resourcePolicy.distributionInterval = 1000000;
+    resourcePolicy.distributionPhase = 0;
     const roomPolicy = loader.load('settings/roomPolicy').roomPolicy;
     roomPolicy.market.scanInterval = scanInterval;
     roomPolicy.market.staggerScans = false;

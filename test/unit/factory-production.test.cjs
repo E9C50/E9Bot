@@ -74,6 +74,8 @@ function world(options = {}) {
             isWarehouseRoom: target => !!target.controller.isPowerEnabled && target.storage.store.getCapacity() >= 8000000,
             getGlobalResourceAmount: resource => Object.values(game.rooms).reduce((sum, target) => sum +
                 (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) + (target.factory?.store[resource] || 0), 0),
+            createResourceInventory: () => ({ globalAmount: resource => Object.values(game.rooms).reduce((sum, target) => sum +
+                (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) + (target.factory?.store[resource] || 0), 0) }),
         },
     } });
     const production = loader.load('room/factory');
@@ -128,6 +130,15 @@ test('factory planning parses static recipes once and reads each shared ingredie
     w.resetMetrics(); w.game.time++;
     w.production.planFactoryProduction(w.factory);
     assert.deepEqual(w.metrics, { components: 0, ingredientReads: 9, globalReads: 0, capacityReads: 1 }, 'a stable batch retains its recipe without scanning candidates');
+});
+
+test('factory candidate scans read the active operate-factory effect once while evaluating all recipes', () => {
+    const w = measuredPlanning();
+    let reads = 0;
+    Object.defineProperty(w.factory, 'effects', { get() { reads++; return []; } });
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'commodity00');
+    assert.equal(reads, 1, '25 candidates share one effect read');
 });
 
 test('an unavailable shared reagent short-circuits factory candidates while keeping precursor reserves current', () => {

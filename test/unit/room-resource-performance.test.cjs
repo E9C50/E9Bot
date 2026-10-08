@@ -15,6 +15,12 @@ const policy = {
 function labWorld({ reactionConfig = {}, reactionSource = {}, boostConfig = {}, boostBodyPart = {}, roleBoostConfig = {} } = {}) {
     const game = { time: 10, shard: { name: 'test' }, creeps: {} };
     const logs = [];
+    const roomAmount = (room, resource) => {
+        let amount = (room.storage.store[resource] || 0) + (room.terminal.store[resource] || 0);
+        for (const lab of room.labs) amount += lab.store[resource] || 0;
+        for (const creep of loader.load('runtime/creepIndex').getRoomProcessors(room.name)) amount += creep.store[resource] || 0;
+        return amount;
+    };
     const loader = createSourceLoader({
         globals: { Game: game, LAB_BOOST_MINERAL: 30, LAB_BOOST_ENERGY: 20, RESOURCE_ENERGY: 'energy', MAX_CREEP_SIZE: 50,
             console: { log: value => logs.push(value) } },
@@ -23,12 +29,11 @@ function labWorld({ reactionConfig = {}, reactionSource = {}, boostConfig = {}, 
             'settings/resourcePolicy': { t3Resources: Object.keys(reactionConfig), basicMinerals: [], ordinaryResourceTarget: () => 0, resourcePolicy: { t3Reserve: 10000 } },
             'room/resourceNetwork': {
                 getResourceRooms: () => [room], isWarehouseRoom: () => false,
-                getRoomResourceAmount: (room, resource) => {
-                    let amount = (room.storage.store[resource] || 0) + (room.terminal.store[resource] || 0);
-                    for (const lab of room.labs) amount += lab.store[resource] || 0;
-                    for (const creep of loader.load('runtime/creepIndex').getRoomProcessors(room.name)) amount += creep.store[resource] || 0;
-                    return amount;
-                },
+                createResourceInventory: () => ({
+                    roomAmount,
+                    globalAmount: () => 0,
+                }),
+                getRoomResourceAmount: roomAmount,
                 getAvailableResource: () => 0, getGlobalResourceAmount: () => 0,
                 getTerminalResourceAmount: (room, resource) => room.terminal.store[resource] || 0,
                 getIncomingResourceAmount: () => 0, getOutgoingResourceAmount: () => 0, requestRoomResource: () => 0,
@@ -182,7 +187,7 @@ test('boost updates count each unboosted body part once and track lab reassignme
 });
 
 function terminalWorld() {
-    const game = { time: 30, shard: { name: 'shard3' }, rooms: {}, creeps: {}, market: { calcTransactionCost: amount => Math.ceil(amount / 10) } };
+    const game = { time: 31, shard: { name: 'shard3' }, rooms: {}, creeps: {}, market: { calcTransactionCost: amount => Math.ceil(amount / 10) } };
     const memory = { centerStorage: 'W0N0' };
     const queued = [];
     const loader = createSourceLoader({

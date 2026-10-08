@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function world() {
     const calls = [], objects = new Map(), routes = {}, steps = {}, memory = { warMode: {} };
@@ -44,12 +45,12 @@ function world() {
         value.room.units.push(value); game.creeps[name] = value; return value;
     }
     const movement = { creepPathCache: routes, getNextCachedStep: unit => steps[unit.name] };
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RoomPosition: Position, BetterMove: movement,
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: game, Memory: memory, RoomPosition: Position, BetterMove: movement,
         PathFinder: { search() { throw Error('on-route pickup must never call PathFinder'); } },
         RESOURCE_ENERGY: 'energy', FIND_DROPPED_RESOURCES: 'dropped', FIND_MY_CREEPS: 'my', FIND_HOSTILE_STRUCTURES: 'hostile-structures', FIND_HOSTILE_CREEPS: 'hostiles',
         STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower',
         OK: 0, ERR_NOT_IN_RANGE: -9, ERR_NO_PATH: -2,
-    }, modules: { utils: { getDistance: (a, b) => a.getRangeTo(b), getClosestTarget: () => undefined },
+    }, modules: { ...nativeBodies.modules, utils: { getDistance: (a, b) => a.getRangeTo(b), getClosestTarget: () => undefined },
         'creep/boosting': { getActiveRoomBoostRequests: () => [] },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
         'settings/runtime': { runtimePolicy: { warModeScope: 'room' } } } });

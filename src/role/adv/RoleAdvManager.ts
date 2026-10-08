@@ -140,7 +140,18 @@ export default (data: CreepData): ICreepConfig => ({
         }
 
         if (runFactoryLogistics(creep, true)) return true
-        if (drainLink()) return true
+        // Keep small idle arrivals in the 800-capacity Link until they form a useful batch.
+        // Terminal requests above remain immediate; an energy-starved home or the last
+        // depleted-source tail cannot wait for another mining delivery.
+        const link = room.centerLink
+        if (link && link.store[RESOURCE_ENERGY] > 0) {
+            const ready = link.store[RESOURCE_ENERGY] >= Math.min(capacity,
+                link.store.getCapacity(RESOURCE_ENERGY) * rolePolicy.manager.linkDrainRatio)
+            const urgentEnergy = storage.store[RESOURCE_ENERGY] < Math.max(room.energyCapacityAvailable || 0,
+                rolePolicy.manager.minimumStorageEnergyForBatching)
+            if ((ready || urgentEnergy || (creep.ticksToLive ?? Infinity) <= 2 ||
+                room.sources?.length > 0 && room.sources.every(source => source.energy <= 0)) && drainLink()) return true
+        }
 
         return true
     },

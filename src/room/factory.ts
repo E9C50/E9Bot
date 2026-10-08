@@ -1,9 +1,9 @@
 import { basicMinerals, compressedMinerals, ordinaryRoomResourceKeep, resourcePolicy } from 'settings/resourcePolicy'
-import { getGlobalResourceAmount, getOutgoingResourceAmount, getTerminalResourceAmount, isWarehouseRoom,
+import { createResourceInventory, getOutgoingResourceAmount, getTerminalResourceAmount, isWarehouseRoom,
     recordTerminalWithdrawal } from './resourceNetwork'
+import type { ResourceInventory } from './resourceNetwork'
 import { isRoomEvacuating } from './evacuationState'
 import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from './evacuation'
-import { cpuRecoveryWorkDue } from 'runtime/cpuRecovery'
 
 type FactoryResource = Parameters<StructureFactory['produce']>[0]
 type Recipe = typeof COMMODITIES[FactoryResource]
@@ -135,6 +135,7 @@ function planningStock(factory: StructureFactory): PlanningStock {
     const room = factory.room, warehouse = isWarehouseRoom(room)
     const amounts = new Map<ResourceConstant, number>(), available = new Map<ResourceConstant, number>()
     const globals = new Map<ResourceConstant, number>(), cycles = new Map<Recipe, number>()
+    let inventory: ResourceInventory | undefined
     const cargo: Partial<Record<ResourceConstant, number>> = {}
     for (const creep of carriers(room)) {
         if (creep.room?.name !== room.name || creep.memory.factoryLogistics?.targetId !== factory.id) continue
@@ -157,7 +158,7 @@ function planningStock(factory: StructureFactory): PlanningStock {
             return available.get(resource)!
         },
         global(resource) {
-            if (!globals.has(resource)) globals.set(resource, getGlobalResourceAmount(resource))
+            if (!globals.has(resource)) globals.set(resource, (inventory ||= createResourceInventory()).globalAmount(resource))
             return globals.get(resource)!
         },
         cycles(recipe) {
@@ -201,11 +202,13 @@ function levelCommodities(level: number | undefined): readonly FactoryResource[]
     return result
 }
 function chooseCommodity(factory: StructureFactory, stock: PlanningStock): FactoryResource | undefined {
+    const effect = activePower(factory)
+    if (effect && effect.level !== factory.level) return undefined
     let selected: FactoryResource | undefined
     for (const resource of levelCommodities(factory.level)) {
         const recipe = COMMODITIES[resource]
         if (selected && (COMMODITIES[selected].level || 0) > (recipe.level || 0)) break
-        if (!canProduceFactoryRecipe(factory, resource) || stock.cycles(recipe) <= 0) continue
+        if (recipe.level && recipe.level !== effect?.level || stock.cycles(recipe) <= 0) continue
         if (!selected) { selected = resource; continue }
         const difference = stock.global(resource) / recipe.amount - stock.global(selected) / COMMODITIES[selected].amount
         if (difference < 0 || difference === 0 && resource.localeCompare(selected) < 0) selected = resource
@@ -270,9 +273,6 @@ export function planFactoryProduction(factory: StructureFactory): void {
         if (room.memory.productionReserve) delete room.memory.productionReserve.factory
         return
     }
-    // Keep the running batch and its reserved ingredients while recovery defers recipe scans.
-    // Invalid structures above still clear their reservations immediately.
-    if (!cpuRecoveryWorkDue(room.name, 'factoryPlanning')) return
     const stock = planningStock(factory)
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||
@@ -300,8 +300,9 @@ export function runFactoryProduction(factory: StructureFactory): void {
         state.mode === 'compression' && !compressionAllowed(factory.room, state.resourceType) ||
         !canProduceFactoryRecipe(factory, state.resourceType)) return
     const recipe = COMMODITIES[state.resourceType]
+    const stock = planningStock(factory)
     if (!components(recipe).every(([resource, amount]) => factory.store[resource] >= amount &&
-        availableIngredient(factory.room, resource) >= amount)) return
+        stock.available(resource) >= amount)) return
     // Ingredients are consumed first, so a full factory can produce a shrinking recipe.
     if ((factory.store.getFreeCapacity() || 0) + recipeInputAmount(recipe) < recipe.amount) return
     if (factory.produce(state.resourceType) === OK) {

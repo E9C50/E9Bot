@@ -328,21 +328,22 @@ test('unavailable stock is never promised or logged and new live stock can satis
     assert.equal(w.jobs().length, 1, 'the existing room index still reads current stock');
 });
 
-test('one global thirty-tick plan stays idempotent across eleven room calls and a module reload', () => {
+for (const bucket of [0, 5000]) test('six global thirty-tick plans avoid population ticks and stay idempotent across eleven rooms at bucket ' + bucket, () => {
     const w = resourceWorld(1), planningTicks = new Set();
+    w.game.cpu = { bucket, limit: 20, tickLimit: 20, getUsed: () => 18 };
     w.room('W0N0', { X: 200000 }, { warehouse: true });
     const rooms = Array.from({ length: 11 }, (_, index) => w.room(`W${index + 1}N1`));
-    for (let tick = 1; tick <= 60; tick++) {
+    for (let tick = 1; tick <= 180; tick++) {
         w.game.time = tick; if (tick === 31) w.reload();
         for (const room of rooms) w.planResourceDistribution();
         const jobs = w.jobs().filter(job => job.resourceType === 'X');
         for (const job of jobs) planningTicks.add(job.createdAt);
-        if (tick >= 30) {
-            assert.equal(jobs.length, 11);
-            for (const room of rooms) assert.equal(w.getIncomingResourceAmount(room.name, 'X'), 10000);
-        } else assert.equal(jobs.length, 0);
+        assert.equal(jobs.length, 11);
+        for (const room of rooms) assert.equal(w.getIncomingResourceAmount(room.name, 'X'), 10000);
     }
-    assert.deepEqual([...planningTicks], [30, 60]);
+    assert.deepEqual([...planningTicks], [1, 31, 61, 91, 121, 151], '180 ticks keep six planning passes with a thirty-tick interval');
+    assert.ok([...planningTicks].every(tick => tick % 5 !== 0), 'only the phase changes, avoiding five-tick population refresh peaks');
+    w.game.time = 181;
     w.reload(); w.planResourceDistribution();
     assert.equal(w.jobs().filter(job => job.resourceType === 'X').length, 11,
         'reloading on a distribution tick rebuilds the same promises instead of adding duplicates');

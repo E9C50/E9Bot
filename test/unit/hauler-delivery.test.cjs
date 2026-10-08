@@ -11,7 +11,10 @@ function world(level = 6) {
     const room = { name: 'E39N5', my: true, controller: { level, my: true, pos: new Position(10, 25) },
         spawns: [], extensions: [], towers: [], labs: [], links: [], containers: [], sources: [], workers: [],
         memory: {}, find() { return this.workers; } };
-    const store = (energy, capacity) => ({ energy, getFreeCapacity: () => capacity-energy, getUsedCapacity: () => energy, getCapacity: () => capacity });
+    const store = (energy, capacity) => {
+        const value = { energy, getFreeCapacity: () => capacity-value.energy, getUsedCapacity: () => value.energy, getCapacity: () => capacity };
+        return value;
+    };
     function structure(id, type, x, y, energy = 0, capacity = 1000) {
         const object = { id, structureType: type, my: true, store: store(energy, capacity), room, pos: new Position(x,y) };
         objects.set(id, object);
@@ -81,6 +84,56 @@ test('full or inactive Storage retains non-Link delivery fallbacks', () => {
         if(inactive)storage.isActive=()=>false;
         w.structure('link','link',10,12);w.deliverHaulerEnergy(w.unit('a',11,11));assert.equal(w.calls[0].target,tower.id);
     }
+});
+
+test('multiple carriers skip full targets, share activation checks and reserve the exact remaining capacity', () => {
+    const w = world();
+    for (let index = 0; index < 60; index++) {
+        const extension = w.structure(`full-${index}`, 'extension', 11, 12, 50, 50);
+        extension.isActive = () => { throw Error('full targets must not perform an activation scan'); };
+    }
+    const tower = w.structure('tower', 'tower', 12, 12, 0, 250);
+    let activationChecks = 0;
+    tower.isActive = () => { activationChecks++; return true; };
+    assert.equal(w.deliverHaulerEnergy(w.unit('a', 11, 11, 150)), true);
+    assert.equal(w.deliverHaulerEnergy(w.unit('b', 11, 11, 150)), true);
+    assert.equal(w.deliverHaulerEnergy(w.unit('c', 11, 11, 150)), false);
+    assert.deepEqual(w.calls.filter(call => call.type === 'transfer').map(call => [call.unit, call.target, call.amount]),
+        [['a', tower.id, 150], ['b', tower.id, 100]]);
+    assert.equal(activationChecks, 1, 'one live structure activation check serves selection and final amount for all carriers');
+});
+
+test('activation cache refreshes on the next tick and a shard change without caching capacity', () => {
+    const w = world(), storage = w.structure('storage', 'storage', 12, 12, 0, 1000);
+    let active = true, activationChecks = 0;
+    storage.isActive = () => { activationChecks++; return active; };
+    assert.equal(w.deliverHaulerEnergy(w.unit('a', 11, 11, 100)), true);
+    storage.store.energy = 1000;
+    assert.equal(w.deliverHaulerEnergy(w.unit('full', 11, 11, 100)), false,
+        'a live full store is rejected even though its activation result is cached');
+    assert.equal(activationChecks, 1);
+    storage.store.energy = 0;
+    active = false; w.game.time++;
+    assert.equal(w.deliverHaulerEnergy(w.unit('downgraded', 11, 11, 100)), false);
+    assert.equal(activationChecks, 2, 'a next-tick controller downgrade disables the receiver immediately');
+    active = true; w.game.shard.name = 'shard3';
+    assert.equal(w.deliverHaulerEnergy(w.unit('other-shard', 11, 11, 100)), true);
+    assert.equal(activationChecks, 3);
+    active = false; w.game.time--;
+    assert.equal(w.deliverHaulerEnergy(w.unit('rewound', 11, 11, 100)), false);
+    assert.equal(activationChecks, 4, 'a replay/time rollback also discards old activation results');
+});
+
+test('a replacement receiver with the same ID uses its own activation result', () => {
+    const w = world(), oldStorage = w.structure('storage', 'storage', 12, 12, 0, 1000);
+    let oldChecks = 0, replacementChecks = 0;
+    oldStorage.isActive = () => { oldChecks++; return false; };
+    assert.equal(w.deliverHaulerEnergy(w.unit('before', 11, 11, 100)), false);
+    const replacement = w.structure(oldStorage.id, 'storage', 12, 12, 0, 1000);
+    replacement.isActive = () => { replacementChecks++; return true; };
+    assert.equal(w.deliverHaulerEnergy(w.unit('after', 11, 11, 100)), true);
+    assert.equal(oldChecks, 1); assert.equal(replacementChecks, 1);
+    assert.equal(w.calls[0].target, replacement.id);
 });
 
 test('manual remote filler uses the same import rules and unloads its real mineral instead of energy first', () => {

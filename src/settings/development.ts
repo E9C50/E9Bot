@@ -3,7 +3,7 @@ export const developmentPolicy = {
     enabled: true,
     minimumLevel: 1,
     maximumLevel: 7,
-    mining: { workPartsPerSource: 5, maximumCreepsPerSource: 3, handoverRange: 2, pauseWhenBufferFull: true, expansionPriority: 3.1 },
+    mining: { workPartsPerSource: 5, maximumCreepsPerSource: 5, handoverRange: 2, pauseWhenBufferFull: true, expansionPriority: 3.1 },
     controller: { geometryCacheTicks: 100, relayReserveTicks: 1, relayTargetTicks: 2, preferStockedContainers: true, constructionDowngradeWarningTicks: 2000 },
     hauling: {
         maximumCreepsPerSource: 3, maximumCarryPartsPerCreep: 20, travelMargin: 1.3,
@@ -37,7 +37,7 @@ export const developmentPolicy = {
         workerCarryPerWork: 2,
         minimumWorkerCarryParts: 1,
         maximumUpgraderWorkParts: 39,
-        spawnEnergyReserve: 200,
+        spawnEnergyReserve: 0,
         emergencySpawnEnergy: 300,
         minimumCarryParts: 2,
         defaultHaulerCarryParts: 4,

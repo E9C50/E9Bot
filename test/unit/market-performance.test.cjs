@@ -55,6 +55,7 @@ test('direct selling remains immediate and scheduled scans still respect fresh c
 
 test('empty-bucket market scans remain periodic and keep central resource reserves fresh', () => {
     const w = world();
+    w.recovery.enabled = true;
     w.game.cpu = { bucket: 0 };
     for (let tick = 1; tick <= 250; tick++) {
         w.game.time = tick;

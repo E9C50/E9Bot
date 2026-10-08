@@ -532,8 +532,10 @@ test('a selected and admitted automatic remote demand can spawn its explicitly a
     spawn.doWork();
     const result = w.calls.find(call => call.kind === 'spawn');
     assert.equal(result.name, 'automatic');
-    assert.equal(result.body.filter(part => part === 'work').length, 5);
-    assert.equal(result.body.filter(part => part === 'move').length, 3);
+    assert.equal(result.body.filter(part => part === 'work').length, 4);
+    assert.equal(result.body.filter(part => part === 'carry').length, 1,
+        'the affordable complete miner can carry at least two simultaneous harvest batches');
+    assert.equal(result.body.filter(part => part === 'move').length, 4);
     assert.deepEqual(w.home.memory.creepSpawnQueue, []);
 });
 

@@ -116,6 +116,7 @@ function nativeSpawnDriver(w, spawn) {
         'combat/spawning':{combatSpawnAllowed:()=>true,recordCombatSpawn(){}},
     }});
     const Spawn=loader.load('mount/structure/SpawnExtension').default;
+    Object.setPrototypeOf(spawn,Spawn.prototype);
     let intent, birth, spent=0;
     spawn.spawnCreep=(body,name,options)=>{intent={body,name,memory:options.memory};return 0;};
     return {
@@ -386,6 +387,7 @@ test('the real spawn body selector submits a 100-energy carry-only replacement a
         'combat/spawning':{combatSpawnAllowed:()=>true,recordCombatSpawn(){}},
     }});
     const Spawn=loader.load('mount/structure/SpawnExtension').default;
+    Object.setPrototypeOf(spawn,Spawn.prototype);
     w.source.memory.creepSpawnQueue=Object.keys(w.source.memory.creepConfig);
     let submitted;
     spawn.spawnCreep=(body,name,options)=>{submitted={body,name,memory:options.memory};spawn.spawning={name};spawn.store.energy-=body.reduce((total,part)=>total+cost[part],0);return 0;};

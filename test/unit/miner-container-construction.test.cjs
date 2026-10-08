@@ -4,7 +4,7 @@ const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function world(level = 1) {
     const objects = new Map(), calls = [];
-    const game = { time: 100, shard: { name: 'shard1' }, getObjectById: id => objects.get(id) || null };
+    const game = { time: 100, shard: { name: 'shard1' }, creeps: {}, getObjectById: id => objects.get(id) || null };
     const pos = (x, y) => ({ x, y, roomName: 'E1S1',
         getRangeTo(target) { target = target.pos || target; return target.roomName === this.roomName ? Math.max(Math.abs(x - target.x), Math.abs(y - target.y)) : Infinity; },
         isNearTo(target) { return this.getRangeTo(target) <= 1; },
@@ -36,7 +36,7 @@ function world(level = 1) {
         unit.moveTo = target => { calls.push({ method: 'moveTo', target: target.id }); return 0; };
         room.units.push(unit); return unit;
     }
-    const loader = createSourceLoader({ globals: { Game: game, RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container',
+    const loader = createSourceLoader({ globals: { Game: game, CARRY: 'carry', MOVE: 'move', RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container',
         STRUCTURE_LINK: 'link', STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', TERRAIN_MASK_WALL: 1,
         FIND_MY_CREEPS: 'my', CONTAINER_DECAY: 5000, ERR_NOT_IN_RANGE: -9 },
         modules: { utils: { getDistance: (a, b) => a.getRangeTo(b) },
@@ -107,7 +107,8 @@ test('source container construction preserves empty-Spawn rescue when no live ca
     w.room.energyAvailable = 0; w.site('source-container');
     assert.equal(w.role.prepare(unit), true); w.role.source(unit);
     assert.deepEqual(w.calls, [{ method: 'transfer', target: spawn.id }, { method: 'moveTo', target: spawn.id }]);
-    w.room.units.push({ spawning: false, memory: { role: 'filler' } }); w.game.time++; w.clear();
+    const carrier = { name: 'carrier', room: w.room, spawning: false, memory: { role: 'filler' }, getActiveBodyparts: () => 1 };
+    w.room.units.push(carrier); w.game.creeps[carrier.name] = carrier; w.game.time++; w.clear();
     w.role.source(unit); assert.deepEqual(w.calls, [{ method: 'build', target: 'source-container' }]);
 });
 

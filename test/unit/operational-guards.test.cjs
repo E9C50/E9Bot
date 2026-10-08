@@ -19,7 +19,7 @@ test('tower damage keeps the optimal, falling, and minimum damage boundaries usi
 function spawnWorld(body = ['move']) {
     const calls = [];
     const bodyCalls = [];
-    const game = { creeps: { living: {} } };
+    const game = { creeps: { living: { room: { name: 'W1N1' }, memory: { role: 'builder', spawnRoom: 'W1N1' } } } };
     const loader = createSourceLoader({
         globals: { StructureSpawn: class {}, Game: game, OK: 0, BODYPART_COST: { move: 50, carry: 50 } },
         modules: {
@@ -31,6 +31,7 @@ function spawnWorld(body = ['move']) {
             'creep/bodySelection': { selectCreepBody(room, config, force) {
                 bodyCalls.push(force); return { body, boostPlan: { tier: 0, steps: [] } } } },
             'creep/boosting': { reserveBoostPlan() {} },
+            'creep/developmentRemotes': { isDevelopmentRemoteData: () => false },
             'shard/targetDismantleControl': { isTargetDismantleSpawnReserved: () => false }
         }
     });
@@ -44,14 +45,14 @@ test('spawn discards stale, living, and unsupported queue entries before spawnin
     const { spawn, calls, bodyCalls } = spawnWorld();
     const valid = { role: 'harvester', data: { sourceId: 'source' } };
     const queue = ['stale', 'living', 'unsupported', 'valid'];
-    spawn.room = { memory: { creepSpawnQueue: queue, creepConfig: {
+    spawn.room = { name: 'W1N1', memory: { creepSpawnQueue: queue, creepConfig: {
         living: { role: 'harvester' }, unsupported: { role: 'rAttacker' }, valid
     } } };
     assert.doesNotThrow(() => spawn.doWork());
     assert.equal(calls.length, 1);
     assert.equal(calls[0].name, 'valid');
     assert.equal(calls[0].memory, valid);
-    assert.deepEqual(bodyCalls, [true]);
+    assert.deepEqual(bodyCalls, [false]);
     assert.deepEqual(queue, []);
 
     spawn.room = { memory: { creepSpawnQueue: ['stale'] } };
@@ -62,7 +63,7 @@ test('spawn discards stale, living, and unsupported queue entries before spawnin
 
 test('an unaffordable empty body waits in the queue without attempting a spawn', () => {
     const { spawn, calls } = spawnWorld([]);
-    spawn.room = { memory: { creepSpawnQueue: ['valid'], creepConfig: { valid: { role: 'builder' } } } };
+    spawn.room = { name: 'W1N1', memory: { creepSpawnQueue: ['valid'], creepConfig: { valid: { role: 'builder' } } } };
     spawn.doWork();
     assert.deepEqual(calls, []);
     assert.deepEqual(spawn.room.memory.creepSpawnQueue, ['valid']);
@@ -71,7 +72,7 @@ test('an unaffordable empty body waits in the queue without attempting a spawn',
 test('a hub replacement waits for its complete 2500 energy body instead of forcing a small spawn', () => {
     const body = [...Array(49).fill('carry'), 'move'];
     const { spawn, calls, bodyCalls } = spawnWorld(body);
-    spawn.room = { energyAvailable: 300, memory: {
+    spawn.room = { name: 'W1N1', energyAvailable: 300, memory: {
         creepSpawnQueue: ['manager'], creepConfig: { manager: { role: 'manager', data: {} } }
     } };
     spawn.doWork();

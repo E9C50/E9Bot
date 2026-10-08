@@ -76,7 +76,7 @@ function world(level = 3) {
     }
     const loader = createSourceLoader({
         globals: {
-            Game: game, RoomPosition, WORK: 'work', CREEP_LIFE_TIME:1500, HARVEST_POWER:2, FIND_MINERALS:'minerals', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
+            Game: game, RoomPosition, WORK: 'work', CARRY: 'carry', MOVE: 'move', CREEP_LIFE_TIME:1500, HARVEST_POWER:2, FIND_MINERALS:'minerals', RESOURCE_ENERGY: 'energy', FIND_MY_CREEPS: 'myCreeps', FIND_CREEPS: 'creeps', FIND_POWER_CREEPS: 'power', FIND_STRUCTURES: 'structures',
             LOOK_STRUCTURES: 'structure', LOOK_CREEPS: 'creep', TERRAIN_MASK_WALL: 1,
             STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_LINK: 'link',
             BUILD_POWER: 5, CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
@@ -895,6 +895,94 @@ test('development miner with no carrier rescues empty spawn production before re
     assert.equal(w.intents('moveTo')[0].target, source.id);
 });
 
+test('a surviving miner supplies a complete 800-energy carrier after the old 300-energy restart threshold', () => {
+    const w = world(3), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    const spawn = w.structure('spawn', 'spawn', 20, 20, 300, 300), unit = w.creep('miner', 'harvester', 11, 10, 100, 100);
+    for (let index = 0; index < 10; index++) w.structure('extension' + index, 'extension', 20 + index % 3, 21 + Math.floor(index / 3), 0, 50);
+    w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+    const behavior = w.roles.harvester({ sourceId: source.id });
+    let elapsed = 0, supplied = 0;
+    for (; elapsed < 800 && w.room.energyAvailable < 800; elapsed++) {
+        w.clear();
+        if (behavior.prepare(unit)) behavior[unit.memory.working ? 'target' : 'source'](unit);
+        for (const transfer of w.intents('transfer')) {
+            const target = w.objects.get(transfer.target);
+            if (!unit.pos.isNearTo(target)) continue;
+            const amount = Math.min(unit.store.energy, target.store.getFreeCapacity('energy'));
+            target.store.energy += amount; unit.store.energy -= amount;
+            if (target !== container) supplied += amount;
+        }
+        if (w.intents('harvest').length && unit.pos.isNearTo(source)) {
+            const amount = Math.min(4, source.energy, unit.store.getFreeCapacity('energy'));
+            unit.store.energy += amount; source.energy -= amount;
+        }
+        const move = w.intents('moveTo').at(-1);
+        if (move && unit.pos.getRangeTo(w.p(move.x, move.y)) > (move.range ?? 1)) unit.pos = w.p(
+            unit.pos.x + Math.sign(move.x - unit.pos.x), unit.pos.y + Math.sign(move.y - unit.pos.y));
+        w.room.energyAvailable = [spawn, ...w.room.extensions].reduce((energy, target) => energy + target.store.energy, 0);
+        w.game.time++;
+    }
+    assert.equal(w.room.energyAvailable, 800, 'room funds the complete carrier without permitting another partial body');
+    assert.equal(supplied, 500);
+    assert.equal(container.store.energy, 0, 'recovery cargo is not stranded at a mine with no carrier');
+    assert.ok(elapsed < 800, `miner completes spawn refill in ${elapsed} simulated ticks`);
+    unit.pos = container.pos; w.clear(); behavior.source(unit);
+    assert.equal(w.intents('transfer')[0].target, container.id, 'full spawn capacity restores ordinary mining');
+});
+
+test('an arrived usable local carrier returns the recovering miner to its source immediately', () => {
+    const w = world(3), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    w.structure('spawn', 'spawn', 20, 20, 300, 300); w.structure('extension', 'extension', 20, 21, 0, 50);
+    const unit = w.creep('miner', 'harvester', 11, 10, 50, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+    behavior.source(unit);
+    assert.equal(w.intents('transfer')[0].target, 'extension');
+    const carrier = w.creep('carrier', 'filler', 12, 11, 0, 100);
+    carrier.memory.spawnRoom = w.room.name; carrier.ticksToLive = 1000;
+    w.game.time++; w.clear(); behavior.source(unit);
+    assert.equal(w.intents('transfer')[0].target, container.id);
+    assert.equal(w.intents('moveTo').length, 0);
+});
+
+for (const invalid of ['spawning', 'expired', 'destroyedCarry', 'destroyedMove', 'travelling', 'foreignHome', 'awaitingBoost'])
+    test('a ' + invalid + ' carrier does not stop a surviving miner from funding its complete replacement', () => {
+        const w = world(3), source = w.source(), unit = w.creep('miner', 'harvester', 11, 10, 50, 50);
+        w.structure('spawn', 'spawn', 20, 20, 300, 300); w.structure('extension', 'extension', 20, 21, 0, 50);
+        const carrier = w.creep('carrier', 'filler', 12, 11, 0, 100);
+        carrier.memory.spawnRoom = w.room.name; carrier.ticksToLive = 1000;
+        if (invalid === 'spawning') carrier.spawning = true;
+        if (invalid === 'expired') carrier.ticksToLive = 0;
+        if (invalid === 'destroyedCarry' || invalid === 'destroyedMove') carrier.getActiveBodyparts = type =>
+            type === (invalid === 'destroyedCarry' ? 'carry' : 'move') ? 0 : 1;
+        if (invalid === 'travelling') carrier.room = { name: 'W2N1' };
+        if (invalid === 'foreignHome') carrier.memory.spawnRoom = 'W2N1';
+        if (invalid === 'awaitingBoost') carrier.memory.boostPlan = { steps: [{ resource: 'XKH2O', parts: 2 }] };
+        w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+        w.roles.harvester({ sourceId: source.id }).source(unit);
+        assert.equal(w.intents('transfer')[0].target, 'extension');
+        assert.equal(w.intents('harvest').length, 0);
+    });
+
+test('carrier readiness uses the shared native creep snapshot instead of a new room.find scan', () => {
+    const w = world(3), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    const unit = w.creep('miner', 'harvester', 11, 10, 50, 50);
+    w.creep('porter', 'filler', 12, 11, 0, 100);
+    w.structure('spawn', 'spawn', 20, 20, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    w.room.find = () => { throw Error('mining recovery must not scan the room for carriers'); };
+    w.roles.harvester({ sourceId: source.id }).source(unit);
+    assert.equal(w.intents('transfer')[0].target, container.id);
+});
+
+for (const capacity of [undefined, 0, NaN]) test('missing or invalid energy capacity ' + capacity + ' keeps the native 300-energy recovery fallback', () => {
+    const w = world(1), source = w.source(), container = w.structure('mine', 'container', 11, 10);
+    w.structure('spawn', 'spawn', 20, 20, 250, 300);
+    const unit = w.creep('miner', 'harvester', 11, 10, 50, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    w.room.energyAvailable = 250; w.room.energyCapacityAvailable = capacity;
+    behavior.source(unit); assert.equal(w.intents('transfer')[0].target, 'spawn');
+    w.room.energyAvailable = 300; w.game.time++; w.clear(); behavior.source(unit);
+    assert.equal(w.intents('transfer')[0].target, container.id);
+});
+
 test('no-carrier startup collects a full batch even when a source container exists', () => {
     const w = world(1), source = w.source(), container = w.structure('mine', 'container', 11, 10), unit = w.creep('miner', 'harvester', 11, 10, 4, 50);
     w.structure('spawn', 'spawn', 30, 10, 0, 300); w.room.energyAvailable = 0;
@@ -1029,6 +1117,49 @@ test('a living 20 WORK upgrader keeps working across forty ticks despite a reduc
     }
     assert.equal(spent, 800);
     assert.equal(refills, 40, 'a smaller birth budget never throttles existing upgrade or Store logistics');
+});
+
+test('full-body upgrading delivers the same budgeted output with fewer successful WORK and refill intents', () => {
+    function simulate(work) {
+        const w = world(3), buffer = w.structure('buffer', 'container', 22, 25, 1000);
+        const unit = w.creep('upgrader', 'upgrader', 23, 25, 400, 400);
+        unit.memory.development = { fullBody: true };
+        unit.getActiveBodyparts = part => part === 'work' ? work : part === 'carry' ? 8 : 1;
+        w.room.memory.creepConfig = { upgrader: { development: { fullBody: true, workParts: 1 } } };
+        const behavior = w.roles.upgrader({ sourceId: buffer.id });
+        let upgraded = 0, workIntents = 0, refillIntents = 0;
+        for (let tick = 0; tick < 400; tick++) {
+            w.clear();
+            const initialEnergy = unit.store.energy, initialFree = unit.store.getFreeCapacity('energy');
+            behavior[unit.memory.working ? 'target' : 'source'](unit);
+            const upgrade = w.intents('upgradeController')[0], withdrawal = w.intents('withdraw')[0];
+            const spent = upgrade ? Math.min(work, initialEnergy) : 0;
+            const received = withdrawal ? Math.min(initialFree, buffer.store.energy, withdrawal.amount ?? Infinity) : 0;
+            unit.store.energy += received - spent;
+            buffer.store.energy += 1 - received;
+            upgraded += spent; workIntents += !!upgrade; refillIntents += !!withdrawal;
+            assert.ok(unit.store.energy >= 0 && unit.store.energy <= 400, 'resolve simultaneous actions against initial Store state');
+            w.game.time++;
+        }
+        return { upgraded, workIntents, refillIntents };
+    }
+    const small = simulate(1), full = simulate(20);
+    assert.equal(small.upgraded, 400);
+    assert.equal(full.upgraded, small.upgraded, 'physical WORK does not increase the allowed average energy consumption');
+    assert.equal(full.workIntents, 20);
+    assert.equal(small.workIntents, 400);
+    assert.ok(full.refillIntents < small.refillIntents / 10, 'large intermittent work also leaves fewer small refill intents');
+});
+
+test('a full-body upgrader with zero available WORK budget stops WORK but can still refill', () => {
+    const w = world(), buffer = w.structure('buffer', 'container', 22, 25, 1000);
+    const unit = w.creep('upgrader', 'upgrader', 23, 25, 20, 100);
+    unit.memory.development = { fullBody: true };
+    unit.getActiveBodyparts = part => part === 'work' ? 20 : 1;
+    w.room.memory.creepConfig = { upgrader: { development: { fullBody: true, workParts: 0 } } };
+    w.roles.upgrader({ sourceId: buffer.id }).source(unit);
+    assert.equal(w.intents('upgradeController').length, 0);
+    assert.equal(w.intents('withdraw').length, 1, 'pausing consumption keeps native supply logistics available');
 });
 
 test('a reduced birth quota does not interrupt existing mobile upgrade, movement or adjacent withdrawal', () => {

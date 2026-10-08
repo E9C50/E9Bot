@@ -24,7 +24,7 @@ export const rolePolicy = {
     scout: {
         flagApproachRange: 3
     },
-    manager: { positionCheckInterval: 10, linkDrainRatio: 0.75 },
+    manager: { positionCheckInterval: 10, linkDrainRatio: 0.75, minimumStorageEnergyForBatching: 10000 },
     processer: {
         minimumRoomLevel: 7,
         powerWithdrawBatch: 90

@@ -57,6 +57,31 @@ function world({ orders = [{ id: 'buy', amount: 2000000, remainingAmount: 200000
         setDue: value => { due = value; }, setDealResult: value => { dealResult = value; } };
 }
 
+test('eleven ordinary rooms share one mineral order query and never sell beyond its executable stock', () => {
+    const w = world({ orders: [{ id: 'ops-buy', amount: 3000, remainingAmount: 10000, price: 10, roomName: 'W5N1' }], feeRatio: 0.1 });
+    const rooms = Array.from({ length: 11 }, (_, index) => w.add(`W${index + 1}N1`, {
+        storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 },
+    }));
+    for (const room of rooms) w.sellResource(room, 'ops', 5000, 0.001, 1000);
+    assert.equal(w.queries(), 1);
+    assert.equal(w.deals.length, 3);
+    assert.equal(w.deals.reduce((sum, deal) => sum + deal.amount, 0), 3000);
+    assert.equal(w.orders[0].amount, 3000, 'debits stay in the shared intent ledger');
+    w.tick(); w.orders[0].amount = 2000;
+    w.sellResource(rooms[3], 'ops', 5000, 0.001, 1000);
+    assert.equal(w.queries(), 2, 'next tick observes a fresh native order snapshot immediately');
+    assert.equal(w.deals.length, 4);
+});
+
+test('a rejected mineral order invalidates the shared snapshot so other rooms avoid duplicate deal attempts', () => {
+    const w = world(); w.setDealResult(-6);
+    for (let index = 0; index < 5; index++) w.sellResource(w.add(`W${index + 1}N1`, {
+        storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 },
+    }), 'ops', 5000, 0.001, 1000);
+    assert.equal(w.queries(), 1);
+    assert.equal(w.deals.length, 1);
+});
+
 test('400k storage plus 50k terminal is the ordinary-room floor and does not scan orders', () => {
     const w = world(), room = w.add('W1N1', { storage: { energy: 400000 } });
     w.processRoomMarket(room);

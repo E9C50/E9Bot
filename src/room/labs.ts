@@ -8,8 +8,8 @@ import { basicMinerals, ordinaryResourceTarget, resourcePolicy, t3Resources } fr
 import { roomWorkDue } from 'runtime/roomSchedule'
 import { cpuRecoveryInterval, hasPendingRoomBoost } from 'runtime/cpuRecovery'
 import {
-    getAvailableResource, getGlobalResourceAmount, getIncomingResourceAmount, getOutgoingResourceAmount,
-    getResourceRooms, getRoomResourceAmount, isWarehouseRoom, requestRoomResource,
+    createResourceInventory, getAvailableResource, getIncomingResourceAmount, getOutgoingResourceAmount,
+    getResourceRooms, isWarehouseRoom, requestRoomResource,
 } from 'room/resourceNetwork'
 
 const productionBatch = 3000
@@ -89,6 +89,7 @@ export function updateLabReactionConfig(room: Room): void {
         return
     }
     const rooms = getResourceRooms()
+    const inventory = createResourceInventory()
     const warehouse = isWarehouseRoom(room)
     let reactionUnit = typeof LAB_REACTION_AMOUNT === 'number' ? LAB_REACTION_AMOUNT : 5
     if (typeof PWR_OPERATE_LAB !== 'undefined' && typeof POWER_INFO !== 'undefined') {
@@ -108,7 +109,7 @@ export function updateLabReactionConfig(room: Room): void {
     const local = (resource: ResourceConstant): number => {
         if (!amounts.has(resource)) {
             const baseKeep = !warehouse && (basicMinerals.includes(resource) || resource === 'G') ? ordinaryResourceTarget(resource) : 0
-            const amount = getRoomResourceAmount(room, resource) - Math.max(baseKeep, room.memory.boostNeed?.[resource] || 0) -
+            const amount = inventory.roomAmount(room, resource) - Math.max(baseKeep, room.memory.boostNeed?.[resource] || 0) -
                 (room.memory.productionReserve?.factory?.[resource] || 0) - getOutgoingResourceAmount(room.name, resource)
             rawAmounts.set(resource, amount)
             amounts.set(resource, Math.max(0, amount))
@@ -125,17 +126,17 @@ export function updateLabReactionConfig(room: Room): void {
     }
     const remote = (resource: ResourceConstant): number => {
         if (!remoteAmounts.has(resource)) remoteAmounts.set(resource, rooms.reduce((total, candidate) =>
-            total + (candidate === room ? 0 : getAvailableResource(candidate, resource)), 0))
+            total + (candidate === room ? 0 : getAvailableResource(candidate, resource, inventory)), 0))
         return remoteAmounts.get(resource)!
     }
     const global = (resource: ResourceConstant): number => {
         if (!globalAmounts.has(resource)) {
             // Include batches already cooking elsewhere so all rooms do not choose the same low stock.
-            let amount = getGlobalResourceAmount(resource)
+            let amount = inventory.globalAmount(resource)
             for (const candidate of rooms) {
                 const plan = candidate.memory.roomLabConfig?.productionPlan
                 if (candidate !== room && plan?.target === resource) amount += Math.max(0, plan.remaining ??
-                    Math.min(productionBatch, plan.targetAmount - getRoomResourceAmount(candidate, resource) - getIncomingResourceAmount(candidate.name, resource)))
+                    Math.min(productionBatch, plan.targetAmount - inventory.roomAmount(candidate, resource) - getIncomingResourceAmount(candidate.name, resource)))
             }
             globalAmounts.set(resource, amount)
         }
@@ -176,7 +177,7 @@ export function updateLabReactionConfig(room: Room): void {
         for (const resource in plan.imports) {
             const type = resource as ResourceConstant
             if (plan.imports[type]! > 0) requestRoomResource(room, type,
-                getRoomResourceAmount(room, type) + getIncomingResourceAmount(room.name, type) + plan.imports[type]!)
+                inventory.roomAmount(room, type) + getIncomingResourceAmount(room.name, type) + plan.imports[type]!)
         }
         setLabReaction(room, plan.reaction)
         return

@@ -63,9 +63,13 @@ test('an empty second Source precedes the full-body replacement of a working sma
     const state = world({ available: 550 });
     inhabit(state); inhabit(state, { role: 'filler', work: 0, carry: 5 });
     const configs = state.publish();
-    const replacement = configsForSource(configs, 'harvester', state.home.sources[0])[0];
+    const mine = configsForSource(configs, 'harvester', state.home.sources[0]);
+    const incumbent = mine.find(config => state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
+    const replacement = mine.find(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
     const recovery = configsForSource(configs, 'harvester', state.home.sources[1])[0];
-    assert.equal(replacement.development.workParts, 5, 'retain the full-source mining quota');
+    assert.equal(incumbent.development.workParts, 4, 'keep the paid-for miner working until natural handover');
+    assert.equal(replacement.development.workParts, 1, 'only the unserved production needs a new slot');
+    assert.equal(replacement.development.fullBody, true, 'the new physical body uses room capacity, independently of its quota');
     assert.equal(replacement.spawnPriority, 3.1);
     assert.equal(recovery.spawnPriority, 1);
     assert.equal(state.queue()[0], recovery, 'do not wait for the first Source\'s 700-energy improvement');
@@ -78,7 +82,10 @@ test('healthy production improvements follow remote commissioning and keep ordin
     const miners = configs.filter(config => config.role === 'harvester');
     const carriers = configs.filter(config => config.role === 'filler');
     const upgrader = configs.find(config => config.role === 'upgrader');
-    assert.ok(miners.every(config => config.spawnPriority === 3.1));
+    assert.ok(miners.filter(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)])
+        .every(config => config.spawnPriority === 3.1));
+    assert.equal(miners.find(config => state.game.creeps[state.demand.createCreepName(config.role, config.name)])
+        .development.workParts, 4);
     assert.ok(carriers.every(config => config.spawnPriority === 3.2));
     assert.equal(upgrader.spawnPriority, 5);
     state.home.memory.creepConfig.remote = { role: 'reserver', spawnPriority: 2.6, data: {} };
@@ -117,7 +124,7 @@ test('a carrier still preparing boosts cannot demote Source hauling recovery', (
 });
 
 test('dying, travelling, spawning or boost-preparing miners cannot demote recovery births', () => {
-    for (const options of [{ ttl: 1 }, { x: 20, y: 20 }, { spawning: true },
+    for (const options of [{ ttl: 0 }, { ttl: 1 }, { x: 20, y: 20 }, { spawning: true },
         { boostPlan: { completed: false, failed: false, steps: [{ resource: 'XUHO2', parts: 4 }] } }]) {
         const state = world({ sources: 1 });
         inhabit(state, options);
@@ -131,7 +138,8 @@ test('miner improvements lose expansion priority exactly at the spawn-and-travel
     for (const ttl of [58, 59]) {
         const state = world({ sources: 1 });
         inhabit(state, { ttl });
-        const miner = configsForSource(state.publish(), 'harvester', state.home.sources[0])[0];
+        const configs = configsForSource(state.publish(), 'harvester', state.home.sources[0]);
+        const miner = configs.find(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
         // Six paid-for parts need 18 spawn ticks, ten tiles need 20 travel ticks, plus the 20-tick margin.
         assert.equal(miner.spawnPriority, ttl === 58 ? 1 : 3.1);
     }
@@ -146,41 +154,59 @@ test('a linked miner without CARRY cannot postpone the replacement that restores
     assert.ok(miners.every(config => config.spawnPriority === 1));
 });
 
-test('a healthy controller keeps the ordinary upgrader body and reserve at the downgrade boundary', () => {
+test('a healthy controller plans a full-capacity upgrader without an additional spawn reserve', () => {
     const state = world({ sources: 1, downgrade: 2001 });
     const config = state.publish().find(config => config.role === 'upgrader');
     assert.equal(config.spawnPriority, 5);
     assert.equal(config.development.maximumCost, undefined);
     assert.equal(config.bodyProfile, undefined);
-    assert.equal(state.loader.load('creep/developmentEconomy').getDevelopmentSpawnReserve(state.home, 'upgrader'), 200);
+    assert.equal(config.development.fullBody, true);
+    assert.equal(state.loader.load('creep/developmentEconomy').getDevelopmentSpawnReserve(state.home, 'upgrader'), 0);
 });
 
-test('controller downgrade recovery can spawn a native 200-energy body without extra stock', () => {
+test('an empty room can spawn a native recovery body, while an inhabited room waits for its complete upgrader', () => {
     for (const buffer of [false, true]) for (const downgrade of [2000, 1]) {
         const state = world({ capacity: 1300, available: 200, sources: 1, buffer, downgrade });
         const config = state.publish().find(config => config.role === 'upgrader');
         assert.equal(config.spawnPriority, 1.5);
         assert.equal(config.development.workParts, 1);
-        assert.equal(config.development.maximumCost, 200);
+        assert.equal(config.development.maximumCost, undefined);
+        assert.equal(config.development.fullBody, true);
         assert.equal(state.loader.load('creep/developmentEconomy').getDevelopmentSpawnReserve(state.home, 'upgrader'), 0);
-        const selected = state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false);
+        const selected = state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, true);
         assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
         assert.equal(selected.boostPlan.tier, 0);
         state.home.energyAvailable = 199;
+        assert.deepEqual(Array.from(state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, true).body), []);
+        inhabit(state);
+        state.home.energyAvailable = 200;
+        assert.deepEqual(Array.from(state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false).body), [],
+            'controller warning does not shrink an inhabited room\'s body');
+        state.home.energyAvailable = 1300;
+        const full = state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false);
+        const cost = full.body.reduce((total, part) => total + costs[part], 0);
+        assert.ok(cost > 200 && cost <= 1300);
+        state.home.energyAvailable = cost - 1;
         assert.deepEqual(Array.from(state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false).body), []);
     }
 });
 
-test('custom high-WORK and boost profiles remain bounded by the emergency recovery body', () => {
+test('custom WORK and terrain preferences remain in force while a nonempty room waits for full recovery energy', () => {
     for (const preference of ['global', 'room']) for (const terrain of ['plain', 'swamp']) {
         const state = world({ capacity: 1300, available: 200, sources: 1, downgrade: 100 });
-        const profile = { workParts: 20, carryParts: 25, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
+        const profile = { workParts: 20, carryParts: 2, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
         if (preference === 'global') state.loader.load('settings/bodyPolicy').bodyPolicy.profiles.upgrader = profile;
         else state.home.memory.bodyProfiles = { upgrader: profile };
+        inhabit(state);
         const config = state.publish().find(config => config.role === 'upgrader');
         const selected = state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false);
-        assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
-        assert.equal(selected.boostPlan.tier, 0); assert.equal(selected.boostPlan.steps.length, 0);
+        assert.deepEqual(Array.from(selected.body), []);
+        state.home.energyAvailable = 1300;
+        const full = state.loader.load('creep/bodySelection').selectCreepBody(state.home, config, false);
+        assert.ok(full.body.filter(part => part === 'work').length > 1);
+        assert.equal(full.body.filter(part => part === 'carry').length, 2);
+        assert.ok(full.body.reduce((total, part) => total + costs[part], 0) > 200);
+        assert.equal(full.boostPlan.tier, 0); assert.equal(full.boostPlan.steps.length, 0);
     }
 });
 
@@ -193,4 +219,42 @@ test('a paid-for ordinary upgrader retains its WORK quota instead of receiving a
     assert.equal(configs[0].development.workParts, 4);
     assert.equal(configs[0].development.maximumCost, undefined);
     assert.equal(configs[0].spawnPriority, 5);
+});
+
+test('population refresh preserves a newly spawned full-body upgrader\'s average WORK budget', () => {
+    const state = world({ capacity: 5600, sources: 1 });
+    const existing = inhabit(state, { role: 'upgrader', work: 12, carry: 3, name: 'full-upgrader' });
+    existing.memory.development = { fullBody: true, workParts: 1 };
+    for (let refresh = 0; refresh < 3; refresh++) {
+        const upgrades = state.publish().filter(config => config.role === 'upgrader');
+        assert.equal(upgrades.length, 1, 'an occupied full-body slot needs no extra consumer');
+        assert.equal(upgrades[0].development.workParts, 1, 'the refreshed quota comes from real income rather than twelve physical WORK');
+        assert.equal(upgrades[0].development.fullBody, true);
+        let actions = 0;
+        for (let tick = 0; tick < 120; tick++) {
+            actions += state.loader.load('creep/development').developmentWorkAllowed(existing);
+            state.game.time++;
+        }
+        assert.equal(actions * 12, 120, 'twelve WORK performs the same average work using ten intents per 120 ticks');
+    }
+});
+
+test('paid-for legacy upgrading takes budget precedence over full-body units regardless of iteration order', () => {
+    for (const legacyFirst of [false, true]) {
+        const state = world({ sources: 1 });
+        let full, legacy;
+        const addFull = () => { full = inhabit(state, { role: 'upgrader', work: 12, name: 'new-full-upgrader' }); full.memory.development = { fullBody: true }; };
+        const addLegacy = () => { legacy = inhabit(state, { role: 'upgrader', work: 4, name: 'legacy-upgrader' }); };
+        if (legacyFirst) { addLegacy(); addFull(); } else { addFull(); addLegacy(); }
+        const upgrades = state.publish().filter(config => config.role === 'upgrader');
+        assert.equal(upgrades.length, 2);
+        assert.equal(upgrades.find(config => config.name === full.memory.name).development.workParts, 0);
+        assert.equal(upgrades.find(config => config.name === legacy.memory.name).development.workParts, 4);
+        for (let tick = 0; tick < 24; tick++) {
+            assert.equal(state.loader.load('creep/development').developmentWorkAllowed(full), false);
+            assert.equal(state.loader.load('creep/development').developmentWorkAllowed(legacy), true,
+                'a fullBody birth template does not reclassify an existing legacy unit');
+            state.game.time++;
+        }
+    }
 });

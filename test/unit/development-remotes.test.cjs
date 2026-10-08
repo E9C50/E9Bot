@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete = false, pathLength = 10, swamp = false, road = false, sequential = false } = {}) {
     const calls = { routes: 0, paths: 0, published: [], moves: [], actions: [], delegated: 0, recycling: 0, sites: [] }, objects = new Map();
@@ -46,7 +47,7 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
     function addDemand(room, role, name, data) {
         calls.published.push({ role, name, data }); room.memory.creepConfig[name] = { role, data }; return name;
     }
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RoomPosition: Position,
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: game, Memory: memory, RoomPosition: Position,
         PathFinder: { CostMatrix: Matrix, search(from, goal, options) { calls.paths++; assert.equal(options.maxRooms, 2); return { incomplete: typeof incomplete === 'function' ? incomplete(goal) : incomplete,
             path: path.map(position => new Position(position.x, position.y, position.roomName === target.name ? goal.pos.roomName : position.roomName)) }; } },
         FIND_SOURCES: 'sources', FIND_MINERALS: 'minerals', FIND_STRUCTURES: 'structures', FIND_HOSTILE_STRUCTURES: 'hostile-structures', FIND_HOSTILE_CREEPS: 'hostiles',
@@ -56,7 +57,7 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
         CARRY: 'carry', MOVE: 'move', CLAIM: 'claim', BODYPART_COST: { carry: 50, move: 50, claim: 600, work: 100 }, TERRAIN_MASK_WALL: 1, TERRAIN_MASK_SWAMP: 2,
         SOURCE_ENERGY_CAPACITY: 3000, SOURCE_ENERGY_NEUTRAL_CAPACITY: 1500, ENERGY_REGEN_TIME: 300, CONTAINER_DECAY: 5000, CONTROLLER_RESERVE_MAX: 5000,
         RESOURCE_ENERGY: 'energy', HARVEST_POWER: 2, CARRY_CAPACITY: 50, TOWER_ENERGY_COST: 10, ERR_NO_PATH: -2, ERR_NOT_IN_RANGE: -9, OK: 0, FIND_MY_CREEPS: 'my-creeps',
-    }, modules: { 'settings/runtime': { runtimePolicy: { warModeScope: 'empire' } },
+    }, modules: { ...nativeBodies.modules, 'settings/runtime': { runtimePolicy: { warModeScope: 'empire' } },
         // Existing role/route cases operate commissioned remotes; admission has real integrated cases below.
         ...(!sequential ? { './remoteCommissioning': {
             remoteCommissioningDecision: () => ({ admitted: true, maintenance: true, phase: 'ready' }),

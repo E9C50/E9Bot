@@ -13,6 +13,7 @@ import { populationPolicy } from 'settings/population'
 import { remoteCommissioningDecision, releaseRemoteCommissioning } from './remoteCommissioning'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 import { getReserveFlagForRoom } from './reserveFlags'
+import { developmentPartCapacity } from './developmentBodies'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -238,7 +239,9 @@ function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant
     if (role === 'reserver' && getReserveFlagForRoom(home, data.developmentRemote.targetRoom)) return
     const name = addDemand(home, role, displayName, data)
     const config = home.memory.creepConfig[name]
-    if (config && body) config.development = body
+    if (config && body) config.development = {
+        ...body, ...(['rHarvester', 'rFiller'].includes(role) ? { fullBody: true } : {}),
+    }
     if (config) {
         const priorities = populationPolicy.remote.startupPriorities
         const priority = maintenance ? priorities.maintenance : role === 'reserver' ? priorities.reserver : role === 'rHarvester' ? priorities.harvester :
@@ -299,8 +302,8 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
             const plans = info.sources.map(source => {
                 const travelTicks = source.travelTicks || policy.travelTicksPerRoom * 2
                 const rate = source.energyPerTick || SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME
-                const maximumCost = Math.min(home.energyCapacityAvailable, policy.haulerMaximumCost)
-                const carryLimit = Math.max(1, Math.min(policy.maximumCarryPartsPerHauler, Math.floor(maximumCost / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
+                const maximumCost = home.energyCapacityAvailable
+                const carryLimit = Math.max(1, developmentPartCapacity(home, 'rFiller', CARRY))
                 const totalCarry = Math.max(1, Math.ceil(rate * travelTicks * policy.haulingTravelMargin / CARRY_CAPACITY))
                 const haulers = Math.min(policy.maximumHaulersPerSource, Math.ceil(totalCarry / carryLimit))
                 const carryParts = Math.min(carryLimit, Math.ceil(totalCarry / haulers))

@@ -1,7 +1,5 @@
 import { basicMinerals, ordinaryRoomResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { isRoomEvacuating } from './evacuationState'
-import { isCpuRecoveryActive } from 'runtime/cpuRecovery'
-import { populationPolicy } from 'settings/population'
 
 type Amounts = Record<string, number>
 export type ResourceJob = RoomMemory['terminalSendJob'][string]
@@ -10,17 +8,21 @@ interface PlanningInventory {
     projected(room: Room, resource: ResourceConstant): number
     headroom(room: Room): number
 }
+export interface ResourceInventory {
+    roomAmount(room: Room, resource: ResourceConstant): number
+    globalAmount(resource: ResourceConstant): number
+}
 let tick = -1, shard = ''
 let rooms: Room[] = []
+let roomNames = new Set<string>()
 let incoming = new Map<string, Amounts>(), outgoing = new Map<string, Amounts>()
 let localCargo = new Map<string, Amounts>()
 let sent = new Map<string, Amounts>(), received = new Map<string, Amounts>()
+let globalChanges: Amounts = {}
 let terminalWithdrawals = new Map<string, Amounts>()
 let usedTerminals = new Set<string>()
 let planned = false
 let reconciled = false
-let distributionDue = false
-let energySupportPlanned = false
 
 function add(map: Map<string, Amounts>, name: string, resource: string, value: number): void {
     const amounts = map.get(name) || {}
@@ -35,12 +37,12 @@ function eligible(room: Room): boolean {
 }
 function prepare(): void {
     if (tick === Game.time && shard === (Game.shard?.name || '')) return
-    if (shard !== (Game.shard?.name || '') || Game.time < tick) distributionDue = false
     tick = Game.time; shard = Game.shard?.name || ''
     rooms = Object.values(Game.rooms).filter(eligible)
+    roomNames = new Set(rooms.map(room => room.name))
     incoming = new Map(); outgoing = new Map(); localCargo = new Map()
     sent = new Map(); received = new Map(); usedTerminals = new Set(); planned = false; reconciled = false
-    energySupportPlanned = false
+    globalChanges = {}
     terminalWithdrawals = new Map()
     for (const room of rooms) {
         room.memory.terminalSendJob ||= {}
@@ -79,6 +81,38 @@ export function getRoomResourceAmount(room: Room, resource: ResourceConstant): n
 export function getGlobalResourceAmount(resource: ResourceConstant): number {
     return getResourceRooms().reduce((total, room) => total + getRoomResourceAmount(room, resource), 0)
 }
+/** Read native inventory once inside a synchronous planning pass. Intent debits remain live. */
+export function createResourceInventory(): ResourceInventory {
+    prepare()
+    const stocks = new Map<Room, { labs: Amounts; resources: Map<ResourceConstant, number> }>()
+    const totals = new Map<ResourceConstant, number>()
+    function nativeAmount(room: Room, resource: ResourceConstant): number {
+        let stock = stocks.get(room)
+        if (!stock) {
+            const labs: Amounts = {}
+            for (const lab of room.labs || []) for (const key of Object.keys(lab.store)) {
+                const amount = positive(lab.store[key as ResourceConstant])
+                if (amount) labs[key] = (labs[key] || 0) + amount
+            }
+            stock = { labs, resources: new Map() }; stocks.set(room, stock)
+        }
+        if (!stock.resources.has(resource)) stock.resources.set(resource,
+            positive(room.storage?.store[resource]) + positive(room.terminal?.store[resource]) +
+            positive(room.factory?.store[resource]) + positive(localCargo.get(room.name)?.[resource]) +
+            positive(stock.labs[resource]))
+        return stock.resources.get(resource)!
+    }
+    return {
+        roomAmount(room, resource) {
+            return nativeAmount(room, resource) + positive(received.get(room.name)?.[resource]) -
+                positive(sent.get(room.name)?.[resource])
+        },
+        globalAmount(resource) {
+            if (!totals.has(resource)) totals.set(resource, rooms.reduce((total, room) => total + nativeAmount(room, resource), 0))
+            return totals.get(resource)! + (globalChanges[resource] || 0)
+        },
+    }
+}
 /** Terminal intents settle later; logistics must not withdraw already dispatched cargo or fees. */
 export function getTerminalResourceAmount(room: Room, resource: ResourceConstant): number {
     prepare()
@@ -103,11 +137,11 @@ export function getResourceKeep(room: Room, resource: ResourceConstant): number 
         isWarehouseRoom(room) ? 0 : ordinaryRoomResourceKeep(room, resource)
     return Math.max(base, positive(room.memory.boostNeed?.[resource])) + getProductionReserve(room, resource)
 }
-export function getAvailableResource(room: Room, resource: ResourceConstant): number {
+export function getAvailableResource(room: Room, resource: ResourceConstant, inventory?: ResourceInventory): number {
     // Only storage/terminal cargo is immediately dispatchable; labs/factories keep their contents.
     prepare()
     const liquid = positive(room.storage?.store[resource]) + getTerminalResourceAmount(room, resource)
-    return Math.max(0, Math.min(liquid, getRoomResourceAmount(room, resource) - getResourceKeep(room, resource)) -
+    return Math.max(0, Math.min(liquid, (inventory ? inventory.roomAmount(room, resource) : getRoomResourceAmount(room, resource)) - getResourceKeep(room, resource)) -
         getOutgoingResourceAmount(room.name, resource))
 }
 export function projectedResource(room: Room, resource: ResourceConstant): number {
@@ -127,6 +161,7 @@ function receivingHeadroom(room: Room): number {
 }
 /** Only the synchronous balancing pass shares stock reads; job promises remain live. */
 function planningInventory(): PlanningInventory {
+    const inventory = createResourceInventory()
     const stocks = new Map<Room, Map<ResourceConstant, { total: number, dispatchable: number }>>()
     const space = new Map<Room, number>()
     function stock(room: Room, resource: ResourceConstant): { total: number, dispatchable: number } {
@@ -134,7 +169,7 @@ function planningInventory(): PlanningInventory {
         if (!resources) { resources = new Map(); stocks.set(room, resources) }
         let value = resources.get(resource)
         if (!value) {
-            const total = getRoomResourceAmount(room, resource)
+            const total = inventory.roomAmount(room, resource)
             const liquid = positive(room.storage?.store[resource]) + getTerminalResourceAmount(room, resource)
             value = { total, dispatchable: Math.min(liquid, total - getResourceKeep(room, resource)) }
             resources.set(resource, value)
@@ -199,10 +234,15 @@ export function markTerminalUsed(room: Room): void { prepare(); usedTerminals.ad
 export function recordResourceSend(room: Room, target: string, resource: ResourceConstant, amount: number, fee: number): void {
     recordResourceDebit(room, resource, amount, fee)
     add(received, target, resource, amount)
+    if (roomNames.has(target)) globalChanges[resource] = (globalChanges[resource] || 0) + amount
 }
 export function recordResourceDebit(room: Room, resource: ResourceConstant, amount: number, fee: number): void {
     prepare(); markTerminalUsed(room)
     add(sent, room.name, resource, amount); add(sent, room.name, 'energy', fee)
+    if (roomNames.has(room.name)) {
+        globalChanges[resource] = (globalChanges[resource] || 0) - amount
+        globalChanges.energy = (globalChanges.energy || 0) - fee
+    }
 }
 
 /** Drop unfulfillable automatic promises after production reservations are refreshed. */
@@ -234,18 +274,8 @@ export function planResourceDistribution(): void {
     prepare()
     reconcileResourceJobs()
     if (planned) return
-    if (isCpuRecoveryActive()) {
-        const recovery = resourcePolicy.recoveryDistribution
-        if (Game.time % recovery.interval === recovery.phase) distributionDue = true
-        if (!distributionDue) { planRecoveryEnergySupport(); return }
-        // Bulk balancing can wait. Existing sends and explicit/boost imports still run every tick.
-        const budget = Math.min(Game.cpu.limit, Game.cpu.tickLimit)
-        if (Game.cpu.bucket < recovery.minimumBucket || Game.time % populationPolicy.refreshInterval === 0 ||
-            Number.isFinite(budget) && typeof Game.cpu.getUsed === 'function' &&
-            budget - Game.cpu.getUsed() < recovery.minimumHeadroom) { planRecoveryEnergySupport(); return }
-    } else if (Game.time % resourcePolicy.distributionInterval !== 0) return
+    if (Game.time % resourcePolicy.distributionInterval !== resourcePolicy.distributionPhase % resourcePolicy.distributionInterval) return
     planned = true
-    distributionDue = false
     // Re-evaluate automated balancing; explicit console jobs and lab import requests persist.
     for (const room of rooms) for (const id in room.memory.terminalSendJob) {
         const job = room.memory.terminalSendJob[id]
@@ -315,17 +345,7 @@ export function planResourceDistribution(): void {
             }
         }
     }
-    if (!energySupportPlanned) {
-        energySupportPlanned = true
-        planEnergySupport(inventory)
-    }
-}
-
-/** Keep energy rescue on its usual cadence when optional mineral balancing waits. */
-function planRecoveryEnergySupport(): void {
-    if (energySupportPlanned || Game.time % resourcePolicy.distributionInterval !== 1) return
-    energySupportPlanned = true
-    planEnergySupport(planningInventory())
+    planEnergySupport(inventory)
 }
 
 function planEnergySupport(inventory: PlanningInventory): void {

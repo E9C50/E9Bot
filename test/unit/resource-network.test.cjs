@@ -11,7 +11,7 @@ function store(values = {}, capacity = 1000000) {
     });
     return result;
 }
-function world(time = 30) {
+function world(time = 31) {
     const game = { time, shard: { name: 'shard3' }, rooms: {}, creeps: {},
         market: { calcTransactionCost: amount => Math.ceil(amount * 0.1) } };
     const incoming = new Map(), sends = [];
@@ -66,7 +66,7 @@ test('ordinary rooms retain 300k of their own mineral before exporting while oth
     assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 0);
     assert.equal(w.getIncomingResourceAmount(warehouse.name, 'U'), 5000);
     source.storage.store.O = 302000;
-    w.game.time = 60; w.planResourceDistribution();
+    w.game.time = 61; w.planResourceDistribution();
     assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 2000);
     assert.equal(w.projectedResource(source, 'O'), 300000);
     assert.equal(w.getIncomingResourceAmount(warehouse.name, 'O'), 2000);
@@ -82,7 +82,7 @@ test('old automatic native-mineral exports are released under the raised reserve
     assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 0);
     source.storage.store.O = 304000;
     source.memory.productionReserve = { lab: { O: 3000 } };
-    w.game.time = 30; w.planResourceDistribution();
+    w.game.time = 31; w.planResourceDistribution();
     assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 1000);
     assert.equal(w.getResourceKeep(source, 'O'), 303000);
     assert.equal(w.ordinaryResourceTarget('O'), 10000, 'room refill does not import 300k of a locally mined mineral');
@@ -207,15 +207,17 @@ test('global balancing reads each room/resource inventory once and preserves ord
     const warehouses = Array.from({ length: 3 }, (_, i) => w.room('warehouse' + i,
         i === 0 ? Object.fromEntries(required.map(resource => [resource, 60000])) : {}, { warehouse: true }));
     const reads = new Map();
+    let enumerations = 0;
     for (const room of [...ordinary, ...warehouses]) room.labs = Array.from({ length: 10 }, (_, i) => ({
-        store: new Proxy({}, { get(_, resource) {
+        store: new Proxy({ energy: 2000, ['unused' + i]: 1 }, { get(target, resource) {
             const key = room.name + ':' + i + ':' + String(resource);
-            reads.set(key, (reads.get(key) || 0) + 1); return 0;
-        } }),
+            reads.set(key, (reads.get(key) || 0) + 1); return target[resource];
+        }, ownKeys(target) { enumerations++; return Reflect.ownKeys(target); } }),
     }));
     w.planResourceDistribution();
     assert.equal(Math.max(...reads.values()), 1, 'sorting and queuing must reuse this pass\'s stock snapshot');
-    assert.ok(reads.size <= 11 * 10 * (required.length + 1));
+    assert.equal(reads.size, 11 * 10 * 2, 'labs read only stored energy and mineral rather than every candidate resource');
+    assert.equal(enumerations, 11 * 10, 'each lab is scanned once per distribution pass');
     for (const room of ordinary) for (const resource of required)
         assert.equal(w.getIncomingResourceAmount(room.name, resource), 0, room.name + ':' + resource);
     for (const room of warehouses) for (const resource of required)
@@ -255,6 +257,61 @@ test('the planning snapshot shares headroom across resources and does not persis
     assert.equal(w.getAvailableResource(donor, 'XUH2O'), 1000);
 });
 
+test('resource inventory readers scan each lab only once for all local and global candidates', () => {
+    const w = world(1), donor = w.room('warehouse', { H: 20000 }, { warehouse: true }), target = w.room('ordinary', { H: 10000 });
+    let scans = 0, reads = 0;
+    for (const room of [donor, target]) room.labs = Array.from({ length: 10 }, () => ({ store: new Proxy({ energy: 1000, H: 100 }, {
+        ownKeys(value) { scans++; return Reflect.ownKeys(value); },
+        get(value, resource) { reads++; return value[resource]; },
+    }) }));
+    const inventory = w.createResourceInventory(), resources = [...w.t3Resources, ...w.basicMinerals, 'G', 'ops', 'power', 'energy'];
+    for (const resource of resources) {
+        inventory.roomAmount(donor, resource);
+        inventory.roomAmount(target, resource);
+        inventory.globalAmount(resource);
+        inventory.globalAmount(resource);
+        w.getAvailableResource(donor, resource, inventory);
+    }
+    assert.equal(inventory.globalAmount('H'), 32000);
+    assert.equal(scans, 20);
+    assert.equal(reads, 40, '21 resources in 2 rooms read only the two actual keys of each lab');
+});
+
+test('scoped inventory includes successful sends and market debits without changing native stores', () => {
+    const w = world(1), donor = w.room('warehouse', { H: 20000 }, { warehouse: true, terminal: { H: 5000, energy: 50000 } });
+    const target = w.room('ordinary', { H: 10000 });
+    donor.labs = [{ store: { H: 3000 } }]; target.labs = [{ store: { H: 2000 } }];
+    const inventory = w.createResourceInventory();
+    assert.equal(inventory.globalAmount('H'), 40000);
+    const energy = inventory.globalAmount('energy');
+    w.recordResourceSend(donor, target.name, 'H', 3000, 300);
+    assert.equal(inventory.roomAmount(donor, 'H'), 25000);
+    assert.equal(inventory.roomAmount(target, 'H'), 15000);
+    assert.equal(inventory.globalAmount('H'), 40000, 'internal transfer keeps empire stock unchanged');
+    assert.equal(inventory.globalAmount('energy'), energy - 300);
+    w.recordResourceDebit(donor, 'H', 1000, 100);
+    assert.equal(inventory.globalAmount('H'), 39000);
+    assert.equal(inventory.globalAmount('energy'), energy - 400);
+    assert.equal(w.getAvailableResource(donor, 'H', inventory), 21000);
+    assert.equal(donor.terminal.store.H, 5000, 'successful intents have not settled in native stores');
+});
+
+test('new planning scopes observe changed stock and retain live boost and production reservations', () => {
+    const w = world(1), donor = w.room('warehouse', { H: 20000 }, { warehouse: true });
+    donor.labs = [{ store: { H: 3000 } }];
+    const inventory = w.createResourceInventory();
+    assert.equal(w.getAvailableResource(donor, 'H', inventory), 20000);
+    donor.memory.boostNeed.H = 22000;
+    assert.equal(w.getAvailableResource(donor, 'H', inventory), 1000);
+    donor.memory.productionReserve = { lab: { H: 500 } };
+    assert.equal(w.getAvailableResource(donor, 'H', inventory), 500);
+    donor.storage.store.H = 24000;
+    assert.equal(w.createResourceInventory().roomAmount(donor, 'H'), 27000, 'next synchronous pass rereads current stock');
+    assert.equal(w.getRoomResourceAmount(donor, 'H'), 27000, 'ordinary public reads are never held by a snapshot');
+    donor.labs[0].store.H = 1000; w.game.time++;
+    assert.equal(w.createResourceInventory().roomAmount(donor, 'H'), 25000, 'a new tick retains no old native values');
+});
+
 test('full affordable shipments avoid repeated transaction-cost searches during cooldown and dispatch', () => {
     const w = world(1), donor = w.room('donor', { H: 200000 }, { cooldown: 1, terminal: { energy: 60000, H: 100000 } });
     donor.memory.terminalSendJob.a = { targetRoom: 'external', resourceType: 'H', amount: 100000 };
@@ -271,47 +328,40 @@ test('full affordable shipments avoid repeated transaction-cost searches during 
     assert.equal(w.getTerminalResourceAmount(donor, 'energy'), 50000);
 });
 
-test('critical CPU recovery pauses only new balancing while existing sends and boost imports keep working', () => {
-    const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true, cooldown: 0,
+test('existing sends and boost imports keep working between balancing ticks with an empty bucket', () => {
+    const w = world(2), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true, cooldown: 0,
         terminal: { energy: 60000, H: 5000 } }), target = w.room('ordinary');
     w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 0 };
     warehouse.memory.terminalSendJob.manual = { targetRoom: target.name, resourceType: 'H', amount: 5000 };
     w.processTerminalResource(warehouse);
     assert.deepEqual(w.sends, [{ from: warehouse.name, resource: 'H', amount: 5000, target: target.name }]);
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'bulk refill remains paused');
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'bulk refill waits for its normal thirty-tick cadence');
     w.requestRoomResource(target, 'H', 10000);
     assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 5000, 'boost/lab imports bypass the balancing pause');
 });
 
-test('recovery bulk planning retains due work until CPU headroom and bucket recover, avoiding population ticks', () => {
-    const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
-    let used = 0;
-    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 100, getUsed: () => used };
+test('an empty bucket does not defer balancing beyond its normal thirty-tick cadence', () => {
+    const w = world(30), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
+    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 19 };
     w.planResourceDistribution();
     assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
-    w.game.time = 2; w.game.cpu.bucket = 100; used = 7;
+    w.game.time = 31;
     w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'uses sustained limit, not the large burst allowance');
-    w.game.time = 5; used = 0; w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'cannot overlap the population refresh');
-    w.game.time = 6; w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000, 'deferred work runs on the next eligible tick');
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000, 'normal cadence remains active under CPU recovery');
     assert.ok(Object.keys(warehouse.memory.terminalSendJob).length > 0);
 });
 
-test('recovery automatic balancing uses its longer cadence and resumes the normal interval after recovery', () => {
-    const w = world(30), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
+test('automatic balancing keeps the same cadence before and after CPU recovery', () => {
+    const w = world(31), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
     w.game.cpu = { bucket: 500, limit: 20, tickLimit: 200, getUsed: () => 0 };
     w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
-    w.game.time = 151; w.planResourceDistribution();
     assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000);
     target.storage.store.H = 10000;
-    w.game.time = 180; w.game.cpu.bucket = 1000; w.planResourceDistribution();
+    w.game.time = 61; w.game.cpu.bucket = 1000; w.planResourceDistribution();
     assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'normal balancing releases fulfilled old promises');
 });
 
-test('waiting for bulk CPU budget still reconciles automatic promises against newly reserved boost resources', () => {
+test('between balancing ticks automatic promises still reconcile newly reserved boost resources', () => {
     const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
     warehouse.memory.terminalSendJob.old = { targetRoom: target.name, resourceType: 'H', amount: 10000, kind: 'refill' };
     warehouse.memory.boostNeed.H = 100000;
@@ -321,21 +371,23 @@ test('waiting for bulk CPU budget still reconciles automatic promises against ne
     assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
 });
 
-test('critical recovery still creates energy support for an exhausted room without waiting for bulk balancing', () => {
-    const w = world(1), donor = w.room('donor', { energy: 600000, H: 100000 }, { terminal: { energy: 60000 } });
+test('energy support and mineral balancing preserve their thirty-tick cadence with an empty bucket', () => {
+    const w = world(30), donor = w.room('donor', { energy: 600000, H: 100000 }, { terminal: { energy: 60000 } });
     const target = w.room('exhausted', { energy: 0 }, { terminal: { energy: 50000 } });
     w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 18 };
     w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 0);
+    w.game.time = 31; w.planResourceDistribution();
     assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000);
-    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'ordinary mineral planning is still paused');
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000);
     const jobs = Object.keys(donor.memory.terminalSendJob);
     w.planResourceDistribution();
     assert.deepEqual(Object.keys(donor.memory.terminalSendJob), jobs);
     assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'one support pass per tick');
-    w.game.time = 30; w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'energy support avoids population ticks');
-    w.game.time = 31; w.planResourceDistribution();
-    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 100000, 'energy rescue retains its thirty-tick cadence');
+    w.game.time = 32; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'off-cycle work does not create additional promises');
+    w.game.time = 61; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'next balancing pass preserves the energy batch');
 });
 
 test('partial shipment searches still find the largest integer allowed by fuel and terminal capacity', () => {

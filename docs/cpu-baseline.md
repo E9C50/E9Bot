@@ -1,5 +1,34 @@
 # shard3 CPU 优化前基线
 
+## 保持调度周期，增大身体并减少成功动作（2026-10-09）
+
+按本轮要求，撤回下节新增的 Factory 25 tick 规划门禁、资源平衡 150 tick 门禁，默认关闭自动低 Bucket 生产降频。Factory 每 tick 规划、Lab 每 10 tick 规划、资源平衡每 30 tick、市场每 25 tick 的原周期保留。资源平衡改到第 1 相位，避开每 5 tick 人口刷新；Bucket 为 0 或 5000 时，180 tick 都完整执行六次规划。手动应急开关仍可显式开启；本轮默认收益不依赖延长周期。
+
+只有出生房内没有任何己方普通 Creep 时，才允许按现有能量生应急小身体；来访者和正在孵化的 Creep 也计入。非空房按能量容量、50 部件、原生移动/工作限制和用户显式配置规划完整身体，等待其完整费用。成长经济任务的收入额度与物理身体大小解耦：额度控制需求数量和平均工作预算，不再自动把新身体锁成 1–5 WORK 或 200 能量。RCL8 升级 15 WORK 上限、侦察/CLAIM 的专用身体以及显式用户偏好保留。旧健康小矿工继续生产，正常接班才换大体。
+
+能源矿工取消平均再生收入对单体 WORK 的上限，站点矿工携带至少四次采集批次。容量足够的道路原生矿工为 **30 WORK + 5 CARRY + 15 MOVE（4000 能量，50 部件）**，采空后读取实时源能量并等待下一次再生。矿物自搬运身体继续按真实路程比较吞吐量，在合法大身体之间选择，不盲目把负载全换成 WORK。
+
+官方 [API 文档](https://docs.screeps.com/api/#Creep.harvest) 的 A 图标说明：改变状态的对应方法返回 `OK` 时，除函数运行开销外增加 **0.2 CPU**。`harvest`、`transfer`、`withdraw`、`move` 属于此类；失败校验也有函数运行成本，不能按成功动作固定费用直接估算。文档把 [PathFinder.search](https://docs.screeps.com/api/#PathFinder.search)、`moveTo`、`findClosestByPath`、`findRoute`、[getAllOrders](https://docs.screeps.com/api/#Game.market.getAllOrders) 标为高成本，`isActive`、`find`、`findClosestByRange` 为中等成本；`say`、`pull`、交易费计算为极小成本。现有市场查询已使用 `{ type, resourceType }` 对象过滤，现有矿站 Link 活性缓存有失效检测，本轮继续保留这些正确的路径。
+
+同一模拟世界，完整 300 tick 再生批次加一次尾批结算，保持每 tick 运行角色、完整交付 **3000 能量**，原生初始 Store 与 intent 延迟结算规则相同：
+
+| 身体 | 成功 harvest | 成功 transfer | 成功动作合计 | 完整存入容器 |
+| --- | ---: | ---: | ---: | ---: |
+| 5 WORK / 1 CARRY | 300 | 76 | 376 | 3000 |
+| 30 WORK / 5 CARRY | 50 | 17 | 67 | 3000 |
+
+成功动作少 **309 次**，对应固定部分少 **61.8 CPU/批**；这是受控访问/动作次数证据，不是已部署的 shard3 总 CPU 降幅。实际身体受出生房容量、道路/平原、站位及显式 profile 约束。
+
+成长升级工的物理 WORK 与平均能量预算也分开：人口刷新不会把大身体的实际 WORK 数重新变成额外用能需求，旧升级工先按原行为扣账。每 tick 继续运行角色，满体升级工按平均预算安排整批动作，配额为 0 时继续补能但暂停升级。同样 400 tick、消耗 400 能量，1 WORK 执行 **400 次 upgradeController**，20 WORK、平均配额 1 执行 **20 次**，补能调用低于小身体的十分之一。人口刷新在单次发布内复用矿工与搬运身体容量，无施工时跳过 Builder 预算；双 Source + Storage 无施工场景，真实身体预览由 **9 次降到 3 次**。下一次发布立即读取新配置、容量和工地，包含同 tick 内的变更。
+
+其余优化保持相同调度频率：Factory/Lab/资源平衡在各自单次同步规划作用域内聚合 Lab 实际 Store 键，复用库存读取；发送、成交、Boost 与生产预留仍即时扣账，新规划和新 tick 重读原生库存。11 房 × 10 Lab × 21 候选的受控查询从 **2310 降到 220 次资源键读取**；25 个 Factory 配方共用一次 Power effect 查询。普通矿物出售按资源共享同 tick 的对象过滤订单查询，11 房同资源从 **11 次变 1 次**，成功成交和拒绝订单在共享账本中立即扣减或失效，下一 tick 重新查询。
+
+Manager 正常空闲时保留中心 Link 的小到货，达到 75% 容量或装满自己时再抽取；Storage 缺能、矿源全耗尽尾批、即将死亡及终端/Factory 待料仍立即处理。模拟 12 tick 连续到货 100 能量，完整交付 1200、Link 峰值 600，使用两次 withdraw 加两次 transfer，减少小批反复往返。完整身体等待期间缺搬运工的矿工会继续补 Spawn/extensions，避免旧 300 能量停止条件卡住恢复出生。
+
+搬运目标先读取实时剩余容量并扣除同 tick 已成功转移的预占，满目标不调用 `isActive()`。其余目标用当前 tick/shard 的对象 WeakMap 复用活性结果；下一 tick、时间回退、换 shard 或换对象会重查，容量与预占不缓存。受控 60 个满 Extension 的活性查询降至 **0**；三名搬运工对同一 Tower 只查 **1 次**，仍以 150 + 100 两批精确填满 250 容量。官方 [Structure.isActive 实现](https://github.com/screeps/engine/blob/master/src/game/structures.js#L98) 调用 [结构配额扫描](https://github.com/screeps/engine/blob/master/src/utils.js#L426)，因此减少这类重复检查有实际意义。
+
+最终 **2074/2074** 全量回归、类型检查、纯本地构建及 diff 检查通过。本轮继续仅修改、验证并 Git 提交，未上传正式服。此前窗口仍为优化前基线；需部署后同规模、完整覆盖的窗口才能判断实服收益。
+
 ## 再次超时与恢复调度缺口（2026-10-09）
 
 本轮官服 API、控制台均为只读，修改和构建仅在本地，继续只做 Git 提交。诊断时官服 `default/main` 与此前本地构建完全一致，SHA-256 为 `f6f92650dafa3adb4a020c5e4afaf65832778db472ad50665af2816752c01e7d`，不是旧代码漏传造成的本轮问题。

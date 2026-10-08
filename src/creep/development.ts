@@ -10,11 +10,13 @@ export function isDevelopingRoom(room: Room | undefined): boolean {
 
 /** A living body cannot shrink: spread its WORK intents over ticks to honor a reduced budget. */
 export function developmentWorkAllowed(creep: Creep): boolean {
-    // Population budgets control new births; an existing upgrader keeps using its body.
-    if (creep.memory.role === 'upgrader') return true
     if (!isDevelopingRoom(creep.room)) return true
-    const quota = creep.room.memory.creepConfig?.[creep.name]?.development?.workParts
-    if (!Number.isFinite(quota) || (quota as number) <= 0) return true
+    const profile = creep.room.memory.creepConfig?.[creep.name]?.development
+    // Legacy upgraders keep their paid-for behaviour; automatically spawned large bodies honor their income budget.
+    if (creep.memory.role === 'upgrader' && !creep.memory.development?.fullBody) return true
+    const quota = profile?.workParts
+    if (!Number.isFinite(quota)) return true
+    if ((quota as number) <= 0) return !creep.memory.development?.fullBody
     const work = creep.getActiveBodyparts(WORK)
     const allowed = Math.floor(quota as number)
     if (work <= allowed || work === 0) return true

@@ -4,16 +4,15 @@ export const runtimePolicy = {
     warModeScope: 'empire' as 'empire' | 'room',
     pixel: { enabled: true, minimumBucket: 10000, excludedShards: ['shard3'] },
     cpuHistory: { shards: ['shard3'], sampleCount: 100 },
-    // Bucket 恢复期间错峰降频可选生产，核心能源、孵化、防御与 boost 仍按原周期运行。
+    // 默认保留原任务周期；降频仅作为手动开启的临时应急选项。
     cpuRecovery: {
-        enabled: true,
+        enabled: false,
         minimumBucket: 1000,
         shards: [] as string[],
         intervals: {
             mineral: 5,
             powerSpawn: 10,
             factory: 25,
-            factoryPlanning: 25,
             labReaction: 5,
             labPlanning: 100,
             market: 250,

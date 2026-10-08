@@ -106,6 +106,57 @@ const byRole = (configs, role) => configs.filter(config => config.role === role)
 const requestedWork = configs => configs.reduce((total, config) => total + config.development.workParts, 0);
 const summary = configs => JSON.parse(JSON.stringify(configs.map(({ role, name, data }) => ({ role, name, data })).sort((a, b) => a.name.localeCompare(b.name))));
 
+function planningWorld() {
+    const home = room({ level: 6, capacity: 2150, sources: [[10, 10], [30, 10]] });
+    home.storage = structure('storage', 'storage', 20, 21, 10000);
+    const state = makeWorld(home, { automaticHauling: false });
+    const planner = state.loader.load('creep/bodyPlanner');
+    const preview = planner.previewCreepBody;
+    const previews = [];
+    planner.previewCreepBody = (target, config, tier) => {
+        previews.push(config.role);
+        return preview(target, config, tier);
+    };
+    return { ...state, previews };
+}
+
+test('one development publication reuses mining and carrying previews and skips idle construction bodies', () => {
+    const state = planningWorld();
+    const configs = state.release();
+    assert.equal(state.previews.filter(role => role === 'harvester').length, 1,
+        'two Sources reuse their mining preview during both mining and hauling planning');
+    assert.equal(state.previews.filter(role => role === 'filler').length, 1,
+        'both Source fleets and the Storage fleet share their physical CARRY preview');
+    assert.equal(state.previews.filter(role => role === 'builder').length, 0);
+    assert.equal(state.previews.length, 3, 'only mining, carrying, and one needed upgrader body are previewed');
+    assert.equal(byRole(configs, 'harvester').length, 2);
+    assert.equal(byRole(configs, 'filler').length, 3);
+    assert.equal(byRole(configs, 'builder').length, 0);
+});
+
+test('publication preview reuse reads new profiles, capacity and construction even within the same tick', () => {
+    const state = planningWorld();
+    state.release();
+    state.home.memory.bodyProfiles = {
+        harvester: { workParts: 1, carryParts: 1, maximumCost: 200, boostTier: 0 },
+        filler: { carryParts: 4, maximumCost: 400, boostTier: 0 },
+    };
+    state.previews.length = 0;
+    let configs = state.release();
+    assert.equal(byRole(configs, 'harvester').length, 10, 'the new 1-WORK profile changes the per-Source fleet immediately');
+    assert.ok(byRole(configs, 'filler').every(config => config.development.carryParts <= 4));
+    assert.deepEqual(state.previews.sort(), ['filler', 'harvester', 'upgrader']);
+    state.home.energyCapacityAvailable = 300;
+    state.home.energyAvailable = 300;
+    state.home.constructionSites = [{ id: 'container-site', structureType: 'container' }];
+    state.previews.length = 0;
+    configs = state.release();
+    assert.ok(byRole(configs, 'filler').every(config => config.development.carryParts <= 3));
+    assert.equal(byRole(configs, 'builder').length, 1);
+    assert.deepEqual(state.previews.sort(), ['builder', 'filler', 'harvester', 'upgrader']);
+    assert.equal(state.game.time, 100, 'no cross-publication or per-tick cache hides updated inputs');
+});
+
 test('RCL1 with a Spawn publishes a Source-fed upgrader before any Container exists', () => {
     const home = room();
     const state = makeWorld(home);
@@ -121,7 +172,7 @@ test('RCL1 with a Spawn publishes a Source-fed upgrader before any Container exi
     assert.deepEqual(state.calls, [], 'the real developing-room branch bypasses legacy factories');
 });
 
-test('RCL1 construction publishes a cheap self-fed first builder without waiting for arrived hauling income', () => {
+test('RCL1 construction publishes a prioritised full-body constructor with an independent work budget', () => {
     const home = room();
     home.constructionSites = [{ id: 'source-container-site', structureType: 'container' }];
     const state = makeWorld(home);
@@ -130,7 +181,8 @@ test('RCL1 construction publishes a cheap self-fed first builder without waiting
     assert.equal(builders[0].data.sourceId, home.sources[0].id);
     assert.equal(builders[0].development.workParts, 1);
     assert.equal(builders[0].development.carryParts, 1);
-    assert.equal(builders[0].development.maximumCost, costs.work + costs.carry + costs.move);
+    assert.equal(builders[0].development.maximumCost, undefined);
+    assert.equal(builders[0].development.fullBody, true);
     assert.equal(builders[0].spawnPriority, state.policy.building.firstCreepPriority);
     assert.ok(builders[0].spawnPriority < state.loader.load('settings/creep').spawnPriority.harvester,
         'the first constructor must not wait for the full mining quota');
@@ -171,17 +223,17 @@ test('the first bootstrap builder becomes affordable at 200 actual energy withou
     const body = Array.from(bodies.getDevelopmentBody(home, config));
     assert.deepEqual(body, ['work', 'carry', 'move']);
     assert.equal(body.reduce((cost, part) => cost + costs[part], 0), home.energyAvailable);
-    const selected = state.loader.load('creep/bodySelection').selectCreepBody(home, config, false);
+    const selected = state.loader.load('creep/bodySelection').selectCreepBody(home, config, true);
     assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move'], 'the actual default selector also makes the body at 200');
     assert.equal(selected.boostPlan.tier, 0);
 });
 
-test('custom builder bodies cannot exceed the 200-energy bootstrap limit or wait for unavailable boosts', () => {
+test('automatic bootstrap does not impose a 200-energy body limit on explicit builder profiles', () => {
     for (const preference of ['global', 'room']) for (const terrain of ['plain', 'swamp']) {
-        const home = room();
+        const home = room({ capacity: 1300 });
         home.constructionSites = [{ id: 'container-site', structureType: 'container' }];
         const state = makeWorld(home);
-        const profile = { workParts: 20, carryParts: 25, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
+        const profile = { workParts: 8, carryParts: 4, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
         if (preference === 'global') state.loader.load('settings/bodyPolicy').bodyPolicy.profiles.builder = profile;
         else home.memory.bodyProfiles = { builder: profile };
         const config = byRole(state.release(), 'builder')[0];
@@ -189,9 +241,10 @@ test('custom builder bodies cannot exceed the 200-energy bootstrap limit or wait
         const selector = state.loader.load('creep/bodySelection').selectCreepBody;
         home.energyAvailable = 199;
         assert.deepEqual(Array.from(selector(home, config, false).body), []);
-        home.energyAvailable = 200;
+        home.energyAvailable = 1300;
         const selected = selector(home, config, false);
-        assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
+        assert.ok(selected.body.length > 3);
+        assert.ok(selected.body.reduce((sum, part) => sum + costs[part], 0) > 200);
         assert.equal(selected.boostPlan.tier, 0);
         assert.equal(selected.boostPlan.steps.length, 0);
     }
@@ -275,27 +328,28 @@ test('RCL7 factory growth publishes a mobile native processor without labs or cu
     assert.ok(body.includes('carry') && body.includes('move'), 'factory mover must reach factories outside the manager seat');
 });
 
-test('550 and 700 capacity split the 5-WORK mining quota into affordable bodies', () => {
-    for (const [capacity, expected] of [[300, [2, 2, 1]], [550, [4, 1]], [700, [5]]]) {
+test('early mining covers its production quota with complete full-speed bodies', () => {
+    for (const [capacity, expected, physicalWork] of [[300, [1, 1, 1, 1, 1], 1], [550, [3, 2], 3], [700, [4, 1], 4]]) {
         const home = room({ capacity });
         const state = makeWorld(home);
         const miners = byRole(state.release(), 'harvester');
         assert.deepEqual(miners.map(config => config.development.workParts), expected);
         for (const config of miners) {
             const body = state.loader.load('creep/developmentBodies').getDevelopmentBody(home, config);
-            assert.equal(body.filter(part => part === 'work').length, config.development.workParts);
+            assert.equal(body.filter(part => part === 'work').length, physicalWork);
+            assert.equal(config.development.fullBody, true);
             assert.ok(body.reduce((sum, part) => sum + costs[part], 0) <= capacity);
         }
     }
 });
 
-test('small old miners yield their demand to a newly affordable full-source body', () => {
+test('healthy small old miners retain their demand while uncovered production gets a full-size body', () => {
     const home = room({ capacity: 700 });
     const incumbent = worker(home, { work: 2 });
     const state = makeWorld(home, { creeps: { incumbent } });
     let miners = byRole(state.release(), 'harvester');
-    assert.equal(miners.filter(config => config.name === incumbent.memory.name).length, 0);
-    assert.deepEqual(miners.map(config => config.development.workParts), [5]);
+    assert.equal(miners.filter(config => config.name === incumbent.memory.name).length, 1);
+    assert.deepEqual(miners.map(config => config.development.workParts), [2, 3]);
     assert.deepEqual(Object.keys(incumbent.memory.development), [], 'old local miners now accept protected retirement');
     assert.deepEqual(summary(byRole(state.release(), 'harvester')), summary(miners));
     incumbent.getActiveBodyparts = part => part === 'work' ? 5 : 1;
@@ -304,29 +358,30 @@ test('small old miners yield their demand to a newly affordable full-source body
     assert.equal(miners[0].name, incumbent.memory.name);
 });
 
-test('550-capacity mining consolidates old 2+2+1 workers into 4+1 and keeps the real one-WORK tail', () => {
+test('550-capacity mining keeps healthy paid-for 2+2+1 workers instead of replacing them early', () => {
     const home = room({ capacity: 550 });
     const first = worker(home, { work: 2, name: 'old-two-a' });
     const second = worker(home, { work: 2, name: 'old-two-b' });
     const tail = worker(home, { work: 1, name: 'old-one' });
     const state = makeWorld(home, { creeps: { first, second, tail } });
     const miners = byRole(state.release(), 'harvester');
-    assert.deepEqual(miners.map(config => config.development.workParts), [4, 1]);
-    assert.equal(miners[1].name, tail.memory.name);
-    assert.ok(miners.every(config => config.name !== first.memory.name && config.name !== second.memory.name));
+    assert.deepEqual(miners.map(config => config.development.workParts).sort(), [1, 2, 2]);
+    assert.ok(miners.some(config => config.name === tail.memory.name));
+    assert.ok(miners.some(config => config.name === first.memory.name));
+    assert.ok(miners.some(config => config.name === second.memory.name));
     assert.equal(state.game.creeps.first, first, 'publication does not stop or remove current production');
 });
 
-test('RCL3 full mining capacity replaces 4+1 with one five-WORK demand', () => {
+test('RCL3 full mining capacity preserves the existing healthy four-and-one workers', () => {
     const home = room({ capacity: 800, level: 3 });
     const state = makeWorld(home, { creeps: {
         four: worker(home, { work: 4, name: 'old-four' }),
         one: worker(home, { work: 1, name: 'old-one' }),
     } });
     const miners = byRole(state.release(), 'harvester');
-    assert.equal(miners.length, 1);
-    assert.equal(miners[0].development.workParts, 5);
-    assert.ok(miners[0].name.startsWith(`${home.name}_DEVELOP_HARVESTER_`));
+    assert.equal(miners.length, 2);
+    assert.deepEqual(miners.map(config => config.development.workParts).sort(), [1, 4]);
+    assert.ok(miners.every(config => config.name.startsWith('old-')));
 });
 
 test('one actually boosted WORK covers a Source and removes every smaller mining demand', () => {
@@ -353,7 +408,7 @@ test('committed spawning harvest boosts prevent redundant future miners but do n
     assert.equal(requestedWork(byRole(configs, 'upgrader')), state.policy.upgrading.minimumWorkParts);
     pending.memory.boostPlan.failed = true;
     configs = state.release();
-    assert.equal(byRole(configs, 'harvester')[0].development.workParts, 4,
+    assert.equal(requestedWork(byRole(configs, 'harvester')), 5,
         'a failed compound plan cannot claim the missing mining capacity');
 });
 
@@ -379,9 +434,9 @@ test('a miner below the spawn-and-travel lead gets a replacement instead of reus
     const dying = worker(home, { ttl: 5 });
     const state = makeWorld(home, { creeps: { dying } });
     const miners = byRole(state.release(), 'harvester');
-    assert.equal(miners.length, 1);
-    assert.notEqual(miners[0].name, dying.memory.name);
-    assert.equal(miners[0].development.workParts, 5);
+    assert.equal(miners.length, 2);
+    assert.ok(miners.every(config => config.name !== dying.memory.name));
+    assert.equal(requestedWork(miners), 5);
 });
 
 test('Source transport grows with the complete trip and remains bounded per Source and per body', () => {
@@ -584,8 +639,8 @@ test('20 real energy per tick funds at most one construction WORK until Storage 
     home.constructionSites = [{ id: 'road-site', structureType: 'road' }];
     builders = byRole(state.release(), 'builder');
     assert.ok(builders.length > 0 && builders.length <= 2);
-    assert.ok(builders.every(config => config.development.workParts === 1));
-    assert.ok(requestedWork(builders) <= 2);
+    assert.ok(builders.every(config => config.development.fullBody));
+    assert.ok(requestedWork(builders) <= 8);
 });
 
 test('high-stock Storage transport covers its bonus upgrade rate or stops at the configured fleet capacity', () => {
@@ -598,7 +653,7 @@ test('high-stock Storage transport covers its bonus upgrade rate or stops at the
         const trip = carriers[0].development.travelTicks;
         const burst = state.policy.upgrading.maximumBonusWorkParts;
         const wanted = Math.ceil(trip * burst / 50);
-        const bodyLimit = Math.min(state.policy.hauling.maximumCarryPartsPerCreep, Math.floor(capacity / 100));
+        const bodyLimit = state.loader.load('creep/developmentBodies').developmentPartCapacity(home, 'filler', 'carry');
         const fleetLimit = bodyLimit * state.policy.hauling.maximumCreepsPerSource;
         const carry = carriers.reduce((sum, config) => sum + config.development.carryParts, 0);
         assert.equal(carry, Math.min(wanted, fleetLimit));
@@ -772,6 +827,42 @@ test('development duty-cycle floors fractional quotas and safely handles unavail
     assert.equal(allowed(unit), true);
 });
 
+test('automatic full-size upgrader actions stay within the combined live income budget', () => {
+    const home = room({ level: 4, capacity: 2300 });
+    const state = makeWorld(home);
+    const allowed = state.loader.load('creep/development').developmentWorkAllowed;
+    const units = [worker(home, { role: 'upgrader', work: 12, name: 'full-budget' }),
+        worker(home, { role: 'upgrader', work: 12, name: 'remainder-budget' })];
+    for (const [index, unit] of units.entries()) {
+        unit.memory.development = { fullBody: true };
+        home.memory.creepConfig[unit.name] = {
+            development: { fullBody: true, workParts: index === 0 ? 12 : 2 },
+        };
+    }
+    const before = JSON.stringify(home.memory);
+    let intents = 0, consumed = 0;
+    for (let tick = 0; tick < 12; tick++) {
+        state.game.time = tick;
+        for (const unit of units) if (allowed(unit)) { intents++; consumed += unit.getActiveBodyparts('work'); }
+    }
+    assert.equal(intents, 14);
+    assert.equal(consumed, 12 * 14, 'larger actions preserve 14 energy/tick rather than spending 24');
+    assert.equal(JSON.stringify(home.memory), before);
+});
+
+test('powered source income changes the fleet quota without limiting its capacity body', () => {
+    const home = room({ level: 6, capacity: 2300 });
+    home.sources[0].effects = [{ effect: 13, level: 5, ticksRemaining: 100 }];
+    const state = makeWorld(home);
+    state.loader.globals.PWR_REGEN_SOURCE = 13;
+    state.loader.globals.POWER_INFO = { 13: { effect: [50, 100, 150, 200, 250], period: 15 } };
+    const miners = byRole(state.release(), 'harvester');
+    assert.equal(requestedWork(miners), 14);
+    assert.equal(miners.length, 1, 'the capacity body covers the powered source with one worker');
+    const preview = state.loader.load('creep/bodySelection').previewBodySelection(home, miners[0], 0);
+    assert.ok(preview.body.filter(part => part === 'work').length >= 14);
+});
+
 test('development duty-cycle exits for RCL8 and disabled growth before reading catalog or active parts', () => {
     for (const level of [8, 4]) {
         const home = room({ level });
@@ -854,7 +945,7 @@ test('small-upgrader seats only receive larger bodies after their occupants die 
     const state = makeWorld(home, { creeps });
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8);
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8, 'refreshing a full station cannot omit a living upgrader');
-    for (const expected of [10, 12, 14, 16]) {
+    for (const expected of [9, 10, 11, 12]) {
         const dying = Object.entries(state.game.creeps).find(([, creep]) => creep.memory.role === 'upgrader' && creep.getActiveBodyparts('work') === 2);
         assert.ok(dying);
         delete state.game.creeps[dying[0]];
@@ -872,7 +963,7 @@ test('small-upgrader seats only receive larger bodies after their occupants die 
         }
     }
     const settled = byRole(state.release(), 'upgrader');
-    assert.equal(requestedWork(settled), 16);
+    assert.equal(requestedWork(settled), 12);
     assert.ok(settled.every(config => state.game.creeps[state.demand.createCreepName(config.role, config.name)]));
 });
 
@@ -887,7 +978,7 @@ test('default development demand can exceed four upgraders while respecting the 
     const seats = state.loader.load('creep/developmentLogistics').controllerUpgradeSeatCount(home, buffer);
     assert.ok(seats >= 6);
     const upgrades = byRole(state.release(), 'upgrader');
-    assert.equal(upgrades.length, 5);
+    assert.equal(upgrades.length, 6);
     assert.equal(requestedWork(upgrades), 17);
     assert.ok(upgrades.length <= seats && upgrades.length <= state.policy.upgrading.maximumCreeps);
     for (const [index, name] of ['first-aid', 'second-aid'].entries()) {
@@ -967,7 +1058,7 @@ test('an active aid upgrader away from the buffer occupies a full controller-are
     assert.equal(seats, 4);
     const upgrades = byRole(state.release(), 'upgrader');
     assert.equal(upgrades.length, 3, 'the active aid occupies its far-buffer controller seat');
-    assert.equal(requestedWork(upgrades), 12);
+    assert.equal(requestedWork(upgrades), 9);
     aid.store = store(0, 100);
     assert.equal(byRole(state.release(), 'upgrader').length, 3, 'an active empty aid still occupies its upgrade station');
 });
@@ -1057,6 +1148,15 @@ test('RCL8 demand stays identical to legacy manager, mineral, hauling, building 
     assert.ok(configs.every(config => !Object.hasOwn(config, 'development')));
     assert.deepEqual(Object.keys(home.memory), keys, 'RCL8 does not initialize development state');
     assert.equal(JSON.stringify([oldBuilder.memory, oldUpgrader.memory]), before, 'RCL8 does not adopt old consumers');
+});
+
+test('mature mining still publishes its replacement demand while a Source regeneration batch is empty', () => {
+    const home = room({ level: 8, capacity: 5600 });
+    home.sources[0].energy = 0;
+    const state = makeWorld(home);
+    const miners = byRole(state.release(), 'harvester');
+    assert.equal(miners.length, 1);
+    assert.equal(miners[0].data.sourceId, home.sources[0].id);
 });
 
 test('RCL8 downgrade maintenance publishes exactly one legacy upgrader even with a full Storage', () => {
@@ -1408,38 +1508,60 @@ test('several source Containers do not duplicate the no-Storage permanent repair
     assert.equal(configs[0].data.sourceId, home.containers[0].id);
 });
 
-test('the real growth repairer selector provides one affordable WORK at 200 energy without boost waiting', () => {
-    for (const preference of ['global', 'room']) for (const terrain of ['plain', 'swamp']) {
+test('growth repairers retain their work quota but wait for a capacity-sized native body', () => {
+    const home = room({ level: 4, capacity: 1300 }); home.energyAvailable = 200; home.ramparts = [{ my: true }];
+    const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
+    const config = byRole(state.release(), 'repairer')[0];
+    assert.equal(config.development.workParts, 1);
+    assert.equal(config.development.maximumCost, undefined);
+    assert.equal(config.development.fullBody, true);
+    const selector = state.loader.load('creep/bodySelection').selectCreepBody;
+    assert.deepEqual(Array.from(selector(home, config, false).body), []);
+    home.energyAvailable = home.energyCapacityAvailable;
+    const selected = selector(home, config, false);
+    assert.ok(selected.body.filter(part => part === 'work').length > config.development.workParts);
+    assert.ok(selected.body.reduce((total, part) => total + costs[part], 0) > 200);
+    assert.equal(selected.boostPlan.tier, 0); assert.equal(selected.boostPlan.steps.length, 0);
+});
+
+test('growth repairers retain explicit body profiles instead of applying the one-WORK quota to their body', () => {
+    for (const preference of ['global', 'room']) for (const terrain of ['plain', 'road']) {
         const home = room({ level: 4, capacity: 1300 }); home.energyAvailable = 200; home.ramparts = [{ my: true }];
-        const state = makeWorld(home, { automaticHauling: false });
-        const profile = { workParts: 20, carryParts: 25, maximumCost: 12900, boostTier: 3, boostFallback: 'wait', terrain };
+        const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
+        const profile = { workParts: 2, carryParts: 2, maximumCost: 700, boostTier: 3, boostFallback: 'wait', terrain };
         if (preference === 'global') state.loader.load('settings/bodyPolicy').bodyPolicy.profiles.repairer = profile;
         else home.memory.bodyProfiles = { repairer: profile };
         const config = byRole(state.release(), 'repairer')[0];
         assert.equal(config.development.workParts, 1);
-        assert.equal(config.development.maximumCost, 200);
+        assert.equal(config.development.fullBody, true);
         const selector = state.loader.load('creep/bodySelection').selectCreepBody;
-        const selected = selector(home, config, false);
-        assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
-        assert.equal(selected.boostPlan.tier, 0); assert.equal(selected.boostPlan.steps.length, 0);
-        home.energyAvailable = 199;
         assert.deepEqual(Array.from(selector(home, config, false).body), []);
+        home.energyAvailable = home.energyCapacityAvailable;
+        const selected = selector(home, config, false);
+        assert.equal(selected.body.filter(part => part === 'work').length, 2);
+        assert.equal(selected.body.filter(part => part === 'carry').length, 2);
+        assert.ok(selected.body.reduce((total, part) => total + costs[part], 0) <= profile.maximumCost);
+        assert.equal(selected.boostPlan.tier, 0); assert.equal(selected.boostPlan.steps.length, 0);
     }
 });
 
-test('a mature permanent repairer is affordable before the full pool while extras retain their old budget', () => {
+test('mature permanent and surplus repairers use the full capacity plan even while the energy pool fills', () => {
     const home = legacyRoom(); home.energyAvailable = 200; home.ramparts = [{ my: true }];
     const state = makeWorld(home, { automaticHauling: false });
     state.loader.load('settings/population').populationPolicy.base.maximumRepairers = 3;
     const configs = byRole(state.release(), 'repairer');
     assert.equal(configs.length, 3);
     assert.equal(configs[0].development, undefined);
-    assert.equal(configs[0].bodyProfile.maximumCost, 200);
+    assert.equal(configs[0].bodyProfile, undefined);
     const selected = state.loader.load('creep/bodySelection').selectCreepBody(home, configs[0], false);
-    assert.deepEqual(Array.from(selected.body), ['work', 'carry', 'move']);
+    assert.ok(selected.body.reduce((total, part) => total + costs[part], 0) > home.energyAvailable,
+        'Spawn must wait instead of paying for a smaller permanent worker');
+    assert.equal(selected.body.length, 50);
     assert.equal(configs[1].bodyProfile, undefined); assert.equal(configs[2].bodyProfile, undefined);
     home.energyAvailable = home.energyCapacityAvailable;
     assert.equal(byRole(state.release(), 'repairer')[0].bodyProfile, undefined, 'a full pool retains the established mature body plan');
+    assert.deepEqual(Array.from(state.loader.load('creep/bodySelection').selectCreepBody(home,
+        byRole(state.release(), 'repairer')[0], false).body), Array.from(selected.body));
 });
 
 test('ordinary manual and spawning repairers occupy the floor without mutating their paid-for body or current target', () => {

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function world({ reverse = false, remote = false } = {}) {
     const calls = [], objects = new Map(), moved = {}, cache = {}, game = { time: 100, shard: { name: 'shard1' }, rooms: {}, creeps: {}, flags: {},
@@ -20,12 +21,12 @@ function world({ reverse = false, remote = false } = {}) {
     game.rooms[home.name] = home; objects.set(source.id, source);
     if (remote) home.memory.developmentRemotes = { enabled: true, selectedRooms: ['E39N6'], intel: {
         E39N6: { seenAt: 100, status: 'safe', sources: [{ id: source.id }] } } };
-    const loader = createSourceLoader({ globals: { Game: game, Memory: { warMode: {} }, RoomPosition: Position,
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: game, Memory: { warMode: {} }, RoomPosition: Position,
         RESOURCE_ENERGY: 'energy', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link', OK: 0,
         FIND_HOSTILE_STRUCTURES: 'hostileStructures', FIND_HOSTILE_CREEPS: 'hostileCreeps',
         STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower', TOWER_ENERGY_COST: 10,
         ATTACK: 'attack', RANGED_ATTACK: 'ranged_attack', WORK: 'work', HEAL: 'heal' },
-        modules: { './developmentLogistics': { controllerEnergyBuffer: () => buffer },
+        modules: { ...nativeBodies.modules, './developmentLogistics': { controllerEnergyBuffer: () => buffer },
             './developmentRetirement': { retireDevelopmentCreep: () => false },
             role: { createRoleBehavior: role => ({ prepare: () => true, source: c => calls.push({ type: 'ordinary-source', name: c.name, role }),
                 target: c => calls.push({ type: 'ordinary-target', name: c.name, role }) }) },

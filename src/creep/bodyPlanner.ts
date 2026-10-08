@@ -86,16 +86,6 @@ function controllerStation(room: Room, config: CreepMemory): boolean {
         sharedSeat(room, room.controller.pos, 3, supply.pos)
 }
 
-function sourceIncome(source: Source | undefined): number {
-    let income = (source?.energyCapacity || SOURCE_ENERGY_CAPACITY) / ENERGY_REGEN_TIME
-    for (const active of source?.effects || []) {
-        if (active.effect !== PWR_REGEN_SOURCE || active.ticksRemaining <= 0 || active.level === undefined) continue
-        const power = POWER_INFO[PWR_REGEN_SOURCE]
-        income += power.effect[active.level - 1] / power.period!
-    }
-    return income
-}
-
 function orderedBody(counts: Counts): BodyPartConstant[] {
     // Front armour absorbs damage first; MOVE and tail HEAL stay behind productive parts.
     const order: BodyPartConstant[] = [TOUGH, WORK, CLAIM, ATTACK, RANGED_ATTACK, CARRY, MOVE, HEAL]
@@ -184,10 +174,8 @@ function workerBody(room: Room, config: CreepMemory, profile: CreepBodyProfile,
     const seated = profile.stationary !== undefined ? profile.stationary :
         mining ? sourceStation(source) : role === 'upgrader' && controllerStation(room, config)
     let maximumWork = bodyPolicy.economy.maximumWorkerWorkParts
-    if (mining) {
-        maximumWork = Math.ceil(sourceIncome(source) /
-            (HARVEST_POWER * effect(boostTypeEnum.BoostTypeHarvest, tier, 'harvest')))
-    }
+    // A large miner empties each regeneration batch in fewer harvest intents. Its role
+    // already waits when the source is empty, so average income must not cap WORK.
     // RCL8 limits unboosted energy consumption, then applies upgrade compounds to progress.
     if (role === 'upgrader' && room.controller?.level === 8) maximumWork = Math.min(maximumWork, CONTROLLER_MAX_UPGRADE_PER_TICK)
     const desiredWork = Math.min(maximumWork, positiveCount(profile.workParts, maximumWork))
@@ -196,12 +184,20 @@ function workerBody(room: Room, config: CreepMemory, profile: CreepBodyProfile,
             Math.ceil(work * (role === 'upgrader' ? bodyPolicy.economy.mobileUpgraderCarryPerWork : bodyPolicy.economy.mobileCarryPerWork))
         if (mining && seated) baseCarry = Math.max(1, Math.ceil(work * HARVEST_POWER *
             effect(boostTypeEnum.BoostTypeHarvest, tier, 'harvest') * bodyPolicy.economy.sourceCarryBatches / CARRY_CAPACITY))
-        const carry = carryCount(positiveCount(profile.carryParts, Math.max(1, baseCarry)), tier)
-        if (mining && seated && carry * CARRY_CAPACITY * effect(boostTypeEnum.BoostTypeCarry, tier, 'capacity') <
-            work * HARVEST_POWER * effect(boostTypeEnum.BoostTypeHarvest, tier, 'harvest') * bodyPolicy.economy.sourceCarryBatches) continue
-        // Source miners travel empty to a confirmed seat. Mineral miners carry loads to storage.
-        const candidate = addMovement({ [WORK]: work, [CARRY]: carry }, terrain, tier, false, mining && seated)
-        if (fits(candidate, budget)) return candidate
+        const preferredCarry = positiveCount(profile.carryParts, Math.max(1, baseCarry))
+        let minimumCarry = carryCount(Math.min(preferredCarry, Math.max(1, baseCarry)), tier)
+        if (mining && seated) minimumCarry = Math.max(minimumCarry, Math.ceil(work * HARVEST_POWER *
+            effect(boostTypeEnum.BoostTypeHarvest, tier, 'harvest') * bodyPolicy.economy.sourceCarryBatches /
+            (CARRY_CAPACITY * effect(boostTypeEnum.BoostTypeCarry, tier, 'capacity'))))
+        // An oversized CARRY preference can shrink to this WORK count's normal load,
+        // while a smaller explicit preference remains its upper bound.
+        const desiredCarry = Math.min(carryCount(preferredCarry, tier), MAX_CREEP_SIZE - work - 1,
+            Math.floor((budget - work * BODYPART_COST[WORK] - BODYPART_COST[MOVE]) / BODYPART_COST[CARRY]))
+        for (let carry = desiredCarry; carry >= minimumCarry; carry--) {
+            // Source miners travel empty to a confirmed seat. Mineral miners carry loads to storage.
+            const candidate = addMovement({ [WORK]: work, [CARRY]: carry }, terrain, tier, false, mining && seated)
+            if (fits(candidate, budget)) return candidate
+        }
     }
     // At 200 capacity the first worker can walk more slowly until extensions fund full-speed bodies.
     return minimumWorker(budget, terrain, tier)

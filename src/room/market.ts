@@ -27,6 +27,7 @@ interface EnergyOrderCache {
 }
 let marketShard = '', marketTick = -1, dealAttempts = 0
 let energyOrders: EnergyOrderCache | undefined
+let resourceOrdersThisTick = new Map<ResourceConstant, Order[]>()
 let soldThisTick = new Map<string, number>()
 let energyPlans = new Map<string, EnergySalePlan>()
 let invalidOrdersThisTick = new Set<string>(), retryEnergyRooms = new Set<string>()
@@ -44,6 +45,7 @@ function prepareMarket(): void {
     marketTick = Game.time
     dealAttempts = 0
     soldThisTick = new Map()
+    resourceOrdersThisTick = new Map()
     invalidOrdersThisTick = new Set()
 }
 /** `amount` is presently executable stock; remainingAmount also includes unfunded stock. */
@@ -64,6 +66,17 @@ function cachedEnergyOrders(): EnergyOrderCache {
         energyOrders = { scannedAt: Game.time, orders, byId: new Map(orders.map(order => [order.id, order])) }
     }
     return energyOrders
+}
+/** Native order queries are expensive; rooms share one filtered result per resource/tick. */
+function buyOrders(resource: ResourceConstant): Order[] {
+    if (resource === RESOURCE_ENERGY) return cachedEnergyOrders().orders
+    let orders = resourceOrdersThisTick.get(resource)
+    if (!orders) {
+        orders = Game.market.getAllOrders({ type: ORDER_BUY, resourceType: resource })
+        resourceOrdersThisTick.set(resource, orders)
+    }
+    // Successful deals debit executableAmount through soldThisTick, never stale raw orders.
+    return orders
 }
 function dealResource(room: Room, order: Order, resource: ResourceConstant, amount: number): boolean {
     prepareMarket()
@@ -194,7 +207,7 @@ export function sellResource(
 
     let bestPrice = 0
     let selectedOrder: Order | undefined
-    const orders = resourceType === RESOURCE_ENERGY ? cachedEnergyOrders().orders : Game.market.getAllOrders({ type: ORDER_BUY, resourceType })
+    const orders = buyOrders(resourceType)
     for (const order of orders) {
         if (
             order.roomName == undefined ||

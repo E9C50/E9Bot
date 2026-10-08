@@ -38,18 +38,13 @@ export function releaseRepairerCreepConfigs(room: Room, developing: boolean): vo
         if (!config) continue
         if (!resident && index < minimum) config.spawnPriority = policy.firstRampartWorkerPriority
         if (resident?.memory.bodyProfile) config.bodyProfile = { ...resident.memory.bodyProfile }
-        const minimumCost = BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE]
         if (developing) {
             const work = Math.max(1, Math.floor(policy.rampartWorkerWorkParts))
+            // WORK/CARRY describe population demand; the spawn selector sizes the paid-for body.
             config.development = { workParts: work,
                 carryParts: Math.max(developmentPolicy.bodies.minimumWorkerCarryParts, work * developmentPolicy.bodies.workerCarryPerWork),
-                maximumCost: Math.min(room.energyCapacityAvailable, Math.max(minimumCost, room.energyAvailable)) }
+                fullBody: true }
             config.bodyProfile = { ...config.bodyProfile, boostTier: 0 }
-        } else if (index < minimum && room.energyAvailable < room.energyCapacityAvailable) {
-            // The permanent worker must be affordable before a mature room's pool is full.
-            config.bodyProfile = { ...config.bodyProfile, maximumCost: Math.min(
-                config.bodyProfile?.maximumCost ?? Infinity, room.energyCapacityAvailable,
-                Math.max(minimumCost, room.energyAvailable)) }
         }
         // Manual native names can differ from the bot's hash; keep their actual birth slot occupied.
         if (resident && resident.name !== key) {

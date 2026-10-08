@@ -1,7 +1,7 @@
 import { addCreepConfig, createCreepName } from './demand'
 import { developmentPolicy as policy } from 'settings/development'
 import { controllerEnergyBuffer, controllerUpgradeSeatCount } from './developmentLogistics'
-import { getDevelopmentSpawnReserve, getSourceMiningWorkTarget } from './developmentEconomy'
+import { getSourceMiningWorkTarget } from './developmentEconomy'
 import { developmentRemotePolicy } from 'settings/developmentRemotes'
 import { harvestWorkParts, energyCarryCapacity } from './bodyEffectiveness'
 import { bodyPolicy } from 'settings/bodyPolicy'
@@ -10,6 +10,7 @@ import { interShardPolicy } from 'settings/interShard'
 import type { ShardUnitData } from 'shard/missions'
 import { sourceLinkWithCenter, hasSourceLinkTransport } from 'room/sourceLinks'
 import { releaseRepairerCreepConfigs } from './repairerPopulation'
+import { developmentPartCapacity } from './developmentBodies'
 
 function workParts(creep: Creep): number { return creep.getActiveBodyparts(WORK) }
 function range(first: RoomPosition, second: RoomPosition): number {
@@ -26,18 +27,8 @@ function publish(room: Room, role: CreepRoleConstant, name: string, data: CreepD
     const key = addCreepConfig(room, role, name, data)
     const config = room.memory.creepConfig[key]
     if (config == undefined) return
-    config.development = body
+    config.development = { ...body, fullBody: true }
     if (priority !== undefined) config.spawnPriority = priority
-}
-
-function affordableWork(capacity: number, maximum: number, stationary: boolean, mining = false): number {
-    for (let work = maximum; work > 0; work--) {
-        const carry = mining ? 1 : stationary ? Math.max(1, Math.ceil(work * policy.bodies.stationaryCarryTicks / CARRY_CAPACITY))
-            : Math.max(1, work * policy.bodies.workerCarryPerWork)
-        const move = Math.max(1, Math.ceil((stationary ? work : work + carry) / 2))
-        if (work * BODYPART_COST[WORK] + carry * BODYPART_COST[CARRY] + move * BODYPART_COST[MOVE] <= capacity) return work
-    }
-    return capacity >= BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE] ? 1 : 0
 }
 
 /** A committed boost plan also covers future mining demand while its worker is spawning/preparing. */
@@ -155,10 +146,9 @@ function localSupply(room: Room, creeps: Creep[], supplies: MiningSupply[], buff
 }
 
 /** Compact affordable mining slots replace old small bodies without removing their live production early. */
-function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
+function releaseMining(room: Room, creeps: Creep[], affordable: number): MiningSupply[] {
     const supplies: MiningSupply[] = []
-    const affordable = affordableWork(room.energyCapacityAvailable, policy.mining.workPartsPerSource, true, true)
-    if (affordable == 0) return supplies
+    if (affordable === 0) return supplies
     for (const source of room.sources) {
         const linked = room.links.length > 0 && sourceLinkWithCenter(room, source) !== undefined
         const miners = creeps.filter(creep => creep.memory.role == 'harvester' &&
@@ -185,12 +175,12 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
             const work = Math.min(affordable, remaining)
             // A single already sufficient boosted/full miner wins. Otherwise preserve
             // workers that match a full affordable slot or the exact remainder (4+1 at 550).
-            const suitable = candidates.filter(candidate => candidate.work >= work)
+            const suitable = candidates.filter(candidate => candidate.work > 0)
                 .sort((first, second) => Number(second.work >= remaining) - Number(first.work >= remaining) ||
                     first.work - second.work || Number(first.miner.spawning) - Number(second.miner.spawning))
             const incumbent = suitable[0]
             if (incumbent) {
-                publish(room, 'harvester', incumbent.miner.memory.name, { sourceId: source.id }, { workParts: work, stationary: true })
+                publish(room, 'harvester', incumbent.miner.memory.name, { sourceId: source.id }, { workParts: Math.min(remaining, incumbent.work), stationary: true })
                 candidates.splice(candidates.indexOf(incumbent), 1)
                 remaining -= Math.min(remaining, incumbent.work)
             } else {
@@ -203,7 +193,7 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
                 if (!name) break
                 publish(room, 'harvester', name, { sourceId: source.id }, { workParts: work, stationary: true },
                     operatingMine ? policy.mining.expansionPriority : undefined)
-                remaining -= work
+                remaining -= affordable
             }
             count++
         }
@@ -251,7 +241,16 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         creep.memory.development = {}
     }
     const buffer = controllerEnergyBuffer(room)
-    const local = localSupply(room, creeps, releaseMining(room, creeps), buffer)
+    // The explicit mining station and native CARRY body depend on this room's
+    // capacity/profile, not the assigned Source. Reuse previews only within this publication.
+    const miningCapacity = room.sources.length > 0 ? developmentPartCapacity(room, 'harvester', WORK,
+        { sourceId: room.sources[0].id }, true) : 0
+    let fillerCapacity: number | undefined
+    const carryCapacity = (data: FillerData): number => {
+        if (fillerCapacity === undefined) fillerCapacity = Math.max(1, developmentPartCapacity(room, 'filler', CARRY, data))
+        return fillerCapacity
+    }
+    const local = localSupply(room, creeps, releaseMining(room, creeps, miningCapacity), buffer)
     const remote = remoteIncome(room, creeps)
     const income = local.income + remote
     const stored = room.storage?.store[RESOURCE_ENERGY] || 0
@@ -261,7 +260,7 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     if ((customBoosts && room.labs.length > 0 || room.factory != undefined) && (room.storage || room.terminal)) {
         const key = addCreepConfig(room, 'processer', `${room.name}_PROCESSER`, { waiting: 0 })
         if (room.memory.creepConfig[key]) {
-            room.memory.creepConfig[key].development = {}
+            room.memory.creepConfig[key].development = { fullBody: true }
             room.memory.creepConfig[key].bodyProfile = { boostTier: 0 }
         }
     }
@@ -286,11 +285,10 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         const nearbyWork = creeps.filter(creep => !creep.spawning && creep.memory.role === 'harvester' &&
             (creep.memory.data as HarvesterData).sourceId === source.id && creep.room.name === room.name &&
             range(creep.pos, source.pos) <= 1).reduce((total, creep) => total + harvestWorkParts(creep), 0)
-        const startingWork = affordableWork(room.energyCapacityAvailable, policy.mining.workPartsPerSource, true, true)
+        const startingWork = miningCapacity
         const rate = Math.min(source.energyCapacity / ENERGY_REGEN_TIME, Math.max(startingWork, nearbyWork) * HARVEST_POWER)
         const totalCarry = Math.max(policy.bodies.minimumCarryParts, Math.ceil((linked ? stock : trip * rate) / CARRY_CAPACITY))
-        const capacityCarry = Math.max(1, Math.min(policy.hauling.maximumCarryPartsPerCreep,
-            Math.floor(room.energyCapacityAvailable / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
+        const capacityCarry = carryCapacity({ sourceId, mineId: source.id })
         const count = linked ? 1 : Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(totalCarry / capacityCarry))
         const sourceHaulers = creeps.some(creep => !creep.spawning && creep.room.name === room.name &&
             creep.memory.role === 'filler' && energyCarryCapacity(creep) > 0 && creep.getActiveBodyparts(MOVE) > 0 &&
@@ -304,8 +302,7 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     if (room.storage) {
         const trip = distributionTrip
         const carry = Math.max(policy.bodies.defaultHaulerCarryParts, Math.ceil(trip * (imports + burst + importedBacklog) / CARRY_CAPACITY))
-        const capacityCarry = Math.max(1, Math.min(policy.hauling.maximumCarryPartsPerCreep,
-            Math.floor(room.energyCapacityAvailable / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
+        const capacityCarry = carryCapacity({ sourceId: room.storage.id })
         const count = Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(carry / capacityCarry))
         for (let index = 0; index < count; index++) publish(room, 'filler', `${room.name}_DEVELOP_FILLER_STORAGE_${index}`,
             { sourceId: room.storage.id }, { carryParts: Math.min(capacityCarry, Math.max(1, carry - index * capacityCarry)), travelTicks: trip })
@@ -317,12 +314,12 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const building = room.constructionSites.length > 0
     const sourceContainer = room.containers.find(container => room.sources.some(source => range(source.pos, container.pos) <= 1))
     const energySource = room.storage || sourceContainer || room.sources[0]
-    if (energySource) {
+    if (energySource && building) {
         const constructionWork = Math.max(1, Math.min(policy.building.maximumCreeps * policy.building.workPartsPerCreep,
             Math.floor(income * (1 - policy.upgrading.incomeShareWhileBuilding) / BUILD_POWER) +
             (stored > policy.upgrading.storageReserve ? policy.building.maximumCreeps * policy.building.workPartsPerCreep : 0)))
-        const builderWork = essentialSites.length > 0 ? policy.building.workPartsPerCreep : policy.building.roadOnlyWorkParts
-        const builderCount = building ? Math.min(policy.building.maximumCreeps, Math.ceil(constructionWork / builderWork)) : 0
+        const builderWork = Math.max(1, developmentPartCapacity(room, 'builder', WORK, { sourceId: energySource.id, buildTarget: '' }))
+        const builderCount = Math.min(policy.building.maximumCreeps, Math.ceil(constructionWork / builderWork))
         const livingBuilders = creeps.filter(creep => creep.memory.role === 'builder' && creep.room.name === room.name)
         const builders = livingBuilders.filter(creep => workParts(creep) > 0 && creep.getActiveBodyparts(CARRY) > 0)
         // Idle constructors are reusable, including bodies near natural expiry.
@@ -343,13 +340,11 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
             }
             if (!name) break
             const bootstrap = firstBootstrap && index === 0
-            // Establish one self-supplied constructor after mining/hauling recovery,
-            // before filling the complete production fleet. Do not wait for 300 energy.
-            const body: NonNullable<CreepMemory['development']> = bootstrap ? {
-                workParts: 1, carryParts: 1,
-                maximumCost: BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE],
-            } : { workParts: Math.min(builderWork, constructionWork - index * builderWork) }
-            publish(room, 'builder', name, { sourceId: energySource.id, buildTarget: '' }, body,
+            // Prioritise infrastructure without reducing the physical body to the current work quota.
+            publish(room, 'builder', name, { sourceId: energySource.id, buildTarget: '' }, {
+                workParts: bootstrap ? 1 : Math.max(1, Math.min(builderWork, constructionWork - index * builderWork)),
+                ...(bootstrap ? { carryParts: 1 } : {}),
+            },
                 bootstrap ? policy.building.firstCreepPriority : undefined)
             if (bootstrap) {
                 const config = room.memory.creepConfig[createCreepName('builder', name)]
@@ -368,37 +363,37 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const maximum = Math.max(0, Math.min(policy.upgrading.maximumCreeps,
         controllerUpgradeSeatCount(room, buffer) - occupiedSeats))
     const upgrades = creeps.filter(creep => creep.memory.role === 'upgrader')
-    let remaining = Math.max(0, totalWork - externalWork), count = upgrades.length
-    // Paid-for bodies work until natural death. Budget and geometry constrain only
-    // additional births, never the live unit's WORK quota or continued operation.
+    let remaining = Math.max(0, totalWork - externalWork - upgrades
+        .filter(creep => !creep.memory.development?.fullBody)
+        .reduce((total, creep) => total + workParts(creep), 0)), count = upgrades.length
+    // Legacy paid-for bodies continue working; newly spawned full bodies share the
+    // arrived income budget without turning their physical WORK count into extra demand.
     for (const creep of upgrades) {
         const work = workParts(creep)
-        remaining -= work
+        const quota = creep.memory.development?.fullBody ? Math.min(work, remaining) : work
+        if (creep.memory.development?.fullBody) remaining -= quota
         if (!creep.memory.name) continue
         const sourceId = buffer?.id || energySource?.id || (creep.memory.data as UpgraderData).sourceId
-        publish(room, 'upgrader', creep.memory.name, { sourceId }, { workParts: work, stationary: buffer != undefined })
+        publish(room, 'upgrader', creep.memory.name, { sourceId }, { workParts: quota, stationary: buffer != undefined })
     }
     if (!energySource || remaining <= 0 || count >= maximum) return
-    const reserve = getDevelopmentSpawnReserve(room, 'upgrader')
-    const workPerCreep = Math.max(1, affordableWork(room.energyCapacityAvailable - reserve,
-        policy.upgrading.maximumWorkPartsPerCreep, buffer != undefined))
+    const workPerCreep = Math.max(1, developmentPartCapacity(room, 'upgrader', WORK,
+        { sourceId: buffer?.id || energySource.id }, buffer != undefined))
     const downgradeRecovery = room.controller!.ticksToDowngrade <= policy.controller.constructionDowngradeWarningTicks
     for (let index = 0; remaining > 0 && count < maximum &&
         index < upgrades.length + maximum + policy.replacement.maximumReplacementsPerRoom; index++) {
         const name = `${room.name}_DEVELOP_UPGRADER_${index}`
         if (Game.creeps[createCreepName('upgrader', name)]) continue
-        const work = Math.min(workPerCreep, remaining)
         const emergency = downgradeRecovery && upgrades.length === 0 && count === 0
+        const work = Math.min(workPerCreep, remaining)
         publish(room, 'upgrader', name, { sourceId: buffer?.id || energySource.id },
-            emergency ? { workParts: 1, carryParts: 1, stationary: buffer != undefined,
-                maximumCost: BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE] }
-                : { workParts: work, stationary: buffer != undefined },
+            { workParts: work, stationary: buffer != undefined },
             emergency ? policy.upgrading.downgradeRecoveryPriority :
                 upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
         if (emergency) {
             const config = room.memory.creepConfig[createCreepName('upgrader', name)]
             if (config) config.bodyProfile = { boostTier: 0 }
         }
-        remaining -= emergency ? 1 : work; count++
+        remaining -= workPerCreep; count++
     }
 }

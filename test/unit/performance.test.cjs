@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function profilingWorld() {
     let used = 0;
@@ -121,6 +122,7 @@ test('disabled creep profiling allocates no values list for Game.creeps and perf
     const game = { time: 1, shard: { name: 'shard3' }, rooms: {}, creeps: { a: unit('a'), b: unit('b', true) } };
     const loader = createSourceLoader({
         globals: {
+            ...nativeBodies.globals,
             Game: game, Memory: { warMode: {} },
             Object: new Proxy(Object, {
                 get(target, key) {
@@ -130,6 +132,7 @@ test('disabled creep profiling allocates no values list for Game.creeps and perf
             }),
         },
         modules: {
+            ...nativeBodies.modules,
             // Measure the execution framework, with builder maintenance isolated.
             'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
             role: { createRoleBehavior: (role, data) => ({
@@ -163,12 +166,14 @@ function roleProfilingWorld(creeps, costs, warMode = {}) {
     const calls = [], logs = [];
     const game = { time: 1, shard: { name: 'shard3' }, rooms: {}, creeps, cpu: { getUsed() { reads++; return used; } } };
     const loader = createSourceLoader({ globals: {
+        ...nativeBodies.globals,
         Game: game, Memory: { warMode }, console: { log: (...values) => logs.push(values.map(String).join(' ')) },
         Object: new Proxy(Object, { get(target, key) {
             if (key === 'values') return value => { if (value === game.creeps) creepValues++; return Object.values(value); };
             return Reflect.get(target, key);
         } }),
     }, modules: {
+        ...nativeBodies.modules,
         'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
         role: { createRoleBehavior(role, data) {
             const cost = costs[data.name] || {};

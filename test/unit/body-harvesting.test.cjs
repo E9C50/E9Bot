@@ -48,7 +48,7 @@ function world({ remote = false, level = 8, marked = true, center = true, x = 10
     occupants.push(creep);
     source.room = room;
     const game = { time: 1, shard: { name: 'shard3' }, rooms: { [room.name]: room }, creeps: { [creep.name]: creep }, getObjectById: id => objects.get(id) || null };
-    const loader = createSourceLoader({ globals: { Game: game, RoomPosition: Position, RESOURCE_ENERGY: 'energy', WORK: 'work',
+    const loader = createSourceLoader({ globals: { Game: game, RoomPosition: Position, RESOURCE_ENERGY: 'energy', WORK: 'work', CARRY: 'carry', MOVE: 'move',
         LOOK_STRUCTURES: 'structures', LOOK_CREEPS: 'creeps', TERRAIN_MASK_WALL: 1, CONTAINER_DECAY: 5000,
         STRUCTURE_ROAD: 'road', STRUCTURE_LINK: 'link', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', ERR_NOT_IN_RANGE: -9, OK: 0,
         FIND_MY_CREEPS: 'my-creeps', FIND_MINERALS: 'minerals', HARVEST_POWER: 2, CREEP_LIFE_TIME: 1500, BOOSTS: boosts }, modules: { utils: { getDistance: (a, b) => a.getRangeTo(b),
@@ -88,6 +88,71 @@ function world({ remote = false, level = 8, marked = true, center = true, x = 10
     }
     return { game, room, source, creep, behavior, objects, actions, walls, occupants, p, structure, tick, loader };
 }
+
+test('a full road miner delivers the same regeneration batch using far fewer successful native intents', () => {
+    function cycle(work, carry) {
+        const w = world({ energy: 0, work, carry });
+        const buffer = w.structure('buffer', 'container', 10, 11, { capacity: 10000 });
+        let harvests = 0, transfers = 0;
+        for (let tick = 0; tick < 301; tick++) {
+            const result = w.tick();
+            if (result.amount > 0) harvests++;
+            if (result.sent > 0) transfers++;
+        }
+        assert.equal(w.source.energy, 0);
+        assert.equal(w.creep.store.energy, 0);
+        assert.equal(buffer.store.energy, 3000, 'both workers deliver every unit before the next regeneration batch');
+        return { harvests, transfers };
+    }
+    const previous = cycle(5, 1), full = cycle(30, 5);
+    assert.equal(previous.harvests, 300);
+    assert.equal(full.harvests, 50);
+    assert.ok(full.transfers <= 18);
+    assert.ok(full.harvests + full.transfers < (previous.harvests + previous.transfers) / 5);
+});
+
+test('new full-body development Container miners batch transfers while preserving the whole regeneration batch', () => {
+    function cycle(fullBody) {
+        const w = world({ level: 6, marked: false, energy: 0, work: 20, carry: 4 });
+        w.room.energyAvailable = 800; w.room.energyCapacityAvailable = 800;
+        const buffer = w.structure('mine', 'container', 10, 11, { capacity: 10000 });
+        w.creep.memory.development = { ...(fullBody ? { fullBody: true } : {}) };
+        let harvests = 0, transfers = 0;
+        for (let tick = 0; tick < 301; tick++) {
+            const result = w.tick();
+            if (result.amount) harvests++;
+            if (result.sent) transfers++;
+        }
+        assert.equal(buffer.store.energy, 3000);
+        assert.equal(w.source.energy, 0); assert.equal(w.creep.store.energy, 0);
+        return { harvests, transfers };
+    }
+    const legacy = cycle(false), full = cycle(true);
+    assert.equal(legacy.harvests, 75); assert.equal(full.harvests, 75);
+    assert.equal(legacy.transfers, 75, 'unmarked live miners retain their prior behavior');
+    assert.ok(full.transfers <= 26);
+    assert.ok(full.transfers < legacy.transfers / 2, 'only necessary unload intents change, not mining cadence or income');
+});
+
+test('a full-body development miner switches from Container batches to full-carrier recovery and back', () => {
+    const w = world({ level: 6, marked: false, energy: 40 });
+    const buffer = w.structure('mine', 'container', 10, 11);
+    const spawn = w.structure('spawn', 'spawn', 20, 20, { energy: 300, capacity: 300 });
+    const extension = w.structure('extension', 'extension', 20, 21, { capacity: 50 });
+    w.room.spawns.push(spawn); w.room.extensions.push(extension);
+    w.creep.memory.development = { fullBody: true }; w.creep.memory.spawnRoom = w.room.name;
+    w.room.energyAvailable = 800; w.room.energyCapacityAvailable = 800;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.equal(w.actions[0].target, buffer);
+    w.room.memory.creepConfig = { carrier: { role: 'filler', spawnRoom: w.room.name } };
+    w.creep.store.energy = 50; w.room.energyAvailable = 300; w.actions.length = 0; w.game.time++;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.equal(w.actions[0].target, extension);
+    w.game.creeps.carrier = { room: w.room, spawning: false, memory: { role: 'filler', spawnRoom: w.room.name }, getActiveBodyparts: () => 1 };
+    w.creep.store.energy = 40; w.actions.length = 0; w.game.time++;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.equal(w.actions[0].target, buffer);
+});
 
 for (const remote of [false, true]) for (const bufferType of ['link', 'container']) {
     test(`${remote ? 'remote' : 'RCL8'} new 5WORK miner harvests continuously and batches 40 energy every four ticks to a ${bufferType}`, () => {
@@ -401,6 +466,51 @@ test('development emergency recovery remains ahead of the new workstation branch
     assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
     assert.deepEqual(w.actions.map(action => action.type), ['transfer', 'move']);
     assert.equal(w.actions[0].target, spawn);
+});
+
+for (const linked of [false, true]) test('a mature ' + (linked ? 'Link' : 'Container') + ' miner funds a pending complete local carrier and resumes its station after arrival', () => {
+    const w = world({ level: 8, energy: 50 });
+    const buffer = w.structure('mine', linked ? 'link' : 'container', 11, 11);
+    const spawn = w.structure('spawn', 'spawn', 20, 20, { energy: 300, capacity: 300 });
+    const extension = w.structure('extension', 'extension', 20, 21, { capacity: 50 });
+    w.room.spawns.push(spawn); w.room.extensions.push(extension);
+    w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+    w.creep.memory.spawnRoom = w.room.name;
+    w.room.memory.creepConfig = { carrier: { role: 'filler', spawnRoom: w.room.name, data: { sourceId: buffer.id } } };
+    assert.equal(w.behavior.prepare(w.creep), true);
+    assert.equal(w.behavior.source(w.creep), true);
+    assert.deepEqual(w.actions.map(action => action.type), ['transfer', 'move']);
+    assert.equal(w.actions[0].target, extension, 'miner supplies beyond 300 energy while waiting for the full carrier');
+    w.creep.pos = w.p(19, 21); w.actions.length = 0; w.game.time++;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.target(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['transfer']);
+    assert.equal(w.actions[0].target, extension);
+    w.game.creeps.carrier = { room: w.room, spawning: false, memory: { role: 'filler', spawnRoom: w.room.name }, getActiveBodyparts: () => 1 };
+    w.creep.pos = w.p(10, 11); w.creep.store.energy = 40; w.actions.length = 0; w.game.time++;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.equal(w.actions[0].type, 'transfer'); assert.equal(w.actions[0].target, buffer, 'arrival returns the mine to its regular workstation');
+});
+
+test('a pending full local carrier never diverts the retirement of an incompatible zero-CARRY Link miner', () => {
+    const w = world({ level: 8, carry: 0, energy: 0 }); w.structure('mine', 'link', 11, 11);
+    const spawn = { pos: w.p(20, 20), recycleCreep() { throw Error('the retiring miner is still travelling'); } };
+    w.room.spawns.push(spawn); w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+    w.creep.memory.spawnRoom = w.room.name; w.room.memory.creepConfig = { carrier: { role: 'filler', spawnRoom: w.room.name } };
+    assert.equal(w.behavior.prepare(w.creep), false);
+    assert.equal(w.creep.memory.sourceLinkRetiring, true);
+    assert.deepEqual(w.actions.map(action => action.type), ['move']);
+    assert.equal(w.actions[0].x, 20);
+});
+
+test('a mature miner from another home room does not rescue a foreign room carrier demand', () => {
+    const w = world({ level: 8, energy: 40 }); const buffer = w.structure('mine', 'container', 11, 11);
+    const spawn = w.structure('spawn', 'spawn', 20, 20, { energy: 300, capacity: 300 });
+    const extension = w.structure('extension', 'extension', 20, 21, { capacity: 50 });
+    w.room.spawns.push(spawn); w.room.extensions.push(extension); w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
+    w.creep.memory.spawnRoom = 'W2N1'; w.room.memory.creepConfig = { carrier: { role: 'filler', spawnRoom: w.room.name } };
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.equal(w.actions[0].target, buffer);
+    assert.equal(w.actions.some(action => action.target === extension), false);
 });
 
 test('stationary mining imports before Game is installed', () => {
