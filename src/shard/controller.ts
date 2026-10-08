@@ -9,7 +9,11 @@ import { updateMissionRouting } from './routing'
 import { acceptScoutProof, failMissionScouting, isMissionVerified, refreshMissionScouting, requiresRouteScouting, routeSignature, scoutNeedsReturn } from './verification'
 import { acceptPortalExplorationReport, failPortalExploration, keepPortalExplorer, prioritizeLowBucketScout, refreshPortalExploration, releasePortalExplorer, reserveLowBucketScoutDemand } from './explorationControl'
 import { createShardArrivalReport } from './state'
+import { cacheMissionRoutes } from './routeCache'
+import type { ShardMissionStop } from './missionControl'
 export { recordShardDelivery } from './state'
+
+declare global { interface Memory { shardMissionSequence?: number } }
 
 const roles: Record<ShardUnitKind, ShardRoleConstant> = { claimer: 'sClaimer', builder: 'sBuilder', hauler: 'sHauler', scout: 'sScout' }
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
@@ -36,7 +40,87 @@ function tasks(): Record<string, ShardMission> {
 }
 
 function keyFor(id: string): string {
-    return id.includes(':') ? id : `${Game.shard.name}:${id}`
+    const all = tasks()
+    if (all[id] !== undefined) return id
+    const prefix = `${Game.shard.name}:`
+    const short = id.startsWith(prefix) ? id.slice(prefix.length) : id
+    if (!short.includes(':')) {
+        const mission = Object.values(all).find(value => value.task.sourceShard === Game.shard.name && value.task.id === short)
+        if (mission) return mission.task.key
+    }
+    return id.includes(':') ? id : `${prefix}${id}`
+}
+
+function newTaskKey(id: string): string {
+    const sequence = Memory.shardMissionSequence
+    Memory.shardMissionSequence = Number.isSafeInteger(sequence) && sequence! >= 0 && sequence! < Number.MAX_SAFE_INTEGER ? sequence! + 1 : 1
+    return `${Game.shard.name}:${id}:${Date.now().toString(36)}_${Memory.shardMissionSequence.toString(36)}`
+}
+
+function stopRetention(): number {
+    return Math.max(interShardPolicy.arrivalHistoryTtl,
+        interShardPolicy.transferTtl, interShardPolicy.ackTtl, interShardPolicy.leaseDuration + interShardPolicy.reportMaxAge)
+}
+
+/** Keep only the stop signal needed by living travellers, independently of the task list. */
+function publishStop(key: string, stop: ShardMissionStop): void {
+    const local = getLocalShardState(), reports = local.reports || (local.reports = {})
+    const previous = reports[key]
+    if (isRecord(previous) && previous.type === 'command' && previous.state === stop.state &&
+        previous.updatedAt === stop.updatedAt && previous.expiresAt === stop.expiresAt) return
+    reports[key] = { type: 'command', missionId: key, state: stop.state, updatedAt: stop.updatedAt, expiresAt: stop.expiresAt }
+    markShardStateDirty()
+}
+
+function retireMission(mission: ShardMission): void {
+    if (mission.state !== 'complete' && mission.state !== 'cancelled') return
+    cacheMissionRoutes(mission)
+    withdrawQueuedUnits(mission)
+    const stops = Memory.shardMissionStops || (Memory.shardMissionStops = {})
+    const stop = stops[mission.task.key] || (stops[mission.task.key] = {
+        state: mission.state, updatedAt: Date.now(), expiresAt: Date.now() + stopRetention(), published: false,
+    })
+    publishStop(mission.task.key, stop)
+    delete tasks()[mission.task.key]
+}
+
+function retireTerminalTasks(): void {
+    for (const mission of Object.values(tasks())) if (mission.state === 'complete' || mission.state === 'cancelled') retireMission(mission)
+}
+
+/** Failed writes retry from ordinary Memory; never delete the Portal transfer/ACK handshake. */
+function maintainStops(): void {
+    const stops = Memory.shardMissionStops
+    if (!stops || Object.keys(stops).length === 0) return
+    const local = getLocalShardState(), now = Date.now(), held = new Set<string>()
+    if (Object.values(stops).some(stop => stop.expiresAt <= now)) {
+        for (const name in Game.creeps) {
+            const data = Game.creeps[name].memory?.data
+            if (isShardUnitData(data)) held.add(data.missionId)
+        }
+        for (const transfer of Object.values(local.transfers)) if (isRecord(transfer) && typeof transfer.missionId === 'string' &&
+            typeof transfer.expiresAt === 'number' && transfer.expiresAt > now) held.add(transfer.missionId)
+    }
+    const expired: string[] = []
+    for (const [key, stop] of Object.entries(stops)) {
+        if (stop.expiresAt <= now) {
+            if (stop.published && !held.has(key)) {
+                expired.push(key)
+                const previous = local.reports?.[key]
+                if (isRecord(previous) && previous.type === 'command' && previous.state === stop.state) {
+                    delete local.reports![key]; markShardStateDirty()
+                }
+                continue
+            }
+            stop.expiresAt = now + stopRetention(); stop.published = false
+        }
+        publishStop(key, stop)
+    }
+    if ((expired.length > 0 || Object.values(stops).some(stop => !stop.published)) && flushInterShardMemory()) {
+        // Keep the retry source until removal of the last ISM command is durable too.
+        for (const key of expired) delete stops[key]
+        for (const stop of Object.values(stops)) stop.published = true
+    }
 }
 
 /** 撤回已过期的孵化配置（包括仍存活单位的配置），不会修改在途单位 Memory。 */
@@ -108,10 +192,13 @@ export function createShardTask(inputOrSource: ShardTaskInput | string, target?:
         builders + haulers + (claim ? 1 : 0) > interShardPolicy.maximumUnitsPerTask || targetLevel < 1 || targetLevel > 8 || energyAmount < 0 || reserve < 0 ||
         (!claim && builders == 0 && haulers == 0)) return '人数、目标等级、能量量和保留库存无效，或超过任务人数上限'
     if (claim && source.energyCapacityAvailable < BODYPART_COST[CLAIM] + BODYPART_COST[MOVE]) return '起点能量容量不足以孵化跨 shard claimer'
+    retireTerminalTasks()
+    maintainStops()
     const all = tasks()
-    const key = keyFor(id)
-    if (all[key] != undefined) return `任务已存在：${key}`
+    const previousKey = keyFor(id)
+    if (all[previousKey] != undefined) return `任务已存在：${previousKey}`
     if (Object.values(all).filter((mission) => mission.state == 'active' || mission.state == 'paused').length >= interShardPolicy.maximumTasks) return '已达到跨 shard 活动任务上限'
+    const key = newTaskKey(id)
     const autoReturn = input.returnRoute == undefined && haulers > 0 && input.roundTrip !== false && (autoRoute || input.roundTrip === true)
     const task: ShardTaskSpec = {
         ...input, id, sourceShard: Game.shard.name, key, claim, builders, haulers, targetLevel, autoRoute,
@@ -133,6 +220,12 @@ export function setShardTaskState(id: string, state: ShardMissionState): string 
     if (mission == undefined) return '任务不存在'
     if (!['active', 'paused', 'cancelled'].includes(state)) return '只支持 active / paused / cancelled'
     mission.state = state
+    if (state === 'cancelled') {
+        retireMission(mission)
+        maintainStops()
+        flushInterShardMemory()
+        return `${mission.task.key}: ${state}`
+    }
     if (state == 'active') {
         updateMissionRouting(mission, true)
         refreshMissionScouting(mission)
@@ -154,6 +247,8 @@ export function setShardTaskState(id: string, state: ShardMissionState): string 
 }
 
 export function listShardTasks(): string {
+    retireTerminalTasks()
+    maintainStops()
     return JSON.stringify(Object.values(tasks()).map((mission) => ({
         id: mission.task.id, key: mission.task.key, state: mission.state,
         from: `${mission.task.sourceShard}/${mission.task.sourceRoom}`,
@@ -241,6 +336,7 @@ function acceptReport(mission: ShardMission, report: ShardMissionReport): void {
 /** 每 tick 先恢复入境 Memory；报告与维护按周期发布，不进行全 shard Creep 扫描式补兵。 */
 export function runShardController(): void {
     if (!interShardPolicy.enabled) return
+    retireTerminalTasks()
     const profiling = isCpuProfilingEnabled()
     if (profiling) profileCpuTask('shard:portalDiscovery', runPortalDiscovery)
     else runPortalDiscovery()
@@ -340,10 +436,12 @@ export function runShardController(): void {
         }
         const error = getShardTransportError()
         if (error != undefined) mission.lastError = error
+        if (['complete', 'cancelled'].includes(mission.state)) { retireMission(mission); continue }
         if (scoutingStatus != 'failed' && mission.scouting?.status == 'failed') withdrawQueuedUnits(mission)
         if (explorationStatus != 'failed' && mission.exploration?.status == 'failed') withdrawQueuedUnits(mission)
         command(mission, true)
     }
+    maintainStops()
     const local = getLocalShardState()
     for (const [key, record] of Object.entries(Memory.shardArrivals || {})) {
         if (record.task.sourceShard == Game.shard.name) continue

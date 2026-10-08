@@ -154,9 +154,15 @@ function world(roundTrip, options = {}) {
         controller.releaseShardCreepConfig();
         transport.flushInterShardMemory();
     }
+    let missionKey;
+    const mission = () => {
+        const tasks = frames.shard3.memory.shardMissions || {};
+        missionKey ||= Object.values(tasks).find(task => task.task.id === 'explore-settle')?.task.key;
+        return tasks[missionKey];
+    };
     select('shard3');
     return { frames, calls, clock, game, policy, home, loader, controller, intel, select, report, state, unit, step, sourceMaintenance,
-        mission: () => frames.shard3.memory.shardMissions?.['shard3:explore-settle'] };
+        mission };
 }
 
 for (const roundTrip of [false, true]) test(`real three-shard ${roundTrip ? 'outward and return' : 'one-way'} exploration discovers unowned-shard doors, then a fresh scout gates work`, () => {

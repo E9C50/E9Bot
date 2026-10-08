@@ -120,7 +120,7 @@ function proof(w, leg = 'outbound', overrides = {}) {
 
 function publish(w, record, shard = record.shard) {
     const envelope = shard === w.game.shard.name ? w.local : (w.peers[shard] || (w.peers[shard] = { version: 1, transfers: {}, acks: {}, reports: {}, scoutProofs: {} }));
-    envelope.scoutProofs[`${w.mission().task.key}:${record.leg}`] = record;
+    envelope.scoutProofs[`${record.missionId}:${record.leg}`] = record;
 }
 
 test('an automatic ready route dispatches one scout and no work before live verification', () => {

@@ -50,7 +50,7 @@ function world() {
     loader.load('settings/interShard').interShardPolicy.reportInterval = 1;
     const list = () => Object.values(memory.shardMissions || {});
     const summary = () => JSON.parse(api.listShardTasks());
-    return { loader, api, list, summary, game, memory, home, local, peers, now: () => now, advance: milliseconds => { now += milliseconds; game.time++; } };
+    return { loader, api, list, summary, game, memory, home, local, peers, transport, now: () => now, advance: milliseconds => { now += milliseconds; game.time++; } };
 }
 
 function input(overrides = {}) {
@@ -63,7 +63,7 @@ test('mission creation preserves a validated multi-hop route and applies documen
     assert.equal(typeof message, 'string');
     assert.match(message, /已创建/);
     const mission = w.list()[0];
-    assert.equal(mission.task.key, 'shard0:settle');
+    assert.match(mission.task.key, /^shard0:settle:/);
     assert.equal(mission.task.sourceShard, 'shard0');
     assert.equal(mission.task.claim, true);
     assert.equal(mission.task.builders, 2);
@@ -73,7 +73,7 @@ test('mission creation preserves a validated multi-hop route and applies documen
     assert.equal(mission.task.homeEnergyReserve, 10000);
     assert.deepEqual(JSON.parse(JSON.stringify(mission.task.route)), outward);
     assert.deepEqual(JSON.parse(JSON.stringify(mission.task.returnRoute)), returning);
-    assert.equal(w.summary()[0].key, 'shard0:settle');
+    assert.equal(w.summary()[0].key, mission.task.key);
 });
 
 function report(w, overrides = {}) {
@@ -110,6 +110,7 @@ test('a departed unit without a source-shard Game.creep does not get replaced du
 test('an owned-target report stops claimer dispatch and a completed settlement stops all renewal', () => {
     const w = world();
     w.api.createShardTask(input());
+    const mission = w.list()[0];
     w.api.releaseShardCreepConfig();
     report(w, { targetOwned: true, targetLevel: 1, targetSpawns: 0 });
     w.home.memory.creepConfig = {};
@@ -118,7 +119,10 @@ test('an owned-target report stops claimer dispatch and a completed settlement s
     assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.role === 'sBuilder').length, 2);
     w.advance(1000);
     report(w, { targetOwned: true, targetLevel: 4, targetSpawns: 1 });
-    assert.equal(w.list()[0].state, 'complete');
+    assert.equal(mission.state, 'complete');
+    assert.equal(w.list().length, 0);
+    assert.deepEqual(w.summary(), []);
+    assert.equal(w.memory.shardMissionStops[mission.task.key].state, 'complete');
     w.home.memory.creepConfig = {};
     w.api.releaseShardCreepConfig();
     assert.equal(Object.keys(w.home.memory.creepConfig).length, 0);
@@ -127,6 +131,7 @@ test('an owned-target report stops claimer dispatch and a completed settlement s
 test('finite logistics completes only at confirmed delivery amount and replaces done haulers below the goal', () => {
     const w = world();
     w.api.createShardTask(input({ id: 'energy', claim: false, builders: 0, haulers: 1, energyAmount: 1000 }));
+    const mission = w.list()[0];
     w.api.releaseShardCreepConfig();
     const first = Object.values(w.list()[0].leases)[0];
     report(w, { energyDelivered: 200, units: [{ name: first.name, kind: 'hauler', done: true }] });
@@ -139,8 +144,10 @@ test('finite logistics completes only at confirmed delivery amount and replaces 
     assert.ok(replacement.generation > first.generation);
     w.advance(1000);
     report(w, { energyDelivered: 1000 });
-    assert.equal(w.list()[0].state, 'complete');
-    assert.equal(w.summary()[0].energyDelivered, 1000);
+    assert.equal(w.list().length, 0);
+    assert.deepEqual(w.summary(), []);
+    assert.equal(mission.energyDelivered, 1000);
+    assert.equal(w.memory.shardMissionStops[mission.task.key].state, 'complete');
 });
 
 test('an expired missing lease creates exactly one replacement with a new identity', () => {
@@ -228,20 +235,25 @@ test('pausing and cancelling immediately remove only that mission from demand an
     for (const state of ['paused', 'cancelled']) {
         const w = world();
         w.api.createShardTask(input());
+        const key = w.list()[0].task.key;
         w.api.createShardTask(input({ id: 'other' }));
         w.api.releaseShardCreepConfig();
         w.home.memory.creepConfig.regular = { role: 'harvester', data: {} };
         const original = Object.entries(w.home.memory.creepConfig);
-        const ours = original.filter(([, config]) => config.data.missionId === 'shard0:settle').map(([name]) => name);
-        const preserved = original.filter(([, config]) => config.data.missionId !== 'shard0:settle').map(([name]) => name).sort();
+        const ours = original.filter(([, config]) => config.data.missionId === key).map(([name]) => name);
+        const preserved = original.filter(([, config]) => config.data.missionId !== key).map(([name]) => name).sort();
         w.home.memory.creepSpawnQueue = original.map(([name]) => name);
         assert.match(w.api.setShardTaskState('settle', state), new RegExp(state));
         assert.deepEqual(Object.keys(w.home.memory.creepConfig).sort(), preserved);
         assert.deepEqual(Array.from(w.home.memory.creepSpawnQueue).sort(), preserved);
         assert.equal(ours.some(name => w.home.memory.creepSpawnQueue.includes(name)), false);
-        assert.equal(w.local.reports['shard0:settle'].state, state);
+        assert.equal(w.local.reports[key].state, state);
         w.api.releaseShardCreepConfig();
-        assert.equal(Object.values(w.home.memory.creepConfig).some(config => config.data.missionId === 'shard0:settle'), false);
+        assert.equal(Object.values(w.home.memory.creepConfig).some(config => config.data.missionId === key), false);
+        if (state === 'cancelled') {
+            assert.equal(w.memory.shardMissions[key], undefined);
+            assert.equal(w.summary().some(task => task.key === key), false);
+        }
     }
 });
 
@@ -303,9 +315,10 @@ test('a native low-bucket scout sorts ahead of optional growth while essential f
     w.api.releaseShardCreepConfig();
     const scout = Object.entries(w.home.memory.creepConfig).find(([, config]) => config.role === 'sScout');
     assert.ok(scout); assert.equal(scout[1].spawnPriority, 3.75);
-    assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === 'shard0:settle').length, 1,
+    assert.equal(Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === scout[1].data.missionId).length, 1,
         'the unverified mission still publishes only a scout');
-    const workers = Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === 'shard0:workers');
+    const workerKey = w.list().find(mission => mission.task.id === 'workers').task.key;
+    const workers = Object.values(w.home.memory.creepConfig).filter(config => config.data.missionId === workerKey);
     assert.equal(workers.find(config => config.role === 'sClaimer').spawnPriority, 9);
     assert.equal(workers.filter(config => config.role === 'sBuilder').every(config => config.spawnPriority === 12), true);
     w.home.containers = []; w.home.sources = [];
@@ -318,4 +331,111 @@ test('a native low-bucket scout sorts ahead of optional growth while essential f
     assert.deepEqual(Array.from(queue.slice(0, 4)), ['floor', scout[0], 'growthBuilder', 'growthUpgrader']);
     const normal = world(); normal.api.createShardTask(input({ verifyRoute: true })); normal.api.releaseShardCreepConfig();
     assert.equal(Object.values(normal.home.memory.creepConfig).find(config => config.role === 'sScout').spawnPriority, 8);
+});
+
+test('the same console id can restart immediately without adopting old units, progress or commands', () => {
+    const w = world();
+    const configured = input({ claim: false, builders: 0, haulers: 1, energyAmount: 1000 });
+    w.api.createShardTask(configured); w.api.releaseShardCreepConfig();
+    const old = w.list()[0], oldLease = Object.values(old.leases)[0];
+    assert.match(w.api.setShardTaskState('shard0:settle', 'cancelled'), /cancelled/);
+    assert.deepEqual(w.summary(), []);
+    assert.match(w.api.createShardTask(configured), /已创建/);
+    const fresh = w.list()[0];
+    assert.notEqual(fresh.task.key, old.task.key, 'even the same millisecond uses a new run identity');
+    w.peers.shard2 = { version: 1, transfers: {}, acks: {}, reports: {
+        [old.task.key]: { type: 'status', missionId: old.task.key, originShard: 'shard0', shard: 'shard2',
+            updatedAt: w.now(), energyDelivered: 99999, units: [{ name: oldLease.name, kind: 'hauler', done: false }] },
+    } };
+    w.api.runShardController(); w.api.releaseShardCreepConfig();
+    assert.equal(fresh.state, 'active'); assert.equal(fresh.energyDelivered, 0);
+    assert.notEqual(Object.values(fresh.leases)[0].name, oldLease.name);
+    assert.equal(w.local.reports[old.task.key].state, 'cancelled');
+    assert.equal(w.local.reports[fresh.task.key].state, 'active');
+    assert.match(w.api.setShardTaskState('settle', 'paused'), /paused/);
+    assert.equal(fresh.state, 'paused');
+    assert.equal(w.api.setShardTaskState(old.task.key, 'active'), '任务不存在');
+});
+
+test('failed terminal publication survives deleting the full task and retries from persistent Memory', () => {
+    const w = world(); w.api.createShardTask(input());
+    const mission = w.list()[0];
+    w.transport.flushInterShardMemory = () => false;
+    w.api.setShardTaskState('settle', 'cancelled');
+    assert.equal(w.memory.shardMissions[mission.task.key], undefined);
+    const stop = w.memory.shardMissionStops[mission.task.key];
+    assert.equal(stop.published, false);
+    // A later VM/tick sees the previously persisted active command, not the failed write.
+    w.local.reports[mission.task.key] = { type: 'command', state: 'active', missionId: mission.task.key };
+    w.advance(1000); w.api.runShardController();
+    assert.equal(w.local.reports[mission.task.key].state, 'cancelled');
+    assert.equal(stop.published, false);
+    w.transport.flushInterShardMemory = () => true;
+    w.advance(1000); w.api.runShardController();
+    assert.equal(stop.published, true);
+    assert.deepEqual(w.summary(), []);
+});
+
+test('old terminal records migrate out of the task list while paused tasks and unrelated work remain', () => {
+    const w = world(); w.api.createShardTask(input());
+    const retired = w.list()[0]; retired.state = 'complete';
+    w.api.createShardTask(input({ id: 'paused' })); w.api.setShardTaskState('paused', 'paused');
+    w.home.memory.creepConfig.regular = { role: 'harvester', data: {} };
+    w.home.memory.creepSpawnQueue = ['regular'];
+    assert.deepEqual(w.summary().map(task => task.id), ['paused']);
+    assert.equal(w.memory.shardMissions[retired.task.key], undefined);
+    assert.equal(w.memory.shardMissionStops[retired.task.key].state, 'complete');
+    assert.ok(w.home.memory.creepConfig.regular);
+    assert.deepEqual(Array.from(w.home.memory.creepSpawnQueue), ['regular']);
+});
+
+test('published stops expire without deleting unrelated reports, transfers or acknowledgements', () => {
+    const w = world(); w.api.createShardTask(input());
+    const key = w.list()[0].task.key;
+    w.local.reports.other = { type: 'targetDismantleCommand', state: 'cancelled' };
+    w.local.transfers.other = { missionId: 'other', expiresAt: w.now() + 200000000 };
+    w.local.acks.other = { id: 'other' };
+    w.api.setShardTaskState('settle', 'cancelled');
+    w.advance(w.loader.load('settings/interShard').interShardPolicy.arrivalHistoryTtl + 1);
+    w.api.runShardController();
+    assert.equal(w.memory.shardMissionStops[key], undefined);
+    assert.equal(w.local.reports[key], undefined);
+    assert.equal(w.local.reports.other.type, 'targetDismantleCommand');
+    assert.ok(w.local.transfers.other); assert.ok(w.local.acks.other);
+});
+
+test('unpublished stops and still-in-flight identities survive the nominal stop retention deadline', () => {
+    for (const reason of ['write-failed', 'transfer', 'unit']) {
+        const w = world(); w.api.createShardTask(input()); w.api.releaseShardCreepConfig();
+        const mission = w.list()[0], lease = Object.values(mission.leases)[0];
+        const data = w.home.memory.creepConfig[lease.name].data;
+        if (reason === 'write-failed') w.transport.flushInterShardMemory = () => false;
+        if (reason === 'transfer') w.local.transfers.pending = { missionId: mission.task.key,
+            expiresAt: w.now() + 200000000 };
+        if (reason === 'unit') w.game.creeps[lease.name] = { name: lease.name, memory: { data } };
+        w.api.setShardTaskState('settle', 'cancelled');
+        w.advance(w.loader.load('settings/interShard').interShardPolicy.arrivalHistoryTtl + 1);
+        w.api.runShardController();
+        assert.equal(w.memory.shardMissionStops[mission.task.key].state, 'cancelled', reason);
+        assert.ok(w.memory.shardMissionStops[mission.task.key].expiresAt > w.now(), reason);
+        if (reason === 'transfer') assert.ok(w.local.transfers.pending);
+        assert.equal(w.local.reports[mission.task.key].state, 'cancelled');
+        assert.deepEqual(w.summary(), []);
+    }
+});
+
+test('expiry cleanup retries after its last command removal fails to persist', () => {
+    const w = world(); w.api.createShardTask(input());
+    const key = w.list()[0].task.key;
+    w.api.setShardTaskState('settle', 'cancelled');
+    const oldCommand = { ...w.local.reports[key] };
+    w.advance(w.loader.load('settings/interShard').interShardPolicy.arrivalHistoryTtl + 1);
+    w.transport.flushInterShardMemory = () => false;
+    w.api.runShardController();
+    assert.ok(w.memory.shardMissionStops[key], 'failed cleanup retains its durable retry source');
+    w.local.reports[key] = { ...oldCommand };
+    w.advance(1000); w.transport.flushInterShardMemory = () => true;
+    w.api.runShardController();
+    assert.equal(w.memory.shardMissionStops[key], undefined);
+    assert.equal(w.local.reports[key], undefined);
 });

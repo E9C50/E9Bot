@@ -2,7 +2,8 @@ import { interShardPolicy } from 'settings/interShard'
 import { isShardUnitData, PortalExplorationReport, ShardUnitData } from './missions'
 import { getExplorationRooms, isExplorationPlanningDeferred, selectExplorationPortal } from './explorationRoutes'
 import { forgetPortal, getKnownPortals, runPortalDiscovery } from './portalIntel'
-import { cancelCreepTransfers, flushInterShardMemory, getLocalShardState, getShardTransportError, markShardStateDirty, readRemoteShardState } from './transport'
+import { cancelCreepTransfers, flushInterShardMemory, getLocalShardState, getShardTransportError, markShardStateDirty } from './transport'
+import { getShardMissionControl } from './missionControl'
 import { isPortalTravelData, isRecord, PortalHop } from './types'
 import { travelPortalRoute } from './travel'
 import { scoutMovementOptions } from './scoutMovement'
@@ -129,11 +130,10 @@ function run(data: ShardUnitData, creep: Creep): boolean {
     const progress = data.exploration!, wasWaiting = progress.cpuWaitStartedAt !== undefined, elapsed = advanceClock(progress)
     if (progress.startedAt <= 0) progress.startedAt = Date.now()
     if (wasWaiting) progress.elapsedTicks = Math.max(0, progress.elapsedTicks - elapsed)
-    const source = data.task.sourceShard === Game.shard.name ? Memory.shardMissions?.[data.missionId] : undefined
-    const command = source === undefined ? readRemoteShardState(data.task.sourceShard)?.reports?.[data.missionId] : undefined
-    const state = source?.state || (isRecord(command) ? command.state : undefined)
-    const revision = source?.exploration?.revision || (isRecord(command) ? command.explorerRevision : undefined)
-    const explorerStatus = source?.exploration?.status || (isRecord(command) ? command.explorerStatus : undefined)
+    const command = getShardMissionControl(data)
+    const state = command?.state
+    const revision = command?.explorerRevision
+    const explorerStatus = command?.explorerStatus
     if (state === 'cancelled' || state === 'complete' || explorerStatus === 'complete' || explorerStatus === 'failed' || (revision !== undefined && revision !== progress.revision)) {
         retire(data, creep); return false
     }

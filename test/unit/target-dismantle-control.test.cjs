@@ -16,14 +16,14 @@ function input(overrides = {}) {
 }
 function sharedWorld() {
     const bus = {}, clock = { now: 1000000 }, worlds = [], reads = [], writes = [];
-    function runtime(shard = 'shard3') {
-        const combat = createCombatWorld(), game = combat.game, memory = { creeps: {} }, calls = [], plans = [];
+    function runtime(shard = 'shard3', restoredMemory) {
+        const combat = createCombatWorld(), game = combat.game, memory = restoredMemory || { creeps: {} }, calls = [], plans = [], routes = [];
         game.shard.name = shard;
         game.flags = {};
         for (const [index, resource] of BOOST_CONFIG.boostMove.entries()) combat.loader.globals.BOOSTS.move[resource] = { fatigue: index + 2 };
         const home = combat.room('E41N8', { my: true });
         home.energyCapacityAvailable = 5600; home.energyAvailable = 5600;
-        let canBoost = true, spawnResult = 0, boostIndexInvalidations = 0;
+        let canBoost = true, spawnResult = 0, boostIndexInvalidations = 0, failWrites = false;
         const spawn = { id: `spawn-${shard}`, spawning: null, spawnCreep(body, name, options) {
             calls.push({ body: [...body], name, memory: options.memory });
             if (spawnResult === 0) spawn.spawning = { name, remainingTime: 150 };
@@ -38,7 +38,7 @@ function sharedWorld() {
             FIND_MY_SPAWNS: 'my-spawns', RESOURCE_CATALYZED_ZYNTHIUM_ACID: 'XZH2O', RESOURCE_CATALYZED_ZYNTHIUM_ALKALIDE: 'XZHO2',
             InterShardMemory: { getLocal: () => { reads.push(`${shard}:local`); return bus[shard] || ''; },
                 getRemote: peer => { reads.push(`${shard}:${peer}`); return bus[peer] || ''; },
-                setLocal: value => { writes.push(shard); bus[shard] = value; } },
+                setLocal: value => { writes.push(shard); if (failWrites) throw new Error('temporary write failure'); bus[shard] = value; } },
         }, modules: { 'settings/boost': { boostConfig: BOOST_CONFIG, boostBodyPart: BOOST_PARTS, boostTypeEnum: BOOST_TYPES },
             'creep/boosting': {
             invalidateBoostRequestIndex() { boostIndexInvalidations++; },
@@ -46,6 +46,8 @@ function sharedWorld() {
             reserveBoostPlan(room, name, plan) { calls.push({ reservation: name, plan }); },
         }, role: { isRoleSupported: () => true },
             'creep/bodySelection': { selectCreepBody: () => ({ body: ['move'], boostPlan: { tier: 0, steps: [] } }) },
+            './routeCache': { storePortalRoute(...args) { routes.push(JSON.parse(JSON.stringify(args))); return true; } },
+            './portalIntel': { getKnownPortals: () => route.map(hop => ({ ...hop })) },
         } });
         const api = loader.load('shard/targetDismantleControl'), transport = loader.load('shard/transport');
         const policy = loader.load('settings/interShard').interShardPolicy;
@@ -66,11 +68,12 @@ function sharedWorld() {
             clock.now += milliseconds; game.time++;
             api.runTargetDismantleControl(); transport.flushInterShardMemory();
         }
-        const state = { ...combat, game, memory, home, spawn, loader, api, transport, policy, calls, plans, born, worker, tick,
+        const state = { ...combat, game, memory, home, spawn, loader, api, transport, policy, calls, plans, routes, born, worker, tick,
             task: () => Object.values(memory.targetDismantleTasks || {})[0],
             births: () => calls.filter(call => call.body), reservations: () => calls.filter(call => call.reservation),
             boostIndexInvalidations: () => boostIndexInvalidations,
             setCanBoost: value => { canBoost = value; }, setSpawnResult: value => { spawnResult = value; } };
+        state.setWriteFailure = value => { failWrites = value; };
         worlds.push(state); return state;
     }
     return { bus, clock, worlds, reads, writes, runtime };
@@ -224,15 +227,19 @@ test('budget pauses only after the current worker dies and never spends on a rej
 
 test('remote exact list + controller connectivity completion stops replenishment and leaves worker independent', () => {
     const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2'); create(source);
-    const unit = spawnAndArrive(s, source, dest), room = dest.game.rooms.E41N5;
+    const unit = spawnAndArrive(s, source, dest), room = dest.game.rooms.E41N5, key = source.task().key;
     room.controller.pos = dest.position(10, 37, 'E41N5');
     dest.pathFinder.search = () => ({ path: [], incomplete: false });
     assert.equal(dest.loader.load('creep/targetDismantle').runTargetDismantle(unit), true);
     assert.equal(unit.memory.targetDismantle.done, true); assert.equal(unit.memory.targetDismantle.index, 2);
-    dest.tick(); source.tick(); assert.equal(source.task().state, 'completed'); assert.equal(source.task().index, 2);
+    dest.tick(); source.tick(); assert.equal(source.task(), undefined);
+    assert.equal(source.memory.targetDismantleStops[key].state, 'completed');
+    assert.equal(source.memory.targetDismantleStops[key].input, undefined, 'the stop record retains no task body or target list');
+    assert.deepEqual(source.routes[0].slice(0, 4), ['shard3', 'E41N8', 'shard2', 'E41N5']);
+    assert.deepEqual(source.routes[0][4], { route });
     delete dest.game.creeps[unit.name]; dest.tick(61000); source.tick();
-    assert.equal(source.births().length, 1); assert.equal(source.task().state, 'completed');
-    assert.match(source.api.listTargetDismantleTasks(), /completed/);
+    assert.equal(source.births().length, 1); assert.equal(source.task(), undefined);
+    assert.equal(source.api.listTargetDismantleTasks(), '没有拆迁任务');
 });
 
 test('source cancel halts remote dismantling and pending transfers without adopting ordinary builder work', () => {
@@ -243,7 +250,8 @@ test('source cancel halts remote dismantling and pending transfers without adopt
     assert.equal(dest.loader.load('creep/targetDismantle').runTargetDismantle(unit), true);
     assert.equal(unit.actions.some(action => action.kind === 'dismantle'), false);
     unit.memory.targetDismantle.done = true; dest.tick(); source.tick();
-    assert.equal(source.task().state, 'cancelled'); assert.equal(source.births().length, 1);
+    assert.equal(source.task(), undefined); assert.equal(source.births().length, 1);
+    assert.equal(source.api.listTargetDismantleTasks('entrance'), '没有拆迁任务');
 });
 
 test('source command loss pauses a remote worker and a new source generation never adopts an old unit', () => {
@@ -258,19 +266,82 @@ test('source command loss pauses a remote worker and a new source generation nev
     assert.match(unit.memory.targetDismantle.lastError, /Superseded/);
 });
 
-test('completion and cancellation history is bounded and expires without changing unrelated transport reports', () => {
+test('terminal tasks leave the catalogue immediately and temporary stops expire without changing unrelated transport reports', () => {
     const s = sharedWorld(), w = s.runtime();
     for (let i = 0; i < 24; i++) {
         assert.match(w.api.createTargetDismantleTask(`old_${i}`, input()), /已创建/);
         w.api.cancelTargetDismantleTask(`old_${i}`); w.tick();
     }
-    assert.equal(Object.keys(w.memory.targetDismantleTasks).length, 20);
+    assert.equal(Object.keys(w.memory.targetDismantleTasks).length, 0);
+    assert.equal(Object.keys(w.memory.targetDismantleStops).length, 24);
     const state = w.transport.getLocalShardState(); state.reports.unrelated = { type: 'other', updatedAt: 0 };
     w.transport.markShardStateDirty(); w.transport.flushInterShardMemory();
     w.tick(w.policy.arrivalHistoryTtl + 1);
     assert.equal(Object.keys(w.memory.targetDismantleTasks).length, 0);
+    assert.equal(Object.keys(w.memory.targetDismantleStops).length, 0);
     assert.equal(Object.keys(w.transport.getLocalShardState().reports).filter(key => key.startsWith('targetDismantle:')).length, 0);
     assert.equal(w.transport.getLocalShardState().reports.unrelated.type, 'other');
+});
+
+test('same id recreation within the same tick gets a new instance and leaves the old local worker permanently stopped', () => {
+    const s = sharedWorld(), w = s.runtime();
+    create(w, { targetShard: 'shard3', route: [] }); w.tick(); const old = w.born(), oldKey = w.task().key;
+    assert.match(w.api.cancelTargetDismantleTask('entrance'), /已取消/);
+    assert.equal(w.task(), undefined); assert.equal(old.memory.targetDismantle.controlState, 'cancelled');
+    create(w, { targetShard: 'shard3', route: [] });
+    assert.notEqual(w.task().key, oldKey, 'ordinary Memory nonce distinguishes identical clock and tick values');
+    assert.equal(w.task().generation, 0);
+    w.tick(); assert.equal(w.births().length, 2);
+    assert.equal(old.memory.targetDismantle.controlState, 'cancelled');
+    w.tick(w.policy.arrivalHistoryTtl + 1);
+    assert.equal(w.memory.targetDismantleStops[oldKey], undefined);
+    assert.equal(old.memory.targetDismantle.controlState, 'cancelled', 'expiry of a stop broadcast never resumes its worker');
+});
+
+test('failed cancellation broadcasts retry from ordinary Memory after a global reset', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2'); create(source);
+    const unit = spawnAndArrive(s, source, dest), key = source.task().key;
+    source.setWriteFailure(true);
+    assert.match(source.api.cancelTargetDismantleTask('entrance'), /广播尚未成功/);
+    assert.equal(source.task(), undefined);
+    assert.equal(source.memory.targetDismantleStops[key].state, 'cancelled');
+    assert.equal(JSON.parse(s.bus.shard3).ecbotShard.reports[key].state, 'active');
+    const restarted = s.runtime('shard3', source.memory);
+    restarted.tick(); dest.tick();
+    assert.equal(JSON.parse(s.bus.shard3).ecbotShard.reports[key].state, 'cancelled');
+    assert.equal(unit.memory.targetDismantle.controlState, 'cancelled');
+    assert.equal(restarted.task(), undefined); assert.equal(restarted.births().length, 0);
+});
+
+test('terminal cleanup preserves an already departed worker\'s handshake and stops its restored old instance', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2'); create(source);
+    source.tick(); const old = source.born(), key = source.task().key;
+    assert.equal(source.transport.publishCreepTransfer(old, 'shard2', 1), true);
+    source.transport.flushInterShardMemory(); delete source.game.creeps[old.name];
+    const transfer = Object.keys(JSON.parse(s.bus.shard3).ecbotShard.transfers)[0];
+    assert.match(source.api.cancelTargetDismantleTask('entrance'), /已取消/);
+    assert.ok(JSON.parse(s.bus.shard3).ecbotShard.transfers[transfer], 'pending arrival still has its independent role snapshot');
+    create(source); assert.notEqual(source.task().key, key);
+    const arrived = dest.worker(old.name, {}, { roomName: 'E41N5', blank: true });
+    assert.equal(dest.transport.restoreArrivingCreeps(), 1);
+    dest.transport.flushInterShardMemory(); dest.tick();
+    assert.equal(arrived.memory.role, 'sBuilder'); assert.equal(arrived.memory.targetDismantle.missionId, key);
+    assert.equal(arrived.memory.targetDismantle.controlState, 'cancelled');
+    assert.ok(dest.transport.getLocalShardState().acks[transfer], 'the cancellation does not erase acknowledgement state');
+    assert.equal(dest.loader.load('creep/targetDismantle').runTargetDismantle(arrived), true);
+    assert.equal(arrived.actions.some(action => action.kind === 'dismantle'), false);
+});
+
+test('legacy terminal catalogue records migrate immediately without removing an active flag waiting for its next tile', () => {
+    const w = sharedWorld().runtime();
+    create(w, {}, 'old'); const old = w.task(); old.state = 'completed'; old.finishedAt = Date.now();
+    placeFlag(w, 'yellow', { work: false }); createFlag(w, { boostTier: 0 });
+    assert.equal(w.memory.targetDismantleTasks[old.key], undefined);
+    assert.ok(w.memory.targetDismantleStops[old.key]);
+    w.tick();
+    assert.equal(w.task().state, 'active'); assert.equal(w.task().reason.includes('clear'), true);
+    assert.match(w.api.listTargetDismantleTasks(), /entrance: active/);
+    assert.doesNotMatch(w.api.listTargetDismantleTasks(), /old:/);
 });
 
 test('malformed local communication rejects creation without leaving a phantom command or spawning', () => {

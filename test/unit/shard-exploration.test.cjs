@@ -364,6 +364,22 @@ test('source pause prevents movement and cancel, revision change or completed in
     }
 });
 
+test('local portal explorers retire after their mission is removed despite a stale active ISM command', () => {
+    for (const state of ['complete', 'cancelled']) {
+        const w = world();
+        delete w.memory.shardMissions[w.task.key];
+        w.memory.shardMissionStops = { [w.task.key]: { state, updatedAt: w.clock.now,
+            expiresAt: w.clock.now + 1200000, published: false } };
+        w.local.reports[w.task.key] = { type: 'command', state: 'active', explorerRevision: w.progress.revision };
+        w.data.transferPreparedAt = w.game.time; w.progress.reportPending = true;
+        w.role.source(w.creep);
+        assert.equal(w.data.done, true); assert.equal(w.data.phase, 'done');
+        assert.equal(w.data.transferPreparedAt, undefined); assert.equal(w.progress.reportPending, undefined);
+        assert.equal(w.moves.length, 0); assert.equal(w.travel.calls.length, 0);
+        assert.equal(w.transport.attempts, 0); assert.ok(w.transport.cancellations > 0);
+    }
+});
+
 test('report write failure keeps previous evidence and retries the original failure before retiring', () => {
     const w = world(); const old = { unrelated: { updatedAt: w.clock.now, keep: true } };
     w.local.explorationReports = old; w.transport.succeed = false;

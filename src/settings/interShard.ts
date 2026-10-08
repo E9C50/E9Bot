@@ -62,6 +62,10 @@ export const interShardPolicy = {
         observerRange: 10,
         includeSectorCenters: false,
     },
+    portalRouteCache: {
+        maximumEntries: 80,
+        ttl: 6 * 60 * 60 * 1000,
+    },
     portalRouting: {
         // 每段先走最近入口；落地至终点的费用只作统计，不影响当前选门。
         strategy: 'nearestHop' as 'nearestHop' | 'totalCost',

@@ -267,6 +267,22 @@ test('paused commands stop travel, cancelled or revised commands retire the scou
     }
 });
 
+test('local scouts finish after their removed mission leaves a persistent terminal command', () => {
+    for (const state of ['complete', 'cancelled']) {
+        const w = world();
+        delete w.memory.shardMissions[w.task.key];
+        w.memory.shardMissionStops = { [w.task.key]: { state, updatedAt: w.clock.now,
+            expiresAt: w.clock.now + 1200000, published: false } };
+        w.local.reports[w.task.key] = { type: 'command', state: 'active', scoutRevision: 'rev1' };
+        w.data.transferPreparedAt = w.game.time;
+        w.data.scouting.proofPending = { leg: 'outbound', result: 'verified' };
+        w.role.source(w.creep);
+        assert.equal(w.data.done, true); assert.equal(w.data.phase, 'done');
+        assert.equal(w.data.transferPreparedAt, undefined); assert.equal(w.data.scouting.proofPending, undefined);
+        assert.equal(w.travel.calls.length, 0); assert.equal(w.transport.attempts, 0);
+    }
+});
+
 test('claiming Scout reports incompatible target controller ownership with actual observation; owned or friendly reservation passes', () => {
     const controllers = [undefined, { my: false, owner: { username: 'other' } }, { my: false, reservation: { username: 'other' } }];
     for (const controller of controllers) {

@@ -120,7 +120,7 @@ test('real two-shard scout restores its candidate, persists both actual endpoint
     w.select('shard0'); w.report();
     assert.match(w.controller.createShardTask('W1N1', 'shard1/W3N3', { id: 'verified-haul', claim: false, builders: 0, haulers: 1 }), /已创建/);
     w.controller.releaseShardCreepConfig();
-    const mission = w.frames.shard0.memory.shardMissions['shard0:verified-haul'];
+    const mission = Object.values(w.frames.shard0.memory.shardMissions)[0];
     assert.equal(mission.routing.status, 'ready');
     assert.equal(mission.task.verifyRoute, true);
     assert.deepEqual(Object.values(w.sourceRoom.memory.creepConfig).map(config => config.role), ['sScout']);

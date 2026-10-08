@@ -7,6 +7,8 @@ import { interShardPolicy } from 'settings/interShard'
 import { cancelCreepTransfers, flushInterShardMemory, getLocalShardState, getShardTransportError,
     markShardStateDirty, readRemoteShardState } from './transport'
 import { isPortalTravelData, isRecord, PortalHop, PortalTravelData, ShardEnvelope } from './types'
+import { getKnownPortals } from './portalIntel'
+import { storePortalRoute } from './routeCache'
 
 type TaskState = 'active' | 'paused' | 'completed' | 'cancelled'
 export interface TargetDismantleTaskInput {
@@ -64,10 +66,14 @@ interface Status {
     shard: string; generation: number; updatedAt: number; units: UnitStatus[]
     flag?: FlagDismantleSnapshot | null
 }
-declare global { interface Memory { targetDismantleTasks?: Record<string, TargetDismantleTask> } }
+declare global { interface Memory {
+    targetDismantleTasks?: Record<string, TargetDismantleTask>
+    /** Temporary stop broadcasts are independent of the active task catalogue. */
+    targetDismantleStops?: Record<string, Command>
+    targetDismantleSequence?: number
+} }
 
 const PREFIX = 'targetDismantle:'
-const HISTORY_LIMIT = 20
 const DEFAULT_BUDGET = 180000
 const STATES: TaskState[] = ['active', 'paused', 'completed', 'cancelled']
 let spawnReservationTick = -1, spawnReservationShard = '', spawnReservations = new Set<string>(), spawnRoomReservations = new Set<string>()
@@ -80,6 +86,7 @@ export function isTargetDismantleSpawnReserved(spawn: StructureSpawn): boolean {
 }
 
 function allTasks(): Record<string, TargetDismantleTask> { return Memory.targetDismantleTasks || {} }
+function allStops(): Record<string, Command> { return Memory.targetDismantleStops || {} }
 function keyFor(id: string): string { return id.startsWith(PREFIX) ? id : `${PREFIX}${Game.shard.name}:${id}` }
 function taskFor(id: string): TargetDismantleTask | undefined {
     return allTasks()[keyFor(id)] || Object.values(allTasks()).find(task => task.id === id && task.sourceShard === Game.shard.name)
@@ -111,7 +118,51 @@ function pause(task: TargetDismantleTask, reason: string): void {
     task.state = 'paused'; task.reason = reason; task.updatedAt = Date.now(); publish(task)
 }
 function finish(task: TargetDismantleTask, state: 'completed' | 'cancelled', reason?: string): void {
-    task.state = state; task.reason = reason; task.finishedAt = task.updatedAt = Date.now(); publish(task)
+    task.state = state; task.reason = reason; task.finishedAt = task.updatedAt = Date.now()
+    retireTask(task)
+}
+function terminal(state: TaskState | undefined): boolean { return state === 'completed' || state === 'cancelled' }
+function retireTask(task: TargetDismantleTask): void {
+    if (!terminal(task.state)) return
+    if (task.sourceShard === Game.shard.name) {
+        const targetRoom = task.lastFlag?.roomName || task.input.targetRoom
+        if (crossShard(task) && targetRoom && task.input.route.length) {
+            const peers: string[] = []
+            for (const hop of task.input.route) peers.push(hop.shard, hop.destinationShard)
+            storePortalRoute(task.sourceShard, task.input.sourceRoom, task.input.targetShard, targetRoom,
+                { route: task.input.route }, getKnownPortals(peers))
+        }
+        const stops = Memory.targetDismantleStops || (Memory.targetDismantleStops = {})
+        const now = Date.now(), finishedAt = task.finishedAt ?? task.updatedAt
+        const stop = stops[task.key] || { type: 'targetDismantleCommand' as const, missionId: task.key,
+            originShard: task.sourceShard, state: task.state, generation: task.generation, route: clone(task.input.route),
+            ...(task.reason ? { reason: task.reason } : {}), updatedAt: finishedAt,
+            expiresAt: finishedAt + interShardPolicy.arrivalHistoryTtl }
+        if (stop.expiresAt > now) stops[task.key] = stop
+        let changed = false
+        for (const creep of Object.values(Game.creeps)) {
+            const order = creep.memory.targetDismantle
+            if (order?.missionId !== task.key) continue
+            order.controlState = order.generation === stop.generation ? stop.state : 'cancelled'
+            order.lastError = stop.reason || `Task ${order.controlState}`
+            synchronizeBoostClock(creep); changed = true
+        }
+        if (changed) invalidateBoostRequestIndex()
+        if (stop.expiresAt > now) publishStop(stop)
+    }
+    delete allTasks()[task.key]
+}
+function publishStop(stop: Command, heartbeat = false): void {
+    if (!stop.route.length || !communicationAvailable()) return
+    const state = getLocalShardState(), reports = state.reports || (state.reports = {})
+    const old = reports[stop.missionId]
+    if (!heartbeat && isRecord(old) && old.type === stop.type && old.state === stop.state &&
+        old.generation === stop.generation && old.expiresAt === stop.expiresAt) return
+    reports[stop.missionId] = { ...stop, updatedAt: Date.now() }
+    markShardStateDirty()
+}
+function retireFinishedTasks(): void {
+    for (const task of Object.values(allTasks())) if (terminal(task.state)) retireTask(task)
 }
 function command(value: unknown, source: string, now: number): value is Command {
     return isRecord(value) && value.type === 'targetDismantleCommand' && value.originShard === source &&
@@ -158,6 +209,7 @@ function acceptUnit(task: TargetDismantleTask, unit: UnitStatus, shard: string, 
 /** A named flag controls position; legacy explicit barrier lists remain supported. */
 export function createTargetDismantleTask(id: string, input: TargetDismantleTaskInput): string {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || !isRecord(input)) return '须指定 1..64 位任务 id 和有效配置'
+    retireFinishedTasks()
     const existing = taskFor(id)
     if (existing) return `拆迁任务 ${id} 已存在（${existing.state}），不会重复派兵`
     if (Object.values(allTasks()).filter(task => !task.finishedAt).length >= interShardPolicy.maximumTasks) return '拆迁任务数量已达上限'
@@ -182,7 +234,10 @@ export function createTargetDismantleTask(id: string, input: TargetDismantleTask
         new Set(targets.map(target => target.id)).size !== targets.length)) return '须指定旗名，或 controller 坐标及最多 8 个唯一的 wall/rampart ID 和坐标'
     const budget = input.maxEnergy ?? DEFAULT_BUDGET
     if (!Number.isSafeInteger(budget) || budget < body.cost) return `孵化能量预算须为至少 ${body.cost} 的整数`
-    const now = Date.now(), key = `${keyFor(id)}:${now}:${Game.time}`
+    const now = Date.now()
+    Memory.targetDismantleSequence = Math.max(0, Number.isSafeInteger(Memory.targetDismantleSequence)
+        ? Memory.targetDismantleSequence! : 0) + 1
+    const key = `${keyFor(id)}:${now}:${Game.time}:${Memory.targetDismantleSequence}`
     const normalized: NormalizedTaskInput = { ...input, targetShard, route, targets: input.flagName ? [] : targets }
     const task: TargetDismantleTask = { id, key, sourceShard: Game.shard.name, input: clone(normalized),
         state: 'active', createdAt: now, updatedAt: now, generation: 0, spent: 0, maxEnergy: budget, index: 0 }
@@ -213,6 +268,7 @@ export function createFlagDismantleTask(home: string, flagName: string, options:
 }
 
 export function listTargetDismantleTasks(id?: string): string {
+    retireFinishedTasks()
     const tasks = id === undefined ? Object.values(allTasks()) : [taskFor(id)].filter((task): task is TargetDismantleTask => !!task)
     return tasks.length ? tasks.map(task => `${task.id}: ${task.state}, ${task.sourceShard}/${task.input.sourceRoom} → ` +
         `${task.input.targetShard}/${task.lastFlag?.roomName || task.input.targetRoom || '?'}, ` +
@@ -281,11 +337,12 @@ function synchronizeWorkers(commands: Map<string, Command>, now: number): void {
         const previous = order.controlState
         const source = commands.get(order.missionId)
         if (!source || !fresh(source.updatedAt, now)) {
+            if (terminal(previous)) { synchronizeBoostClock(creep); continue }
             order.controlState = 'paused'; order.lastError = 'Waiting for source command heartbeat'
             synchronizeBoostClock(creep); changed ||= previous !== order.controlState
             continue
         }
-        order.controlState = source.generation === order.generation ? source.state : 'cancelled'
+        order.controlState = terminal(previous) ? previous : source.generation === order.generation ? source.state : 'cancelled'
         if (order.controlState === 'active' && source.flagName) {
             // The target shard sees flag movement immediately, even before its next report reaches the source.
             const localFlag = source.targetShard === Game.shard.name ? getFlagDismantleSnapshot(source.flagName) : undefined
@@ -299,7 +356,8 @@ function synchronizeWorkers(commands: Map<string, Command>, now: number): void {
         if (order.controlState !== 'active') {
             if (order.lastError !== 'Waiting for a placed flag with dismantle work' || source.state !== 'active')
                 order.lastError = source.generation !== order.generation ? 'Superseded precise dismantle generation' : source.reason || `Task ${source.state}`
-            cancelCreepTransfers(creep)
+            // Stop new travel without deleting snapshots needed by a creep that has already crossed a portal.
+            if (order.controlState === 'paused') cancelCreepTransfers(creep)
         } else if (order.lastError === 'Waiting for source command heartbeat') delete order.lastError
         synchronizeBoostClock(creep); changed ||= previous !== order.controlState
     }
@@ -424,17 +482,19 @@ function spawn(task: TargetDismantleTask, now: number, flagReady = true): void {
 }
 
 function pruneHistory(): void {
-    const records = allTasks(), done = Object.values(records).filter(task => task.finishedAt).sort((a, b) => b.finishedAt! - a.finishedAt!)
+    retireFinishedTasks()
     const now = Date.now(), reports = communicationAvailable() ? getLocalShardState().reports : undefined
-    for (let index = 0; index < done.length; index++) {
-        const task = done[index]
-        if (index < HISTORY_LIMIT && now - task.finishedAt! < interShardPolicy.arrivalHistoryTtl) continue
-        delete records[task.key]
-        if (reports) { delete reports[task.key]; delete reports[`${task.key}:status`]; markShardStateDirty() }
+    for (const [key, stop] of Object.entries(allStops())) {
+        if (stop.expiresAt > now) continue
+        delete allStops()[key]
+        if (reports && (reports[key] !== undefined || reports[`${key}:status`] !== undefined)) {
+            delete reports[key]; delete reports[`${key}:status`]; markShardStateDirty()
+        }
     }
     if (reports) for (const [key, value] of Object.entries(reports)) {
         if (!isRecord(value) || !['targetDismantleCommand', 'targetDismantleStatus'].includes(String(value.type))) continue
-        if (typeof value.updatedAt === 'number' && now - value.updatedAt > interShardPolicy.arrivalHistoryTtl) {
+        if (typeof value.expiresAt === 'number' && value.expiresAt <= now ||
+            typeof value.updatedAt === 'number' && now - value.updatedAt > interShardPolicy.arrivalHistoryTtl) {
             delete reports[key]; markShardStateDirty()
         }
     }
@@ -442,9 +502,15 @@ function pruneHistory(): void {
 
 /** Source owns spawning; every route shard emits alive/empty reports and enforces source commands. */
 export function runTargetDismantleControl(): void {
+    retireFinishedTasks()
     const tasks = Object.values(allTasks()), workers = Object.values(Game.creeps).filter(creep => !!creep.memory.targetDismantle?.missionId)
     const communication = communicationAvailable()
     const heartbeat = Game.time % interShardPolicy.reportInterval === 0
+    const now = Date.now()
+    if (Object.keys(allStops()).length) {
+        pruneHistory()
+        for (const stop of Object.values(allStops())) publishStop(stop, heartbeat)
+    }
     if (!tasks.length && !workers.length && (!communication || !knownRemoteTasks && !heartbeat)) return
     // Peers may own a task even when this shard has no workers; cached transport reads stay bounded to four.
     const peers = new Set(communication ? interShardPolicy.peers : [])
@@ -452,12 +518,12 @@ export function runTargetDismantleControl(): void {
     for (const creep of workers) if (creep.memory.targetDismantle?.sourceShard) peers.add(creep.memory.targetDismantle.sourceShard)
     peers.delete(Game.shard.name)
     const states = new Map<string, ShardEnvelope | undefined>(communication ? Array.from(peers, peer => [peer, readRemoteShardState(peer)] as const) : [])
-    const now = Date.now()
     for (const task of tasks) if (task.sourceShard === Game.shard.name) {
         reconcile(task, states, now)
         const ready = task.state === 'active' ? updateFlag(task, states, now) : false
         if (task.input.flagName && task.state === 'active') task.flagReady = ready
-        spawn(task, now, ready); publish(task, heartbeat)
+        spawn(task, now, ready)
+        if (!terminal(task.state)) publish(task, heartbeat)
     }
     const commands = new Map<string, Command>()
     for (const [shard, state] of [...states, ...(communication ? [[Game.shard.name, getLocalShardState()] as const] : [])]) {
@@ -469,6 +535,8 @@ export function runTargetDismantleControl(): void {
         if (crossShard(task) && !communication) { local.state = 'paused'; local.reason = 'Waiting for cross-shard communication' }
         commands.set(task.key, local)
     }
+    for (const stop of Object.values(allStops())) if (stop.originShard === Game.shard.name)
+        commands.set(stop.missionId, { ...stop, updatedAt: now })
     knownRemoteTasks = communication && Array.from(commands.values()).some(source => source.originShard !== Game.shard.name &&
         source.route.some(hop => hop.shard === Game.shard.name || hop.destinationShard === Game.shard.name))
     synchronizeWorkers(commands, now)
@@ -478,6 +546,7 @@ export function runTargetDismantleControl(): void {
         if (!source.route.some(hop => hop.shard === Game.shard.name || hop.destinationShard === Game.shard.name)) continue
         const reports = localState.reports || (localState.reports = {})
         const units = workers.filter(creep => creep.memory.targetDismantle?.missionId === source.missionId).map(unitStatus)
+        if (terminal(source.state) && !units.length) continue
         const key = `${source.missionId}:status`, previous = reports[key]
         const next: Status = { type: 'targetDismantleStatus', missionId: source.missionId, originShard: source.originShard,
             shard: Game.shard.name, generation: source.generation, updatedAt: now, units }

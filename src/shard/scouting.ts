@@ -1,7 +1,7 @@
 import { interShardPolicy } from 'settings/interShard'
 import { isShardUnitData, ShardUnitData } from './missions'
 import { isPortalTravelData, isRecord } from './types'
-import { readRemoteShardState } from './transport'
+import { getShardMissionControl } from './missionControl'
 import { reportScoutProof, sameScoutRoute } from './scoutProof'
 import { travelPortalRoute } from './travel'
 import { createPortalExplorerRole } from './exploration'
@@ -67,10 +67,8 @@ function claimTargetIssue(data: ShardUnitData, creep: Creep): string | undefined
 function run(creep: Creep, data: ShardUnitData): boolean {
     const progress = data.scouting!
     const elapsed = advanceClock(progress)
-    const command = data.task.sourceShard === Game.shard.name ? Memory.shardMissions?.[data.missionId] :
-        readRemoteShardState(data.task.sourceShard)?.reports?.[data.missionId] as { type?: string; state?: string; scoutRevision?: string } | undefined
-    const revision = data.task.sourceShard === Game.shard.name ? Memory.shardMissions?.[data.missionId]?.scouting?.revision :
-        (command as { scoutRevision?: string } | undefined)?.scoutRevision
+    const command = getShardMissionControl(data)
+    const revision = command?.scoutRevision
     if (command?.state === 'cancelled' || command?.state === 'complete' || (revision !== undefined && revision !== progress.revision)) {
         data.done = true; data.phase = 'done'; clearPreparation(data)
         delete progress.proofPending

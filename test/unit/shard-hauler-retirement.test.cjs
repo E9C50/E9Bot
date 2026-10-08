@@ -47,7 +47,7 @@ function world({ energyAmount = 0 } = {}) {
     assert.match(controller.createShardTask({ id: 'haul', sourceRoom: home.name, targetShard: 'shard1', targetRoom: target.name,
         route, returnRoute, claim: false, builders: 0, haulers: 1, energyAmount }), /已创建/);
     controller.releaseShardCreepConfig();
-    const mission = frames.shard0.memory.shardMissions['shard0:haul'];
+    const mission = Object.values(frames.shard0.memory.shardMissions)[0];
     const lease = mission.leases['hauler:0'];
     lease.departed = true; lease.lastShard = 'shard1'; lease.seenAt = now; lease.locationUpdatedAt = now;
     const config = home.memory.creepConfig[lease.name];
@@ -129,6 +129,8 @@ test('retirement at a finite confirmed goal releases the old slot without publis
     delete w.frames.shard1.creeps[w.creep.name];
     w.select('shard0'); w.controller.runShardController(); w.controller.releaseShardCreepConfig();
     assert.equal(w.mission.energyDelivered, 100); assert.equal(w.mission.state, 'complete');
+    assert.equal(w.frames.shard0.memory.shardMissions[w.mission.task.key], undefined);
+    assert.equal(w.frames.shard0.memory.shardMissionStops[w.mission.task.key].state, 'complete');
     assert.equal(Object.keys(w.mission.leases).length, 0); assert.equal(Object.keys(w.home.memory.creepConfig).length, 0);
 });
 

@@ -8,6 +8,7 @@ import { requiresRouteScouting, routeSignature } from './verification'
 import type { PortalRecord } from './portalTypes'
 import { isLowBucketPlanning, lowBucketPlanningReady, reserveLowBucketPlanning } from './planningBudget'
 import { planLowBucketPortalRoute } from './lowBucketRoutes'
+import { getCachedPortalRoute, storePortalRoute } from './routeCache'
 
 function portalKey(hop: PortalHop): string { return `${hop.shard}/${hop.roomName}/${hop.x}/${hop.y}` }
 
@@ -45,7 +46,19 @@ function candidateRoute(sourceShard: string, sourceRoom: string, targetShard: st
         return { plan: planLowBucketPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals, limits) }
     }
     const deferred = reservePlan()
-    return { deferred, plan: deferred === undefined ? planPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals) : undefined }
+    if (deferred !== undefined) return { deferred }
+    const started = Game.cpu.getUsed()
+    let cachedChecks = 0
+    const cached = getCachedPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals,
+        { onLocalRouteCheck: () => { cachedChecks++; return true } })
+    if (cached !== undefined) return { plan: cached }
+    // A cache miss and the fallback share one normal planning allowance.
+    const plan = planPortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, portals, {
+        maximumPlanningCpu: Math.max(0, interShardPolicy.portalRouting.maximumPlanningCpu - (Game.cpu.getUsed() - started)),
+        maximumLocalRouteChecks: Math.max(0, interShardPolicy.portalRouting.maximumLocalRouteChecks - cachedChecks),
+    })
+    if (plan !== undefined) storePortalRoute(sourceShard, sourceRoom, targetShard, targetRoom, plan, portals)
+    return { plan }
 }
 
 /** 规划仅消费实际观察记录；找不到入口时保持任务，等待下一轮发现。 */

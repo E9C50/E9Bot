@@ -3,6 +3,7 @@ import { recordShardDelivery, retireShardHauler } from './state'
 import { isShardUnitData, ShardUnitData, ShardUnitKind } from './missions'
 import { travelPortalRoute } from './travel'
 import { readRemoteShardState } from './transport'
+import { getShardMissionControl } from './missionControl'
 import { clearTravelPreparation, ensureUnitRoute } from './routing'
 import { forgetPortal } from './portalIntel'
 import { acquireBuilderEnergy, updateBuilderEnergyPhase } from 'role/support/builderEnergy'
@@ -74,10 +75,9 @@ function acquireLocalEnergy(creep: Creep): boolean {
 
 function runClaimer(creep: Creep, data: ShardUnitData): boolean {
     if (data.done) return false
-    const command = data.task.sourceShard == Game.shard.name ? Memory.shardMissions?.[data.missionId] :
-        readRemoteShardState(data.task.sourceShard)?.reports?.[data.missionId] as { type?: string; state?: string } | undefined
-    if (command?.state == 'cancelled' || command?.state == 'paused') {
-        data.lastError = '任务已暂停或取消，停止占领'
+    const command = getShardMissionControl(data)
+    if (command?.state == 'cancelled' || command?.state == 'complete' || command?.state == 'paused') {
+        data.lastError = '任务已暂停或结束，停止占领'
         return false
     }
     if (!travel(creep, data) || Game.shard.name != data.task.targetShard || !enterRoom(creep, data.task.targetRoom)) return false
@@ -147,9 +147,9 @@ function runBuilder(creep: Creep, data: ShardUnitData): boolean {
 
 function loadHauler(creep: Creep, data: ShardUnitData): boolean {
     if (Game.shard.name != data.task.sourceShard || !enterRoom(creep, data.task.sourceRoom)) return false
-    const mission = Memory.shardMissions?.[data.missionId]
-    if (mission?.state == 'paused') return false
-    if (mission?.state == 'complete' || mission?.state == 'cancelled') {
+    const command = getShardMissionControl(data)
+    if (command?.state == 'paused') return false
+    if (command?.state == 'complete' || command?.state == 'cancelled') {
         data.done = true
         data.phase = 'done'
         return false

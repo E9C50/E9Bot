@@ -549,6 +549,36 @@ test('returned haulers stop loading after source mission completion or cancellat
     }
 });
 
+test('returned haulers do not reload after the completed or cancelled mission leaves the active table', () => {
+    for (const state of ['complete', 'cancelled']) for (const retainedIn of ['memory', 'ism']) {
+        const w = world('hauler'); home(w);
+        Object.assign(w.data, { phase: 'return', originShard: w.data.task.targetShard,
+            route: w.data.task.returnRoute, hopIndex: w.data.task.returnRoute.length });
+        w.memory.shardMissions = {};
+        if (retainedIn === 'memory') {
+            w.memory.shardMissionStops = { [w.data.missionId]: { state, updatedAt: 10, expiresAt: 20, published: false } };
+            w.local.reports[w.data.missionId] = { type: 'command', state: 'active' };
+        } else w.local.reports[w.data.missionId] = { type: 'command', state, missionId: w.data.missionId };
+        w.behavior.source(w.creep);
+        assert.equal(w.data.phase, 'load');
+        w.game.time++; w.behavior.source(w.creep);
+        assert.equal(w.data.phase, 'done'); assert.equal(w.data.done, true);
+        assert.equal(w.calls.some(call => call.type === 'withdraw' || call.type === 'drop'), false);
+    }
+});
+
+test('a very late returning hauler does not reload after both the source task and terminal records expire', () => {
+    const w = world('hauler'); home(w);
+    Object.assign(w.data, { phase: 'return', originShard: w.data.task.targetShard,
+        route: w.data.task.returnRoute, hopIndex: w.data.task.returnRoute.length });
+    w.memory.shardMissions = {};
+    w.behavior.source(w.creep);
+    assert.equal(w.data.phase, 'load');
+    w.game.time++; w.behavior.source(w.creep);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.data.done, true);
+    assert.equal(w.calls.some(call => call.type === 'withdraw' || call.type === 'drop'), false);
+});
+
 test('haulers confirm only the cargo actually accepted and count it once', () => {
     const w = world('hauler', { energy: 100 });
     w.room.spawns.push({ id: 'receiver', my: true, structureType: 'spawn', pos: position(11, 10, w.room.name), store: { getFreeCapacity: () => 100 } });
@@ -640,8 +670,8 @@ test('builders fill an owned Extension instead of a nearer enemy Spawn after rea
     assert.equal(w.calls.find(call => call.type === 'transfer').target.id, 'owned-extension');
 });
 
-test('a source-shard pause or cancellation command prevents an arrived claimer from claiming', () => {
-    for (const state of ['paused', 'cancelled']) {
+test('a source-shard pause or terminal command prevents an arrived claimer from claiming', () => {
+    for (const state of ['paused', 'cancelled', 'complete']) {
         const w = world('claimer');
         w.room.controller.my = false;
         w.peers.shard0 = { version: 1, transfers: {}, acks: {}, reports: { [w.data.missionId]: { type: 'command', state, task: w.data.task, updatedAt: Date.now() } } };
@@ -809,6 +839,7 @@ test('real two-shard settlement restores claim and builder Memory, builds the fi
     const w = integratedWorld();
     const message = w.controller.createShardTask({ id: 'settle', sourceRoom: 'W1N1', targetShard: 'shard1', targetRoom: 'W2N2', route: w.route, builders: 1, targetLevel: 1 });
     assert.match(message, /已创建/);
+    const mission = Object.values(w.frames.shard0.memory.shardMissions)[0], key = mission.task.key;
     w.controller.releaseShardCreepConfig();
     const sourceClaimer = w.spawnDemand('sClaimer');
     const sourceBuilder = w.spawnDemand('sBuilder');
@@ -826,7 +857,6 @@ test('real two-shard settlement restores claim and builder Memory, builds the fi
 
     w.select('shard0', true);
     w.report();
-    const mission = w.frames.shard0.memory.shardMissions['shard0:settle'];
     assert.equal(mission.targetOwned, true);
     w.sourceRoom.memory.creepConfig = {};
     w.controller.releaseShardCreepConfig();
@@ -847,6 +877,8 @@ test('real two-shard settlement restores claim and builder Memory, builds the fi
     w.select('shard0', true);
     w.report();
     assert.equal(mission.state, 'complete');
+    assert.equal(w.frames.shard0.memory.shardMissions[key], undefined);
+    assert.equal(w.frames.shard0.memory.shardMissionStops[key].state, 'complete');
     w.sourceRoom.memory.creepConfig = {};
     w.controller.releaseShardCreepConfig();
     assert.equal(Object.keys(w.sourceRoom.memory.creepConfig).length, 0);
@@ -861,6 +893,7 @@ test('real two-shard hauling confirms delivery, completes from its report, resto
     w.targetRoom.spawns.push(targetSpawn);
     w.frames.shard1.objects[targetSpawn.id] = targetSpawn;
     assert.match(w.controller.createShardTask({ id: 'haul', sourceRoom: 'W1N1', targetShard: 'shard1', targetRoom: 'W2N2', route: w.route, returnRoute: w.returnRoute, claim: false, builders: 0, haulers: 1, energyAmount: 100 }), /已创建/);
+    const mission = Object.values(w.frames.shard0.memory.shardMissions)[0], key = mission.task.key;
     w.controller.releaseShardCreepConfig();
     const outbound = w.spawnDemand('sHauler');
     w.behavior(outbound).source(outbound);
@@ -875,19 +908,20 @@ test('real two-shard hauling confirms delivery, completes from its report, resto
     const hauling = w.cross(outbound, 'shard1', w.targetRoom);
     w.behavior(hauling).target(hauling);
     assert.equal(w.calls.filter(call => call.type === 'transfer').at(-1).amount, 100);
-    assert.equal(w.frames.shard1.memory.shardArrivals['shard0:haul'].energyDelivered, 0);
+    assert.equal(w.frames.shard1.memory.shardArrivals[key].energyDelivered, 0);
     w.select('shard1', true);
     hauling.store.energy = 0;
     targetSpawn.store.energy = 100;
     w.behavior(hauling).target(hauling);
-    assert.equal(w.frames.shard1.memory.shardArrivals['shard0:haul'].energyDelivered, 100);
+    assert.equal(w.frames.shard1.memory.shardArrivals[key].energyDelivered, 100);
     assert.equal(hauling.memory.data.phase, 'return');
     w.report();
     w.select('shard0', true);
     w.report();
-    const mission = w.frames.shard0.memory.shardMissions['shard0:haul'];
     assert.equal(mission.energyDelivered, 100);
     assert.equal(mission.state, 'complete');
+    assert.equal(w.frames.shard0.memory.shardMissions[key], undefined);
+    assert.equal(w.frames.shard0.memory.shardMissionStops[key].state, 'complete');
     w.sourceRoom.memory.creepConfig = {};
     w.controller.releaseShardCreepConfig();
     assert.equal(Object.keys(w.sourceRoom.memory.creepConfig).length, 0);
@@ -915,6 +949,7 @@ test('real cross-shard unloading retires an aged hauler and renews its single sl
     assert.match(w.controller.createShardTask({ id: 'lifetime', sourceRoom: w.sourceRoom.name,
         targetShard: 'shard1', targetRoom: w.targetRoom.name, route: w.route, returnRoute: w.returnRoute,
         claim: false, builders: 0, haulers: 1, energyAmount: 0 }), /已创建/);
+    const mission = Object.values(w.frames.shard0.memory.shardMissions)[0], key = mission.task.key;
     w.controller.releaseShardCreepConfig(); const outbound = w.spawnDemand('sHauler');
     w.behavior(outbound).source(outbound);
     w.select('shard0', true); outbound.store.energy = 100; outbound.ticksToLive = 1399;
@@ -926,13 +961,13 @@ test('real cross-shard unloading retires an aged hauler and renews its single sl
     w.behavior(hauling).target(hauling);
     assert.equal(hauling.memory.data.phase, 'done'); assert.equal(hauling.memory.data.done, true);
     assert.equal(w.calls.filter(call => call.type === 'suicide' && call.name === hauling.name).length, 1);
-    const published = JSON.parse(w.bus.get('shard1')).ecbotShard.reports['shard0:lifetime'];
+    const published = JSON.parse(w.bus.get('shard1')).ecbotShard.reports[key];
     assert.equal(published.energyDelivered, 100);
     assert.ok(published.units.some(unit => unit.name === hauling.name && unit.done));
     delete w.frames.shard1.creeps[hauling.name]; delete w.frames.shard1.memory.creeps[hauling.name];
     w.select('shard1', true); w.report();
     w.select('shard0', true); w.report(); w.sourceRoom.memory.creepConfig = {}; w.controller.releaseShardCreepConfig();
-    const mission = w.frames.shard0.memory.shardMissions['shard0:lifetime'];
+    assert.equal(w.frames.shard0.memory.shardMissions[key], mission);
     assert.equal(mission.state, 'active'); assert.equal(mission.energyDelivered, 100);
     assert.equal(Object.keys(mission.leases).length, 1);
     assert.notEqual(mission.leases['hauler:0'].name, hauling.name);

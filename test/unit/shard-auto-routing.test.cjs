@@ -349,14 +349,16 @@ test('paused and cancelled waiting tasks stay stopped when portal routes become 
     for (const state of ['paused', 'cancelled']) {
         const w = world();
         w.api.createShardTask('W1N1', 'shard1/W3N3', { explorePortals: false });
-        w.api.setShardTaskState(w.mission().task.id, state);
+        const mission = w.mission();
+        w.api.setShardTaskState(mission.task.id, state);
         w.intel.portals = copy(outward);
         w.plan('shard0', 'W1N1', 'shard1', 'W3N3', outward);
         w.advance(w.policy.portalRouting.retryInterval);
         w.api.runShardController();
         w.api.releaseShardCreepConfig();
-        assert.equal(w.mission().state, state);
-        assert.equal(Object.keys(w.mission().leases).length, 0);
+        assert.equal(mission.state, state);
+        assert.equal(Object.keys(mission.leases).length, 0);
+        if (state === 'cancelled') assert.equal(w.mission(), undefined);
         assert.equal(Object.keys(w.home.memory.creepConfig).length, 0);
     }
 });

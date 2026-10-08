@@ -113,7 +113,9 @@ src/
 | RoomMemory | 跨 tick | 孵化配置、任务、实验室、位置、目标库存和编队配置 |
 | `roomBlueprint` | 跨 tick，首次成功后保存 | 完整规划或现有 RCL8 布局快照；巡检不重新覆盖 |
 | `roomBlueprintState` | 跨 tick | 首次拥有时间、规划重试、补建巡检等级与错误原因 |
-| `shardMissions` | 起点 shard 跨 tick | 控制台任务、目标进度、单位租约及代数、探门进展、路线版本和侦察验证状态 |
+| `shardMissions` | 起点 shard 跨 tick | 活动/暂停任务、目标进度、单位租约及代数、探门进展、路线版本和侦察验证状态；完成/取消立即移除 |
+| `shardMissionStops` | 起点 shard，短期保留 | 已结束运行的简短停止指令与发布重试状态；默认 24 小时后清理，待写成功或仍在途时保留 |
+| `shardRouteCache` | 当前 shard，有界目录 | 按起终点及策略保存独立候选路线，最多 80 项、6 小时；不存任务进度或侦察证明 |
 | `shardArrivals` | 中间/目标 shard 跨 tick | 到达任务、实际送达总量；无人更新且超 TTL 后清理 |
 | Portal 情报 | 本地 Memory 与 InterShardMemory | 门坐标/落点/观察时间；本地临时门用本地 decay tick，远端仅共享稳定门 |
 | InterShardMemory 信封 | 各 shard 独立持久字符串 | `ecbotShard` 命名空间、迁移快照/ack/控制消息/报告、独立 `explorationReports` 与 `scoutProofs`，毫秒 TTL |
@@ -209,7 +211,11 @@ Lab 优先本房不足 20000 的 T3，否则选择全局库存最低且可合成
 
 ## 跨 shard 状态机
 
-`shardTask(sourceRoom, "targetShard/targetRoom", options?)` 在起点生成带 `${sourceShard}:${id}` 唯一键的任务，id 可自动生成。对象形式 route 可省略；传入手写 route 时仍校验 Portal 链连续性。创建检查不同 shard 的目标、自有 Spawn、人数/库存及 claimer 身体容量。自动任务在 `routing` 保存 ready/waiting 和下次重试时间；没有去程或所需返程时不创建新的派工槽位，清除尚未孵化的旧需求。
+`shardTask(sourceRoom, "targetShard/targetRoom", options?)` 在起点生成任务，id 可自动生成。每次运行使用带墙钟时间和持久序号的 `${sourceShard}:${id}:${run}` 独立键；控制台仍可用短 id、`${sourceShard}:${id}` 别名或当前完整键暂停/继续/取消。完成或取消后可立即用同一 id 重新创建，旧单位、旧送达量和迟到报告不会接管新任务。对象形式 route 可省略；传入手写 route 时仍校验 Portal 链连续性。创建检查不同 shard 的目标、自有 Spawn、人数/库存及 claimer 身体容量。自动任务在 `routing` 保存 ready/waiting 和下次重试时间；没有去程或所需返程时不创建新的派工槽位，清除尚未孵化的旧需求。
+
+`shardTasks()` 只保留活动和暂停任务。完成/取消立即从活动表和待孵化队列移除，旧版本积累的终态也自动迁移清理。普通 Memory 只短期保留最小停止指令，通信写失败时继续重试，本地单位不依赖广播成功才能停止；过期指令的删除也须成功持久化后才清除重试来源。取消不删除 transfer/ACK，已经跨门但尚未恢复角色的单位仍能完成 Memory 握手。返程搬运工停止下一次装载，超过停止记录保留期才回家的旧单位也不会重启任务。
+
+传送门目录独立保留；精确去程和返程候选路径保存在 `shardRouteCache`，任务清理时不额外调用原生寻路。新自动规划可复用候选，但会检查门的有效性、拓扑、策略、禁行房及当前 shard 的实际可达性；失效或超时则重新规划。显式路线仍优先，新任务仍须通过其自己的 scout 验证，不继承旧任务证明。低 Bucket 的轻量候选分支保持原查询和预算规则，不把未验证的几何路线升级为完整规划缓存。
 
 `portalIntel` 先收集可视房间实际 Portal，再定期预约 Observer 覆盖内的高速路交叉房及过期观察点；私服可配置额外扫描扇区中心。范围、bucket、扫描量和容量有界；observeRoom 的下一 tick 视野才成为事实。`observerScheduling` 只在成功预约后标记当 tick 占用，BetterMove 与扫描共用，避免晚调用覆盖同一建筑的意图。每 shard 独立分享稳定门目录，远端目录按墙钟有效期过滤；本地临时门仅以本地 tick 计算剩余寿命。没有 Observer 的 shard 仍可消费其他 shard 及单位视野的情报。
 
