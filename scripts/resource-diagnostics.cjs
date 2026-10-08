@@ -23,8 +23,13 @@ async function main() {
             for (const object of stock) for (const [resource, amount] of Object.entries(object.store || {})) if (amount > 0)
                 resources[resource] = (resources[resource] || 0) + amount;
             const warehouse = owned && !!controller?.isPowerEnabled && storage?.storeCapacity >= 8000000;
+            const used = object => Object.values(object?.store || {}).reduce((total, amount) => total + amount, 0);
+            const storageUsed = used(storage), terminalUsed = used(terminal);
             return { name, owned, level: controller?.level || 0, warehouse, powerEnabled: !!controller?.isPowerEnabled,
-                storageCapacity: storage?.storeCapacity, storageEnergy: storage?.store?.energy || 0,
+                storageCapacity: storage?.storeCapacity, storageUsed,
+                storageFree: Math.max(0, (storage?.storeCapacity || 0) - storageUsed), storageEnergy: storage?.store?.energy || 0,
+                terminalCapacity: terminal?.storeCapacity, terminalUsed,
+                terminalFree: Math.max(0, (terminal?.storeCapacity || 0) - terminalUsed),
                 terminalEnergy: terminal?.store?.energy || 0, resources,
                 shortages: owned && terminal && !warehouse ? Object.fromEntries(Object.entries(targets)
                     .filter(([r, target]) => (resources[r] || 0) < target).map(([r, target]) => [r, target - (resources[r] || 0)])) : {},

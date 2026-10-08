@@ -6,7 +6,7 @@ Screeps TypeScript Bot。采用按 tick 编排、按业务领域拆分的控制�
 
 完整运行流程、角色职责、状态生命周期、旗帜协议和扩展步骤见 [项目逻辑与架构](docs/architecture.md)。
 
-多仓库资源调度、终端 50000 能量底线、T3 常备量及 Lab/Factory 批量生产见 [资源调度与生产](docs/resources.md)。
+多仓库资源调度、终端 50000 能量底线、普通房 Storage 超过 400000 的能量自动市场出售、T3 常备量及 Lab/Factory 批量生产见 [资源调度与生产](docs/resources.md)。
 
 源 Link 与容器供能切换、外矿 NPC 防守、手动外矿旗及旗控制的黄球拆迁指令见 [外矿供能与防守](docs/remotes.md)。
 
@@ -224,7 +224,7 @@ cpuReset()
 
 持续超时后的追加优化：采矿工根据实际有效 WORK/boost 和 CARRY 容量攒批转移，5WORK/1CARRY 保持每 tick 采集 10 能量、稳定每 4 tick 卸载一次，不同单位错峰。工作位几何仅在本 tick 复用，远处 Link 不调用活性检查，健康身体的有效产量在 RAM 缓存；采集统计按真实快照容量/剩余源能量估算，不重复扫描身体。
 
-和平时 bucket＜1000，高血屏障的维修工每 5 tick 执行一次并错峰；≤100,000 血量、刚建成的低血屏障、有敌情或战争时立即维修，取能和无屏障时的控制器维护仍正常执行。参数在 `rolePolicy.repairer.cpuMaintenance`。和平房不预热防御矩阵，按需且同 tick 只生成一次。实验室配置保持每房 10 tick 周期并错峰，boost 需求仍每 tick 汇总；能量补给队列同 Lab 不重复入队，旧重复项原地清理。同房反应 Lab 共用本 tick、同底物 ID 的对象查找，各自仍读取实际库存/冷却并发布反应。市场自动出售默认每房 25 tick 查询一次并错峰，中央终端储量配置继续即时更新，手动调用出售函数仍即时。
+和平时 bucket＜1000，高血屏障的维修工每 5 tick 执行一次并错峰；≤100,000 血量、刚建成的低血屏障、有敌情或战争时立即维修，取能和无屏障时的控制器维护仍正常执行。参数在 `rolePolicy.repairer.cpuMaintenance`。和平房不预热防御矩阵，按需且同 tick 只生成一次。实验室配置保持每房 10 tick 周期并错峰，boost 需求仍每 tick 汇总；能量补给队列同 Lab 不重复入队，旧重复项原地清理。同房反应 Lab 共用本 tick、同底物 ID 的对象查找，各自仍读取实际库存/冷却并发布反应。普通房能量市场订单由所有房间共享，正常每 25 tick、低 bucket 恢复期每 250 tick 更新；按房间错峰选单，已选批次每 tick 检查备货和成交。其他出售保持周期错峰扫描，中央终端储量配置继续即时更新，手动调用出售函数仍即时。
 
 成熟房间的蓝图巡检错峰；和平 RCL8 且 bucket＜1000 时改为每 100 tick 巡检，平时为 10 tick。首次保存、升级、强制规划及最后一个 Spawn 丢失时仍立即检查，未到期时跳过元数据/占位扫描。参数在 `constructionPolicy.building.lowBucketInspection/staggerMatureInspections`。正常房间状态默认缓存 100 tick，异常下一 tick 重试；Portal 寿命/实际消失/新视野仍立即确认，稳定扫描历史每 25 tick 维护。参数分别在 `roomPolicy.labs/market/defense`、`interShardPolicy.portalDiscovery`。
 

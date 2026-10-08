@@ -40,6 +40,9 @@ export const roomPolicy = {
     market: {
         scanInterval: 25,
         staggerScans: true,
+        ordinaryEnergyStorageReserve: 400000,
+        ordinaryEnergyMaximumSaleAmount: 100000,
+        maximumDealsPerTick: 10,
         defaultMinimumPrice: 20,
         defaultSaleAmount: 10000,
         energyValue: 20,
@@ -77,7 +80,7 @@ export interface ResourceSalePolicy {
     sellAmount: number
 }
 
-/** 所有房间先出售能量，再按中央仓库列表的顺序尝试出售。 */
+/** 仓库房沿用原能量出售规则；普通房另按 400k Storage 留存自动出售。 */
 export const roomResourceSales: ResourceSalePolicy[] = [
     {
         resourceType: RESOURCE_ENERGY,
