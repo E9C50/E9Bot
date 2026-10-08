@@ -8,6 +8,7 @@ import { runPortalDiscovery, getKnownPortals, getPortalIntelStatus } from './por
 import { updateMissionRouting } from './routing'
 import { acceptScoutProof, failMissionScouting, isMissionVerified, refreshMissionScouting, requiresRouteScouting, routeSignature, scoutNeedsReturn } from './verification'
 import { acceptPortalExplorationReport, failPortalExploration, keepPortalExplorer, prioritizeLowBucketScout, refreshPortalExploration, releasePortalExplorer, reserveLowBucketScoutDemand } from './explorationControl'
+import { createShardArrivalReport } from './state'
 export { recordShardDelivery } from './state'
 
 const roles: Record<ShardUnitKind, ShardRoleConstant> = { claimer: 'sClaimer', builder: 'sBuilder', hauler: 'sHauler', scout: 'sScout' }
@@ -65,6 +66,7 @@ function command(mission: ShardMission, heartbeat = false): void {
             revision: mission.scouting!.revision, verifiedAt: mission.scouting!.verifiedAt,
             route: mission.task.route.map((hop) => ({ ...hop })),
             returnRoute: scoutNeedsReturn(mission.task) ? mission.task.returnRoute!.map((hop) => ({ ...hop })) : undefined,
+            outboundTicks: mission.scouting!.outboundTicks, returnTicks: mission.scouting!.returnTicks,
         } : undefined,
     }
     markShardStateDirty()
@@ -351,18 +353,7 @@ export function runShardController(): void {
             markShardStateDirty()
             continue
         }
-        const report: ShardMissionReport = {
-            type: 'status', missionId: key, originShard: record.task.sourceShard, shard: Game.shard.name,
-            updatedAt: now, energyDelivered: record.energyDelivered, units: unitsByMission!.get(key) || [],
-        }
-        if (Game.shard.name == record.task.targetShard) {
-            const room = Game.rooms[record.task.targetRoom]
-            if (room != undefined) {
-                report.targetOwned = room.controller?.my === true
-                report.targetLevel = room.controller?.level || 0
-                report.targetSpawns = room.find(FIND_MY_SPAWNS).length
-            }
-        }
+        const report = createShardArrivalReport(key, record, unitsByMission!.get(key) || [])
         if (local.reports == undefined) local.reports = {}
         local.reports[key] = report
         markShardStateDirty()

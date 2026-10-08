@@ -1,5 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
-import { recordShardDelivery } from './state'
+import { recordShardDelivery, retireShardHauler } from './state'
 import { isShardUnitData, ShardUnitData, ShardUnitKind } from './missions'
 import { travelPortalRoute } from './travel'
 import { readRemoteShardState } from './transport'
@@ -7,6 +7,9 @@ import { clearTravelPreparation, ensureUnitRoute } from './routing'
 import { forgetPortal } from './portalIntel'
 import { acquireBuilderEnergy, updateBuilderEnergyPhase } from 'role/support/builderEnergy'
 import { upgradeBuilderAtStablePosition } from 'role/support/builderWorkPosition'
+import { isMissionVerified, routeSignature } from './verification'
+import { estimateHaulerNextTrip, estimateHaulerOutbound, hasMeasuredHaulerOutbound, observeHaulerLifetime, seedHaulerLifetime } from './haulerLifetime'
+import { isPortalTravelData, isRecord } from './types'
 
 let reservationTick = -1
 let reservationShard = ''
@@ -46,7 +49,9 @@ function switchRoute(data: ShardUnitData, returning: boolean): void {
 }
 
 function travel(creep: Creep, data: ShardUnitData): boolean {
-    if (!ensureUnitRoute(creep, data)) return false
+    const ready = ensureUnitRoute(creep, data)
+    if (data.unitKind === 'hauler') observeHaulerLifetime(creep, data)
+    if (!ready) return false
     const result = travelPortalRoute(creep, data)
     if ((data.phase == 'return' ? data.task.autoReturn : data.task.autoRoute) &&
         (result.reason == 'portal-missing' || result.reason == 'portal-destination' || result.reason == 'no-path')) {
@@ -54,6 +59,7 @@ function travel(creep: Creep, data: ShardUnitData): boolean {
         if (hop != undefined && result.reason != 'no-path') forgetPortal(hop)
         // 下一次 travel 才执行新的路线，避免同 tick 重复发布/移动。
         ensureUnitRoute(creep, data, true, hop)
+        if (data.unitKind === 'hauler') observeHaulerLifetime(creep, data)
         return false
     }
     if (result.status == 'error' || result.status == 'waiting') data.lastError = result.message
@@ -148,6 +154,13 @@ function loadHauler(creep: Creep, data: ShardUnitData): boolean {
         data.phase = 'done'
         return false
     }
+    // A returned worker must not collect another load that its own measured outbound journey cannot deliver.
+    if (hasMeasuredHaulerOutbound(data) && insufficientLifetime(creep, estimateHaulerOutbound(creep, data))) {
+        data.done = true; data.phase = 'done'
+        data.lastError = '剩余寿命不足以再次送达，归还起点能量后回收'
+        observeHaulerLifetime(creep, data)
+        return finishHaulerAtHome(creep, data)
+    }
     const capacity = creep.store.getCapacity(RESOURCE_ENERGY) || 0
     const cargo = creep.store[RESOURCE_ENERGY]
     if (data.loadStarted == undefined) data.loadStarted = Game.time
@@ -156,6 +169,7 @@ function loadHauler(creep: Creep, data: ShardUnitData): boolean {
         switchRoute(data, false)
         data.phase = 'outbound'
         delete data.loadStarted
+        observeHaulerLifetime(creep, data)
         return true
     }
     const candidates = stores(creep.room)
@@ -197,34 +211,90 @@ function receiver(creep: Creep, data: ShardUnitData): AnyStoreStructure | Creep 
     return closest(creep, workers)
 }
 
+function insufficientLifetime(creep: Creep, needed: number): boolean {
+    return Number.isFinite(creep.ticksToLive) && needed >= 0 && creep.ticksToLive! <= needed
+}
+
+/** Scout timings are useful only for the verified full route that this worker is still following. */
+function seedLifetimeHints(creep: Creep, data: ShardUnitData): void {
+    const mission = Game.shard.name === data.task.sourceShard ? Memory.shardMissions?.[data.missionId] : undefined
+    if (mission?.task && isMissionVerified(mission) && mission.scouting?.status === 'verified' &&
+        routeSignature(mission.task.route) === routeSignature(data.task.route) &&
+        routeSignature(mission.task.returnRoute || []) === routeSignature(data.task.returnRoute || [])) {
+        seedHaulerLifetime(creep, data, { outboundTicks: mission.scouting.outboundTicks, returnTicks: mission.scouting.returnTicks })
+        return
+    }
+    if (Game.shard.name === data.task.sourceShard) return
+    const command = readRemoteShardState(data.task.sourceShard)?.reports?.[data.missionId]
+    if (!isRecord(command) || command.type !== 'command' || command.scoutStatus !== 'verified' || !isRecord(command.verification)) return
+    const proof = command.verification
+    if (!isPortalTravelData({ missionId: data.missionId, originShard: data.task.sourceShard, route: proof.route, hopIndex: 0 }) ||
+        !isPortalTravelData({ missionId: data.missionId, originShard: data.task.targetShard, route: proof.returnRoute || [], hopIndex: 0 }) ||
+        typeof proof.verifiedAt !== 'number' ||
+        proof.verifiedAt > Date.now() || Date.now() - proof.verifiedAt >= interShardPolicy.routeScouting.proofMaxAge ||
+        routeSignature(proof.route as ShardUnitData['route']) !== routeSignature(data.task.route) ||
+        routeSignature((proof.returnRoute || []) as ShardUnitData['route']) !== routeSignature(data.task.returnRoute || [])) return
+    seedHaulerLifetime(creep, data, {
+        outboundTicks: typeof proof.outboundTicks === 'number' ? proof.outboundTicks : undefined,
+        returnTicks: typeof proof.returnTicks === 'number' ? proof.returnTicks : undefined,
+    })
+}
+
+function finishHaulerAtHome(creep: Creep, data: ShardUnitData): boolean {
+    if (creep.store[RESOURCE_ENERGY] > 0 && Game.shard.name === data.task.sourceShard && creep.room.name === data.task.sourceRoom) {
+        const target = receiver(creep, data)
+        if (target) {
+            if (creep.transfer(target, RESOURCE_ENERGY, Math.min(creep.store[RESOURCE_ENERGY], target.store.getFreeCapacity(RESOURCE_ENERGY))) === ERR_NOT_IN_RANGE)
+                creep.moveTo(target, { range: 1 })
+            return false
+        }
+    }
+    const spawn = closest(creep, creep.room.spawns)
+    if (spawn && spawn.recycleCreep(creep) === ERR_NOT_IN_RANGE) creep.moveTo(spawn, { range: 1 })
+    return false
+}
+
 function runHauler(creep: Creep, data: ShardUnitData): boolean {
+    seedLifetimeHints(creep, data)
+    observeHaulerLifetime(creep, data)
     const pending = data.pendingDelivery
     if (pending != undefined) {
         if (pending.tick == Game.time) return false
         recordShardDelivery(data, Math.max(0, Math.min(pending.amount, pending.energyBefore - creep.store[RESOURCE_ENERGY])))
         delete data.pendingDelivery
+        observeHaulerLifetime(creep, data)
     }
-    if (data.phase == undefined) data.phase = 'load'
+    // A failed retirement publication remains a retirement; a later route estimate must not send this slot back out.
+    if (creep.store[RESOURCE_ENERGY] === 0 && (data.retireForLifetime || Memory.shardArrivals?.[data.missionId]?.retiredUnits?.[creep.name]))
+        return retireShardHauler(creep, data)
+    if (data.phase == undefined) { data.phase = 'load'; observeHaulerLifetime(creep, data) }
     if (data.phase == 'load') return loadHauler(creep, data)
     if (data.phase == 'return') {
         if (!travel(creep, data) || Game.shard.name != data.task.sourceShard || !enterRoom(creep, data.task.sourceRoom)) return false
         data.phase = 'load'
         delete data.loadStarted
+        observeHaulerLifetime(creep, data)
         return true
     }
     if (data.phase == 'done') {
-        const spawn = closest(creep, creep.room.spawns)
-        if (spawn != undefined && spawn.recycleCreep(creep) == ERR_NOT_IN_RANGE) creep.moveTo(spawn, { range: 1 })
-        return false
+        if (Memory.shardArrivals?.[data.missionId]?.retiredUnits?.[creep.name]) return retireShardHauler(creep, data)
+        return finishHaulerAtHome(creep, data)
     }
     if (data.phase == 'outbound') {
         if (!travel(creep, data) || Game.shard.name != data.task.targetShard || !enterRoom(creep, data.task.targetRoom)) return false
         data.phase = 'work'
+        observeHaulerLifetime(creep, data)
     }
     if (creep.store[RESOURCE_ENERGY] == 0) {
         if (data.task.autoReturn || data.task.returnRoute != undefined) {
+            if (Game.shard.name === data.task.targetShard && creep.room.name === data.task.targetRoom &&
+                insufficientLifetime(creep, estimateHaulerNextTrip(creep, data))) {
+                data.lastError = '剩余寿命不足以返程装载并再次送达，完成卸货后退休'
+                return retireShardHauler(creep, data)
+            }
             if (data.task.returnRoute == undefined) data.task.returnRoute = []
             switchRoute(data, true); data.phase = 'return'
+            observeHaulerLifetime(creep, data)
         }
         else { data.phase = 'done'; data.done = true }
         return true

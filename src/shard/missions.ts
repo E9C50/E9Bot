@@ -53,9 +53,33 @@ export interface ShardUnitData extends PortalTravelData {
     lastClaimTick?: number
     lastError?: string
     pendingDelivery?: { amount: number; energyBefore: number; tick: number }
+    /** Once lifetime retirement begins, publication retries must never resume cargo travel. */
+    retireForLifetime?: boolean
     routeRetryAt?: number
     routeRetryShard?: string
     blockedPortal?: { key: string; until: number; shard: string }
+    /** Native remaining lifespan survives shard clock changes; samples belong to one route/body. */
+    life?: {
+        revision: string
+        bodySpeed: string
+        phase?: ShardUnitData['phase']
+        phaseStartedTtl?: number
+        lastTtl?: number
+        workUnloaded?: boolean
+        loadedOutboundTicks?: number
+        returnTicks?: number
+        loadTicks?: number
+        unloadTicks?: number
+        scoutOutboundTicks?: number
+        scoutReturnTicks?: number
+        outboundSignature?: string
+        returnSignature?: string
+        /** In-flight rerouting invalidates the old leg and its scout hint. */
+        outboundRoute?: PortalHop[]
+        returnRoute?: PortalHop[]
+        sourcePosition?: { x: number; y: number }
+        targetPosition?: { x: number; y: number }
+    }
     exploration?: {
         revision: string
         goalShard: string
@@ -206,6 +230,8 @@ export interface ShardArrivalRecord {
     task: ShardTaskSpec
     updatedAt: number
     energyDelivered: number
+    /** Retired native identities survive their death until the source has time to consume a terminal status. */
+    retiredUnits?: Record<string, { kind: 'hauler'; retiredAt: number }>
 }
 
 export interface PortalExplorationReport {

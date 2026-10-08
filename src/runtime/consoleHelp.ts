@@ -70,6 +70,7 @@ export const helpSections: HelpSection[] = [
                     '省略 route 自动观察 Portal（不要传空数组）；缺情报默认主动探门，scout 先走最近的合适入口逐段验证。已发现 Portal 和验证路线持久保存，满足有效性条件时新任务复用。',
                     'verifyRoute / explorePortals：自动去程或自动返程默认 true。固定路线可开启 verifyRoute 验证；主动探门只对自动规划段有效，固定去返程单独设 explorePortals:true 不会探门。自动路线有 haulers 时默认往返，roundTrip:false 改单程。',
                     '固定 route 默认单程；roundTrip:true 才自动规划返程，也可指定 returnRoute。显式 returnRoute 会用于往返，roundTrip:false 不会取消它。',
+                    `往返搬运工卸空并确认送达后，寿命不足以返程、重装和再次送达（含 ${interShardPolicy.haulerLifetime.safetyTicks} tick 安全余量）时在目标房自杀并按名额补派；退休通知发布失败原地重试。`,
                     'route/returnRoute 为 PortalHop[]：每跳 {shard,roomName,x,y,destinationShard,destinationRoom?}，出发 shard 连续衔接，去程到目标、返程回起点。',
                     'sourceEnergyId / targetEnergyId：可选取能/存能建筑 ID；homeEnergyReserve 为起点保留能量整数。',
                     'id 可选；默认 auto_起点房_目标shard_目标房。已存在的 id（含完成任务）不能覆盖；再次发布用新的 id。状态操作须在任务起点 shard 执行，可用短 id 或 shard:id，不能借前缀在其它 shard 远控。',

@@ -56,7 +56,8 @@ function world(kind, options = {}) {
     const local = { version: 1, transfers: {}, acks: {}, reports: {} };
     const peers = {};
     const memory = { warMode: {}, creeps: {} };
-    const transport = { getLocalShardState: () => local, readRemoteShardState: shard => peers[shard], markShardStateDirty() {}, flushInterShardMemory: () => true };
+    const transport = { getLocalShardState: () => local, readRemoteShardState: shard => peers[shard], markShardStateDirty() {},
+        flushInterShardMemory: () => options.flushResult !== false, getShardTransportError: () => 'test flush failed', cancelCreepTransfers() {} };
     const loader = createSourceLoader({
         globals: {
             Game: game, Memory: memory, RESOURCE_ENERGY: 'energy',
@@ -100,6 +101,7 @@ function world(kind, options = {}) {
         transfer: (target, resource, amount) => { calls.push({ type: 'transfer', target, resource, amount }); return options.transferResult ?? 0; },
         withdraw: (target, resource, amount) => { calls.push({ type: 'withdraw', target, resource, amount }); return 0; },
         drop: resource => { calls.push({ type: 'drop', resource }); return 0; },
+        suicide: () => { calls.push({ type: 'suicide' }); return options.suicideResult ?? 0; },
         say: text => calls.push({ type: 'say', text }),
         getActiveBodyparts: part => kind === 'builder' && part === 'work' ? 1 : 0,
     };
@@ -227,6 +229,88 @@ test('a successful transfer intent with unchanged next-tick cargo does not count
     w.behavior.target(w.creep);
     assert.equal(w.memory.shardArrivals?.[w.data.missionId]?.energyDelivered || 0, 0);
     assert.equal(w.creep.store.energy, 100);
+});
+
+test('low-life haulers deliver and confirm every remaining energy before retiring at the target', () => {
+    const w = world('hauler', { energy: 100 }); w.creep.ticksToLive = 60;
+    const target = { id: 'target-spawn', my: true, structureType: 'spawn', pos: position(10, 11, w.room.name),
+        store: { getFreeCapacity: () => 50 } };
+    w.room.spawns.push(target); w.objects[target.id] = target;
+    w.behavior.target(w.creep);
+    assert.equal(w.calls.at(-1).type, 'transfer'); assert.equal(w.calls.at(-1).amount, 50);
+    assert.equal(w.calls.some(call => call.type === 'suicide'), false);
+    w.game.time++; w.creep.ticksToLive--; w.creep.store.energy = 50;
+    w.behavior.target(w.creep);
+    assert.equal(w.memory.shardArrivals[w.data.missionId].energyDelivered, 50);
+    assert.equal(w.calls.some(call => call.type === 'suicide'), false, 'partial unloading cannot kill the remaining payload');
+    w.behavior.target(w.creep);
+    assert.equal(w.calls.some(call => call.type === 'suicide'), false, 'same-tick transfer acceptance is not delivery proof');
+    w.game.time++; w.creep.ticksToLive--; w.creep.store.energy = 0;
+    w.behavior.target(w.creep);
+    assert.equal(w.memory.shardArrivals[w.data.missionId].energyDelivered, 100);
+    assert.equal(w.calls.filter(call => call.type === 'suicide').length, 1);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.data.done, true);
+    assert.ok(w.local.reports[w.data.missionId].units.some(unit => unit.name === w.creep.name && unit.done));
+    assert.equal(w.local.reports[w.data.missionId].energyDelivered, 100);
+});
+
+test('a healthy empty hauler returns when its measured next trip fits, while unknown TTL does not retire', () => {
+    for (const ttl of [1400, undefined]) {
+        const w = world('hauler'); w.creep.ticksToLive = ttl;
+        w.behavior.target(w.creep);
+        assert.equal(w.data.phase, 'return'); assert.equal(w.data.done, undefined);
+        assert.equal(w.calls.some(call => call.type === 'suicide'), false);
+    }
+});
+
+test('failed retirement publication holds an empty hauler for retry rather than beginning the return leg', () => {
+    const options = { flushResult: false }, w = world('hauler', options); w.creep.ticksToLive = 60;
+    w.behavior.target(w.creep);
+    assert.equal(w.data.phase, 'work'); assert.equal(w.data.done, undefined);
+    assert.equal(w.data.retireForLifetime, true); assert.equal(w.calls.some(call => call.type === 'suicide'), false);
+    w.creep.ticksToLive = 1400; options.flushResult = true; w.game.time++;
+    w.behavior.target(w.creep);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.calls.filter(call => call.type === 'suicide').length, 1,
+        'a committed retirement retries even when the subsequent route budget or lifetime changes');
+});
+
+test('a suicide intent failure retries at the target instead of seeking a recycling Spawn or returning', () => {
+    const w = world('hauler', { suicideResult: -7 }); w.creep.ticksToLive = 60;
+    w.behavior.target(w.creep); w.game.time++; w.behavior.target(w.creep);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.data.done, true);
+    assert.equal(w.calls.filter(call => call.type === 'suicide').length, 2);
+    assert.equal(w.calls.some(call => call.type === 'move'), false);
+});
+
+test('low lifetime and a full destination never drop or abandon cargo', () => {
+    const w = world('hauler', { energy: 100 }); w.creep.ticksToLive = 10;
+    w.behavior.target(w.creep);
+    assert.equal(w.creep.store.energy, 100); assert.equal(w.data.phase, 'work');
+    assert.equal(w.calls.some(call => ['drop', 'suicide'].includes(call.type)), false);
+    assert.match(w.data.lastError, /可接收/);
+});
+
+test('a returned hauler that cannot deliver its next load restores partial cargo instead of withdrawing more', () => {
+    const w = world('hauler', { energy: 25 });
+    w.data.phase = 'outbound'; w.game.shard.name = w.data.task.sourceShard;
+    w.room.name = w.data.task.sourceRoom; w.creep.pos = position(10, 10, w.room.name);
+    const lifetime = w.loader.load('shard/haulerLifetime'); lifetime.observeHaulerLifetime(w.creep, w.data);
+    w.creep.ticksToLive -= 100; w.data.phase = 'work'; w.game.shard.name = w.data.task.targetShard;
+    w.room.name = w.data.task.targetRoom; w.creep.pos = position(10, 10, w.room.name);
+    lifetime.observeHaulerLifetime(w.creep, w.data);
+    w.data.phase = 'return'; w.data.route = w.data.task.returnRoute; w.data.originShard = w.data.task.targetShard;
+    lifetime.observeHaulerLifetime(w.creep, w.data);
+    w.creep.ticksToLive = 100; w.data.phase = 'load'; w.game.shard.name = w.data.task.sourceShard;
+    w.room.name = w.data.task.sourceRoom; w.creep.pos = position(10, 10, w.room.name);
+    const storage = { id: 'home-storage', my: true, structureType: 'storage', pos: position(10, 11, w.room.name),
+        store: { energy: 20000, getFreeCapacity: () => 10000 } };
+    w.room.storage = storage; w.objects[storage.id] = storage;
+    w.behavior.source(w.creep);
+    assert.equal(w.calls.some(call => call.type === 'withdraw'), false);
+    assert.equal(w.calls.find(call => call.type === 'transfer')?.target.id, storage.id);
+    assert.equal(w.calls.find(call => call.type === 'transfer')?.amount, 25);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.data.done, true);
+    assert.equal(w.memory.shardArrivals?.[w.data.missionId]?.energyDelivered || 0, 0, 'home restoration is not mission delivery');
 });
 
 test('builders keep a newly claimed controller alive before constructing and upgrade when no sites exist', () => {
@@ -680,6 +764,7 @@ function integratedWorld() {
             repair: target => action('repair', target), pickup: target => action('pickup', target), claimController: target => action('claim', target),
             attackController: target => action('attack', target), withdraw: (target, resource, amount) => action('withdraw', target, resource, amount),
             transfer: (target, resource, amount) => action('transfer', target, resource, amount), drop: resource => action('drop', undefined, resource),
+            suicide: () => action('suicide'),
             getActiveBodyparts: part => part === 'work' && creep.memory.data?.unitKind === 'builder' ? 1 : 0,
         };
         Object.defineProperty(creep, 'memory', { get: () => frame.memory.creeps[name], set: value => { frame.memory.creeps[name] = value; } });
@@ -820,4 +905,53 @@ test('real two-shard hauling confirms delivery, completes from its report, resto
     assert.equal(returned.memory.data.done, true);
     assert.equal(w.calls.filter(call => call.type === 'withdraw').length, withdrawalCount);
     assert.equal(w.calls.some(call => call.type === 'drop'), false);
+});
+
+test('real cross-shard unloading retires an aged hauler and renews its single slot without losing delivery', () => {
+    const w = integratedWorld(); w.targetRoom.controller.my = true; w.targetRoom.my = true;
+    const targetSpawn = { id: 'target-spawn', my: true, structureType: 'spawn', pos: position(11, 10, w.targetRoom.name),
+        store: { energy: 0, getFreeCapacity: () => 300 } };
+    w.targetRoom.spawns.push(targetSpawn); w.frames.shard1.objects[targetSpawn.id] = targetSpawn;
+    assert.match(w.controller.createShardTask({ id: 'lifetime', sourceRoom: w.sourceRoom.name,
+        targetShard: 'shard1', targetRoom: w.targetRoom.name, route: w.route, returnRoute: w.returnRoute,
+        claim: false, builders: 0, haulers: 1, energyAmount: 0 }), /已创建/);
+    w.controller.releaseShardCreepConfig(); const outbound = w.spawnDemand('sHauler');
+    w.behavior(outbound).source(outbound);
+    w.select('shard0', true); outbound.store.energy = 100; outbound.ticksToLive = 1399;
+    w.behavior(outbound).source(outbound);
+    const hauling = w.cross(outbound, 'shard1', w.targetRoom); hauling.ticksToLive = 100;
+    w.behavior(hauling).target(hauling);
+    assert.equal(w.calls.some(call => call.type === 'suicide'), false);
+    w.select('shard1', true); hauling.ticksToLive = 99; hauling.store.energy = 0;
+    w.behavior(hauling).target(hauling);
+    assert.equal(hauling.memory.data.phase, 'done'); assert.equal(hauling.memory.data.done, true);
+    assert.equal(w.calls.filter(call => call.type === 'suicide' && call.name === hauling.name).length, 1);
+    const published = JSON.parse(w.bus.get('shard1')).ecbotShard.reports['shard0:lifetime'];
+    assert.equal(published.energyDelivered, 100);
+    assert.ok(published.units.some(unit => unit.name === hauling.name && unit.done));
+    delete w.frames.shard1.creeps[hauling.name]; delete w.frames.shard1.memory.creeps[hauling.name];
+    w.select('shard1', true); w.report();
+    w.select('shard0', true); w.report(); w.sourceRoom.memory.creepConfig = {}; w.controller.releaseShardCreepConfig();
+    const mission = w.frames.shard0.memory.shardMissions['shard0:lifetime'];
+    assert.equal(mission.state, 'active'); assert.equal(mission.energyDelivered, 100);
+    assert.equal(Object.keys(mission.leases).length, 1);
+    assert.notEqual(mission.leases['hauler:0'].name, hauling.name);
+    assert.equal(Object.values(w.sourceRoom.memory.creepConfig).filter(config => config.role === 'sHauler').length, 1);
+    assert.equal(w.calls.some(call => call.type === 'drop'), false);
+});
+
+test('a verified remote return hint can retire a hauler even when its loaded outward trip was short', () => {
+    const w = world('hauler');
+    w.data.phase = 'outbound'; w.creep.ticksToLive = 700;
+    w.behavior.prepare(w.creep);
+    const lifetime = w.loader.load('shard/haulerLifetime'); lifetime.observeHaulerLifetime(w.creep, w.data);
+    w.creep.ticksToLive = 650; w.data.phase = 'work'; w.creep.store.energy = 0;
+    w.peers[w.data.task.sourceShard] = { reports: { [w.data.missionId]: {
+        type: 'command', scoutStatus: 'verified', verification: { verifiedAt: Date.now(),
+            route: w.data.task.route, returnRoute: w.data.task.returnRoute, outboundTicks: 30, returnTicks: 700 },
+    } } };
+    w.behavior.target(w.creep);
+    assert.equal(w.data.life.loadedOutboundTicks, 50);
+    assert.equal(w.data.life.scoutReturnTicks, 700);
+    assert.equal(w.data.phase, 'done'); assert.equal(w.calls.filter(call => call.type === 'suicide').length, 1);
 });

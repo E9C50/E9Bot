@@ -18,6 +18,15 @@ export const interShardPolicy = {
     minimumHomeEnergyReserve: 10000,
     minimumLoadFraction: 0.8,
     partialLoadWait: 25,
+    haulerLifetime: {
+        safetyTicks: 50,
+        // Before this body has completed a cycle, allow local loading/unloading movement and intent confirmation.
+        loadFallbackTicks: 75,
+        unloadFallbackTicks: 50,
+        routeDetourFactor: 2,
+        unknownLoadedStepTicks: 5,
+        unknownEmptyStepTicks: 1,
+    },
     downgradeWarningTicks: 2000,
     claimRetryInterval: 20,
     defaultTargetLevel: 4,
