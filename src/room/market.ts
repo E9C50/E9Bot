@@ -6,7 +6,7 @@ import {
 } from 'settings/roomPolicy'
 import { roomWorkDue } from 'runtime/roomSchedule'
 import { cpuRecoveryInterval } from 'runtime/cpuRecovery'
-import { resourcePolicy } from 'settings/resourcePolicy'
+import { basicMinerals, resourcePolicy } from 'settings/resourcePolicy'
 import {
     getAvailableResource, getOutgoingResourceAmount, getResourceKeep, getRoomResourceAmount,
     getTerminalResourceAmount, isWarehouseRoom, recordResourceDebit, terminalUsed,
@@ -233,9 +233,12 @@ export function sellResource(
 export function processRoomMarket(room: Room): void {
     const due = roomWorkDue(room.name, cpuRecoveryInterval('market', roomPolicy.market.scanInterval), roomPolicy.market.staggerScans)
     const warehouse = isWarehouseRoom(room)
+    // Warehouse raw surplus feeds compression; selling it would compete with that stock policy.
+    const canAutoSell = (resource: ResourceConstant): boolean =>
+        !warehouse || !basicMinerals.includes(resource) && resource !== 'G'
     if (!warehouse) processOrdinaryEnergySale(room, due)
     if (due) for (const sale of roomResourceSales)
-        if (warehouse || sale.resourceType !== RESOURCE_ENERGY)
+        if ((warehouse || sale.resourceType !== RESOURCE_ENERGY) && canAutoSell(sale.resourceType))
         sellResource(
             room,
             sale.resourceType,
@@ -249,7 +252,8 @@ export function processRoomMarket(room: Room): void {
         room.memory.terminalAmount[resourceType] =
             Math.max(room.memory.terminalAmount[resourceType] || 0, roomPolicy.terminal.centerResourceReserve)
     }
-    if (due) for (const sale of centerResourceSales)
+    if (due) for (const sale of centerResourceSales) {
+        if (!canAutoSell(sale.resourceType)) continue
         sellResource(
             room,
             sale.resourceType,
@@ -257,4 +261,5 @@ export function processRoomMarket(room: Room): void {
             sale.minPrice,
             sale.sellAmount
         )
+    }
 }

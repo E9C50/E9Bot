@@ -3,8 +3,14 @@ const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 const recipes = {
+    reductant: { amount: 100, cooldown: 20, components: { H: 500, energy: 200 } },
     utrium_bar: { amount: 100, cooldown: 20, components: { U: 500, energy: 200 } },
     oxidant: { amount: 100, cooldown: 20, components: { O: 500, energy: 200 } },
+    lemergium_bar: { amount: 100, cooldown: 20, components: { L: 500, energy: 200 } },
+    keanium_bar: { amount: 100, cooldown: 20, components: { K: 500, energy: 200 } },
+    zynthium_bar: { amount: 100, cooldown: 20, components: { Z: 500, energy: 200 } },
+    purifier: { amount: 100, cooldown: 20, components: { X: 500, energy: 200 } },
+    ghodium_melt: { amount: 100, cooldown: 20, components: { G: 500, energy: 200 } },
     U: { amount: 500, cooldown: 20, components: { utrium_bar: 100, energy: 200 } },
     energy: { amount: 500, cooldown: 10, components: { battery: 50 } },
     battery: { amount: 50, cooldown: 10, components: { energy: 600 } },
@@ -213,7 +219,7 @@ test('factory prioritizes a locally feasible commodity over compression and imme
     assert.equal(w.room.memory.productionReserve.factory.utrium_bar, 1000);
 });
 
-test('factory compresses only its mined mineral surplus above the 10000 floor in ordinary rooms and warehouses', () => {
+test('ordinary factories keep 10000 mined mineral while warehouses keep 300000', () => {
     const w = world({ storage: { energy: 100000, U: 10499, O: 20000 } });
     w.production.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction, undefined);
@@ -226,14 +232,116 @@ test('factory compresses only its mined mineral surplus above the 10000 floor in
     const warehouse = world({ warehouse: true, storage: { energy: 100000, U: 500 } });
     warehouse.production.planFactoryProduction(warehouse.factory);
     assert.equal(warehouse.room.memory.factoryProduction, undefined, 'warehouses also retain raw lab feedstock');
-    warehouse.storage.store.U = 10500;
+    warehouse.storage.store.U = 300500;
     warehouse.production.planFactoryProduction(warehouse.factory);
     assert.equal(warehouse.room.memory.factoryProduction.resourceType, 'utrium_bar');
     assert.equal(warehouse.room.memory.factoryProduction.remaining, 1);
 });
 
-test('a warehouse oxygen compression batch stops after its surplus and leaves 10000 raw oxygen for labs', () => {
-    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 9500 },
+test('warehouse compression covers all imported raw minerals and G only above 300000 plus committed stock', () => {
+    const compressed = { H: 'reductant', O: 'oxidant', U: 'utrium_bar', L: 'lemergium_bar',
+        K: 'keanium_bar', Z: 'zynthium_bar', X: 'purifier', G: 'ghodium_melt' };
+    for (const [mineral, output] of Object.entries(compressed)) {
+        const outgoing = {};
+        const w = world({ warehouse: true, mineral: mineral === 'U' ? 'O' : 'U',
+            storage: { energy: 100000, [mineral]: 300000 }, outgoing });
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, `${mineral} has no surplus at the floor`);
+        w.storage.store[mineral] = 300499;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, `${mineral} cannot afford a full native reaction`);
+        w.storage.store[mineral] = 300500;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.resourceType, output, `${mineral} need not be the rooms native mineral`);
+        assert.equal(w.room.memory.factoryProduction.remaining, 1);
+        w.room.memory.productionReserve.lab = { [mineral]: 500 };
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, `${mineral} lab feedstock is additional to the floor`);
+        w.storage.store[mineral] = 301000;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.remaining, 1);
+        outgoing[mineral] = 500;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, `${mineral} outgoing stock is additional to both the floor and lab batch`);
+        w.storage.store[mineral] = 301500;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.remaining, 1);
+        w.factory.store[mineral] = 500; w.factory.store.energy = 200; w.storage.store[mineral] = 301000;
+        w.production.runFactoryProduction(w.factory);
+        assert.deepEqual(w.actions, [['produce', output]]);
+        w.nextTick();
+        assert.equal(w.storage.store[mineral] + w.factory.store[mineral], 301000, `${mineral} keeps 300000 plus its lab batch and outgoing stock`);
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined);
+    }
+});
+
+test('warehouse compression chooses the largest surplus and completes a stable batch before switching', () => {
+    const w = world({ warehouse: true, storage: { energy: 100000, U: 310000, O: 320000, X: 340000 } });
+    delete w.room.mineral;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'purifier', 'warehouses do not require a native mineral object');
+    assert.equal(w.room.memory.factoryProduction.remaining, 20);
+    const createdAt = w.room.memory.factoryProduction.createdAt;
+    w.nextTick(); w.storage.store.O = 360000;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'purifier');
+    assert.equal(w.room.memory.factoryProduction.createdAt, createdAt, 'new larger surpluses do not discard an already-loaded batch');
+    w.room.memory.factoryProduction.remaining = 0;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'oxidant');
+    w.storage.store.silicon = 20; w.storage.store.utrium_bar = 100;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'wire', 'a feasible commodity still preempts compression');
+    assert.equal(w.room.memory.factoryProduction.mode, 'commodity');
+});
+
+test('warehouse compression breaks equal-surplus ties deterministically without changing ordinary mined-mineral selection', () => {
+    const warehouse = world({ warehouse: true, storage: { energy: 100000, O: 300500, U: 300500 } });
+    warehouse.production.planFactoryProduction(warehouse.factory);
+    assert.equal(warehouse.room.memory.factoryProduction.resourceType, 'oxidant');
+    const ordinary = world({ mineral: 'U', storage: { energy: 100000, U: 10000, O: 400000 } });
+    ordinary.production.planFactoryProduction(ordinary.factory);
+    assert.equal(ordinary.room.memory.factoryProduction, undefined, 'ordinary rooms only compress their native mined mineral');
+    ordinary.storage.store.U = 10500;
+    ordinary.production.planFactoryProduction(ordinary.factory);
+    assert.equal(ordinary.room.memory.factoryProduction.resourceType, 'utrium_bar');
+    assert.equal(ordinary.room.memory.factoryProduction.remaining, 1);
+});
+
+test('a pre-existing warehouse plan immediately stops at the new 300000 floor without waiting for planning', () => {
+    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 50000 },
+        factory: { energy: 200, O: 500 } });
+    w.room.memory.factoryProduction = { resourceType: 'oxidant', mode: 'compression', remaining: 20,
+        inputs: { O: 10000, energy: 4000 }, createdAt: 0 };
+    w.production.runFactoryProduction(w.factory);
+    assert.deepEqual(w.actions, []);
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    assert.equal(w.room.memory.productionReserve.factory.O, undefined);
+});
+
+test('losing warehouse status immediately rejects an existing non-native mineral compression plan', () => {
+    for (const change of ['power-disabled', 'ordinary-storage']) {
+        const w = world({ warehouse: true, mineral: 'U', storage: { energy: 100000, O: 300500 },
+            factory: { energy: 200, O: 500 } });
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.resourceType, 'oxidant');
+        if (change === 'power-disabled') w.room.controller.isPowerEnabled = false;
+        else w.storage.store = store({ energy: 100000, O: 300500 }, 1000000);
+        w.production.runFactoryProduction(w.factory);
+        assert.deepEqual(w.actions, [], `${change} stops stale non-native compression at execution time`);
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, `${change} discards the non-native compression plan`);
+        assert.equal(w.room.memory.productionReserve.factory.O, undefined);
+        w.storage.store.U = 10500;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.resourceType, 'utrium_bar', 'native compression resumes at the ordinary 10000 floor');
+    }
+});
+
+test('a warehouse oxygen compression batch stops after its surplus and leaves 300000 raw oxygen for labs', () => {
+    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 299500 },
         terminal: { energy: 50000, O: 500 }, factory: { energy: 400, O: 1000 } });
     w.room.memory.factoryProduction = { resourceType: 'oxidant', mode: 'compression', remaining: 20,
         inputs: { O: 10000, energy: 4000 }, createdAt: 0 };
@@ -243,7 +351,7 @@ test('a warehouse oxygen compression batch stops after its surplus and leaves 10
     w.nextTick();
     w.production.runFactoryProduction(w.factory);
     w.nextTick();
-    assert.equal(w.storage.store.O + w.terminal.store.O + w.factory.store.O, 10000);
+    assert.equal(w.storage.store.O + w.terminal.store.O + w.factory.store.O, 300000);
     assert.equal(w.factory.store.oxidant, 200);
     w.production.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction, undefined);
@@ -252,7 +360,8 @@ test('a warehouse oxygen compression batch stops after its surplus and leaves 10
 
 test('execution rejects a stale compression plan with already-loaded inputs that would cross the mineral floor', () => {
     for (const warehouse of [false, true]) {
-        const w = world({ warehouse, mineral: 'O', storage: { energy: 100000, O: 9500 },
+        const floor = warehouse ? 300000 : 10000;
+        const w = world({ warehouse, mineral: 'O', storage: { energy: 100000, O: floor - 500 },
             factory: { energy: 200, O: 500 } });
         w.room.memory.factoryProduction = { resourceType: 'oxidant', mode: 'compression', remaining: 20,
             inputs: { O: 10000, energy: 4000 }, createdAt: 0 };
@@ -268,7 +377,7 @@ test('execution rejects a stale compression plan with already-loaded inputs that
 });
 
 test('raw mineral floor counts factory delivery cargo but excludes unrelated carrier inventory', () => {
-    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 9500 },
+    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 299500 },
         factory: { energy: 200, O: 500 } });
     const worker = w.creep('processer', 11, 11, { O: 500 });
     w.production.planFactoryProduction(w.factory);
@@ -279,7 +388,7 @@ test('raw mineral floor counts factory delivery cargo but excludes unrelated car
     assert.equal(w.room.memory.factoryProduction.remaining, 1, 'dedicated input cargo is still room inventory');
     w.production.runFactoryProduction(w.factory);
     w.nextTick();
-    assert.equal(w.storage.store.O + w.factory.store.O + worker.store.O, 10000);
+    assert.equal(w.storage.store.O + w.factory.store.O + worker.store.O, 300000);
     w.production.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction, undefined);
     w.production.runFactoryLogistics(worker);
@@ -287,15 +396,15 @@ test('raw mineral floor counts factory delivery cargo but excludes unrelated car
 });
 
 test('warehouse mineral floor combines with lab and outgoing reservations and protects larger boost requests', () => {
-    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 13499 },
-        outgoing: { O: 500 }, memory: { boostNeed: { O: 12000 }, productionReserve: { lab: { O: 500 } } } });
+    const w = world({ warehouse: true, mineral: 'O', storage: { energy: 100000, O: 313499 },
+        outgoing: { O: 500 }, memory: { boostNeed: { O: 312000 }, productionReserve: { lab: { O: 500 } } } });
     w.production.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction, undefined);
-    w.storage.store.O = 13500;
+    w.storage.store.O = 313500;
     w.production.planFactoryProduction(w.factory);
     assert.equal(w.room.memory.factoryProduction.remaining, 1);
     assert.equal(w.room.memory.factoryProduction.inputs.O, 500);
-    w.factory.store.O = 500; w.storage.store.O = 13000; w.factory.store.energy = 200;
+    w.factory.store.O = 500; w.storage.store.O = 313000; w.factory.store.energy = 200;
     w.room.memory.productionReserve.lab.O = 501;
     w.production.runFactoryProduction(w.factory);
     assert.deepEqual(w.actions, [], 'new lab commitments are observed immediately at execution time');
@@ -303,11 +412,11 @@ test('warehouse mineral floor combines with lab and outgoing reservations and pr
 
 test('warehouse commodity production also preserves raw mineral and ghodium feedstock', () => {
     for (const mineral of ['H', 'O', 'U', 'L', 'K', 'Z', 'X', 'G']) {
-        const w = world({ warehouse: true, storage: { energy: 100000, [mineral]: 10000 } });
+        const w = world({ warehouse: true, storage: { energy: 100000, [mineral]: 300000 } });
         w.loader.globals.COMMODITIES = { rawCommodity: { amount: 20, cooldown: 20, components: { [mineral]: 100, energy: 20 } } };
         w.production.planFactoryProduction(w.factory);
         assert.equal(w.room.memory.factoryProduction, undefined, `${mineral} has no spendable surplus`);
-        w.storage.store[mineral] = 10100;
+        w.storage.store[mineral] = 300100;
         w.production.planFactoryProduction(w.factory);
         assert.equal(w.room.memory.factoryProduction.resourceType, 'rawCommodity');
         assert.equal(w.room.memory.factoryProduction.remaining, 1);
@@ -332,7 +441,7 @@ test('terminal energy reserve and lab-reserved ingredients cannot be spent by fa
     labs.production.planFactoryProduction(labs.factory);
     assert.equal(labs.room.memory.factoryProduction, undefined);
     assert.equal(labs.room.memory.productionReserve.lab.U, 500);
-    const committed = world({ warehouse: true, storage: { energy: 100000, U: 10500 }, outgoing: { U: 500 } });
+    const committed = world({ warehouse: true, storage: { energy: 100000, U: 300500 }, outgoing: { U: 500 } });
     committed.production.planFactoryProduction(committed.factory);
     assert.equal(committed.room.memory.factoryProduction, undefined, 'committed terminal cargo is not factory stock');
 });

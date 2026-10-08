@@ -12,7 +12,9 @@ function store(resources, capacity) {
     return result;
 }
 function world({ orders = [{ id: 'buy', amount: 2000000, remainingAmount: 2000000, price: 10, roomName: 'W5N1' }],
-    scanInterval = 25, feeRatio = 0.1 } = {}) {
+    scanInterval = 25, feeRatio = 0.1,
+    roomSales = [{ resourceType: 'energy', threshold: 600000, minPrice: 20, sellAmount: 10000 }],
+    centerSales = [{ resourceType: 'energy', threshold: 300000, minPrice: 0.001, sellAmount: 10000 }] } = {}) {
     let queries = 0, costs = 0, due = true, dealResult = 0;
     const deals = [];
     const game = { time: 1, shard: { name: 'test' }, rooms: {}, creeps: {}, market: {
@@ -30,8 +32,8 @@ function world({ orders = [{ id: 'buy', amount: 2000000, remainingAmount: 200000
         PWR_OPERATE_TERMINAL: 17, POWER_INFO: { 17: { effect: [0.5] } }, console: { log() {} } },
         modules: {
             'settings/roomPolicy': { roomPolicy,
-                roomResourceSales: [{ resourceType: 'energy', threshold: 600000, minPrice: 20, sellAmount: 10000 }],
-                centerResourceSales: [{ resourceType: 'energy', threshold: 300000, minPrice: 0.001, sellAmount: 10000 }],
+                roomResourceSales: roomSales,
+                centerResourceSales: centerSales,
                 centerTerminalResources: [] },
             'runtime/roomSchedule': { roomWorkDue: () => due },
             'runtime/cpuRecovery': { cpuRecoveryInterval: () => roomPolicy.market.scanInterval },
@@ -88,6 +90,37 @@ test('warehouse rooms keep their existing lower threshold and never stage the or
     assert.equal(w.deals[0].amount, 10000);
     assert.equal(room.memory.terminalAmount.energy, 50000);
     assert.equal(w.network.getRoomResourceAmount(room, 'energy'), 404000);
+});
+
+test('warehouse automatic sales leave all raw mineral surplus for compression in either sale list', () => {
+    const sales = ['H', 'O', 'U', 'L', 'K', 'Z', 'X', 'G'].map(resourceType =>
+        ({ resourceType, threshold: 300000, minPrice: 0.001, sellAmount: 5000 }));
+    for (const field of ['centerSales', 'roomSales']) {
+        const w = world({ centerSales: [], roomSales: [], [field]: sales });
+        const raw = Object.fromEntries(sales.map(sale => [sale.resourceType, 400000]));
+        const staged = Object.fromEntries(sales.map(sale => [sale.resourceType, 5000]));
+        const room = w.add('W1N1', { warehouse: true, storage: { energy: 100000, ...raw },
+            terminal: { energy: 60000, ...staged } });
+        w.processRoomMarket(room);
+        assert.equal(w.queries(), 0, 'raw surplus must not trigger native market order scans');
+        assert.deepEqual(w.deals, []);
+        assert.equal(w.network.getRoomResourceAmount(room, 'O'), 405000);
+    }
+});
+
+test('warehouse compression policy retains direct manual selling and other automatic sale categories', () => {
+    const sale = { resourceType: 'O', threshold: 300000, minPrice: 0.001, sellAmount: 5000 };
+    const w = world({ centerSales: [sale] });
+    const room = w.add('W1N1', { warehouse: true, storage: { energy: 100000, O: 400000 }, terminal: { energy: 60000, O: 5000 } });
+    w.processRoomMarket(room); assert.deepEqual(w.deals, []);
+    w.sellResource(room, 'O', 300000, 0.001, 5000);
+    assert.equal(w.deals[0].amount, 5000, 'an explicit sale remains available');
+    const other = world({ centerSales: [{ ...sale, resourceType: 'ops' }] });
+    other.processRoomMarket(other.add('W2N1', { warehouse: true, storage: { energy: 100000, ops: 400000 }, terminal: { energy: 60000, ops: 5000 } }));
+    assert.equal(other.deals[0].amount, 5000, 'unrelated automatic categories retain their behavior');
+    const ordinary = world({ roomSales: [sale] });
+    ordinary.processRoomMarket(ordinary.add('W3N1', { storage: { energy: 100000, O: 400000 }, terminal: { energy: 60000, O: 5000 } }));
+    assert.equal(ordinary.deals[0].amount, 5000, 'the raw sale restriction applies only to warehouses');
 });
 
 test('ordinary sale staging stays active during terminal cooldown and between scans', () => {

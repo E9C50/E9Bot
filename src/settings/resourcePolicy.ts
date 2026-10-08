@@ -15,6 +15,7 @@ export const compressedMinerals: Partial<Record<ResourceConstant, ResourceConsta
 export const resourcePolicy = {
     terminalEnergyReserve: 50000,
     warehouseCapacity: 8000000,
+    warehouseRawMineralReserve: 300000,
     t3Reserve: 20000,
     basicMineralReserve: 10000,
     ghodiumReserve: 10000,

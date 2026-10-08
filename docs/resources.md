@@ -59,7 +59,9 @@ Lab 优先本房短缺 T3；无短缺时生产全局库存最低且原料可满�
 
 `productionPlan.remaining` 按最终 T3 成功反应的实际产量递减，产物出口不会扩大或重开全局批次；前置反应不扣最终批次。Processer 取料同时限制生产缺口、工人容量与源库存，只在原生取料成功后切换运送状态。
 
-Factory 原实现为空，现在按本房 Storage、Terminal、Factory 和在途工厂货物选品。优先原料足够的商品，较高合法等级优先、同级看全局库存；永久等级与有效 `PWR_OPERATE_FACTORY` 同时检查。无可做商品时仅压缩本房 Mineral。普通房和仓库的 Factory 都保护 H/O/U/L/K/Z/X 各 10000、G 10000 原矿底线，并另扣 Lab 预留及既有发送承诺，Boost 用料也受保护。这份底线只限制 Factory 消耗，仓库的 Lab 及跨房合成供料仍可使用；不会把备用原矿锁成 Factory 生产预留。已有压缩批次在库存减少时缩减或取消，实际 `produce` 前再次校验，已装入 Factory 的原料也不会绕过底线。批量受 20 次、500 tick 与 Factory 容量共同限制；冷却时继续备料和清货。Manager 只处理座位附近的工厂，移动 Processer 补充其他位置的物流，RCL7 的 Factory 也会发布 Processer。
+Factory 原实现为空，现在按本房 Storage、Terminal、Factory 和在途工厂货物选品。优先原料足够的商品，较高合法等级优先、同级看全局库存；永久等级与有效 `PWR_OPERATE_FACTORY` 同时检查。无可做商品时，普通房仅压缩本房 Mineral，保留 H/O/U/L/K/Z/X 各 10000、G 10000；仓库保留这八种原矿各 300000，并从全部库存中选择可压缩超额最多的品种，不限本房产矿。仓库原矿保留量由 `resourcePolicy.warehouseRawMineralReserve` 配置。
+
+Factory 另扣 Lab 预留及既有发送承诺，Boost 用料也受保护。这份底线只限制 Factory 消耗，仓库的 Lab 及跨房供料仍可使用；不会把备用原矿锁成 Factory 生产预留。仓库的原矿超额交给 Factory 压缩，自动市场跳过这八种原矿出售，手动出售入口和其他资源的自动销售继续按既有配置执行。已有压缩批次在库存减少时缩减或取消，实际 `produce` 前再次校验，已装入 Factory 的原料也不会绕过底线；仓库失去 Power 或 8M Storage 容量身份后，不再继续压缩其他房产矿。批量受 20 次、500 tick 与 Factory 容量共同限制；冷却时继续备料和清货。Manager 只处理座位附近的工厂，移动 Processer 补充其他位置的物流，RCL7 的 Factory 也会发布 Processer。
 
 工厂物流先凑齐下一轮输入，保留厂内可直接使用的多余燃料，容量不足时只清出所需空间；待入厂任务与同 tick 已提交的转移共同预约 Factory 容量。
 

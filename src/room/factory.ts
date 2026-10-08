@@ -119,8 +119,8 @@ function localAmount(room: Room, resource: ResourceConstant): number {
  * This is a factory spending limit, not a production reservation, so labs can use it. */
 function ingredientKeep(room: Room, resource: ResourceConstant, warehouse = isWarehouseRoom(room)): number {
     if (resource === RESOURCE_ENERGY) return resourcePolicy.terminalEnergyReserve
-    const minimum = basicMinerals.includes(resource) ? resourcePolicy.basicMineralReserve :
-        resource === RESOURCE_GHODIUM ? resourcePolicy.ghodiumReserve : warehouse ? 0 : ordinaryResourceKeep(resource)
+    const rawMineral = basicMinerals.includes(resource) || resource === RESOURCE_GHODIUM
+    const minimum = warehouse ? rawMineral ? resourcePolicy.warehouseRawMineralReserve : 0 : ordinaryResourceKeep(resource)
     return Math.max(minimum, room.memory.boostNeed?.[resource] || 0)
 }
 function availableIngredient(room: Room, resource: ResourceConstant): number {
@@ -211,6 +211,25 @@ function chooseCommodity(factory: StructureFactory, stock: PlanningStock): Facto
     }
     return selected
 }
+function compressionAllowed(room: Room, resource: FactoryResource): boolean {
+    return isWarehouseRoom(room) ? Object.values(compressedMinerals).includes(resource) :
+        !!room.mineral && compressedMinerals[room.mineral.mineralType] === resource
+}
+function chooseCompression(factory: StructureFactory, stock: PlanningStock): FactoryResource | undefined {
+    const room = factory.room
+    const minerals = isWarehouseRoom(room) ? [...basicMinerals, RESOURCE_GHODIUM] :
+        room.mineral ? [room.mineral.mineralType] : []
+    let selected: FactoryResource | undefined, selectedSurplus = -1
+    for (const mineral of minerals) {
+        const compressed = compressedMinerals[mineral] as FactoryResource | undefined
+        if (!compressed || !canProduceFactoryRecipe(factory, compressed) || stock.cycles(COMMODITIES[compressed]) <= 0) continue
+        const surplus = stock.available(mineral)
+        if (!selected || surplus > selectedSurplus || surplus === selectedSurplus && compressed.localeCompare(selected) < 0) {
+            selected = compressed; selectedSurplus = surplus
+        }
+    }
+    return selected
+}
 function makePlan(factory: StructureFactory, resource: FactoryResource, mode: FactoryProductionState['mode'], stock: PlanningStock): FactoryProductionState {
     const recipe = COMMODITIES[resource]
     const remaining = stock.cycles(recipe)
@@ -253,15 +272,14 @@ export function planFactoryProduction(factory: StructureFactory): void {
     const stock = planningStock(factory)
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||
+        state.mode === 'compression' && !compressionAllowed(room, state.resourceType) ||
         stock.cycles(COMMODITIES[state.resourceType]) === 0)) state = undefined
     // A newly available commodity preempts mineral compression immediately.
     const commodity = !state || state.mode === 'compression' ? chooseCommodity(factory, stock) : undefined
     if (commodity) state = makePlan(factory, commodity, 'commodity', stock)
     if (!state) {
-        const mineral = room.mineral?.mineralType
-        const compressed = mineral && compressedMinerals[mineral] as FactoryResource | undefined
-        if (compressed && canProduceFactoryRecipe(factory, compressed) && stock.cycles(COMMODITIES[compressed]) > 0)
-            state = makePlan(factory, compressed, 'compression', stock)
+        const compressed = chooseCompression(factory, stock)
+        if (compressed) state = makePlan(factory, compressed, 'compression', stock)
     }
     if (state) {
         state.remaining = Math.min(state.remaining, stock.cycles(COMMODITIES[state.resourceType]))
@@ -275,6 +293,7 @@ export function runFactoryProduction(factory: StructureFactory): void {
     const state = factory.room.memory.factoryProduction
     if (!state || isRoomEvacuating(factory.room) || factory.cooldown > 0 ||
         productionTick === Game.time && consumed.has(factory.id) ||
+        state.mode === 'compression' && !compressionAllowed(factory.room, state.resourceType) ||
         !canProduceFactoryRecipe(factory, state.resourceType)) return
     const recipe = COMMODITIES[state.resourceType]
     if (!components(recipe).every(([resource, amount]) => factory.store[resource] >= amount &&

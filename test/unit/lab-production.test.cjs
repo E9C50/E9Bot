@@ -57,20 +57,24 @@ function world() {
 }
 
 test('warehouse factory leaves its raw-mineral backup available to lab synthesis', () => {
-    const w = world(), room = w.addRoom('W1N1', { energy: 100000, U: 3000, H: 6000, O: 3000, X: 3000 }, true);
-    Object.assign(w.loader.globals, { RESOURCE_ENERGY: 'energy', RESOURCE_BATTERY: 'battery', RESOURCE_GHODIUM: 'G',
-        PWR_OPERATE_FACTORY: 19,
-        COMMODITIES: { oxidant: { amount: 100, cooldown: 20, components: { O: 500, energy: 200 } } } });
-    room.mineral = { mineralType: 'O' };
-    room.factory = { id: 'factory', room, my: true, store: store({}, 50000), effects: [], isActive: () => true };
-    const factory = w.loader.load('room/factory');
-    factory.planFactoryProduction(room.factory);
-    assert.equal(room.memory.factoryProduction, undefined, 'the warehouse must not compress the 3000 raw O needed by labs');
-    assert.equal(room.memory.productionReserve.factory.O, undefined, 'backup stock is not a factory reservation');
-    w.update(room);
-    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
-    assert.equal(room.memory.productionReserve.lab.O, 3000, 'warehouse labs can consume raw stock below the factory floor');
-    assert.equal(room.memory.productionReserve.lab.H, 6000);
+    for (const oxygen of [3000, 300000]) {
+        const w = world(), room = w.addRoom('W1N1', { energy: 100000, U: 3000, H: 6000, O: oxygen, X: 3000 }, true);
+        Object.assign(w.loader.globals, { RESOURCE_ENERGY: 'energy', RESOURCE_BATTERY: 'battery', RESOURCE_GHODIUM: 'G',
+            PWR_OPERATE_FACTORY: 19,
+            COMMODITIES: { oxidant: { amount: 100, cooldown: 20, components: { O: 500, energy: 200 } } } });
+        room.mineral = { mineralType: 'O' };
+        room.factory = { id: 'factory', room, my: true, store: store({}, 50000), effects: [], isActive: () => true };
+        const factory = w.loader.load('room/factory');
+        factory.planFactoryProduction(room.factory);
+        assert.equal(room.memory.factoryProduction, undefined, 'the warehouse must not compress raw O at or below its 300k floor');
+        assert.equal(room.memory.productionReserve.factory.O, undefined, 'backup stock is not a factory reservation');
+        w.update(room);
+        assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+        assert.equal(room.memory.productionReserve.lab.O, 3000, 'warehouse labs can consume raw stock at or below the factory floor');
+        assert.equal(room.memory.productionReserve.lab.H, 6000);
+        factory.planFactoryProduction(room.factory);
+        assert.equal(room.memory.factoryProduction, undefined, 'lab commitments leave even less stock available for compression');
+    }
 });
 
 test('ordinary labs replenish a local T3 shortage before a globally scarcer full local compound', () => {
