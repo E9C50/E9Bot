@@ -9,6 +9,8 @@ import { retireSourceLinkMiner } from './sourceLinkMining'
 import { sourceLinkWithCenter } from 'room/sourceLinks'
 import { prepareStationaryMining, runStationaryMining } from './stationaryMining'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { populationPolicy } from 'settings/population'
+import { remoteCommissioningDecision, releaseRemoteCommissioning } from './remoteCommissioning'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -25,6 +27,9 @@ export interface DevelopmentRemoteIntel {
     sources: DevelopmentRemoteSource[]
     blockedUntil?: number
     reason?: string
+    /** Partial route work may feed a proved Source, but may not commission the whole remote. */
+    planningComplete?: boolean
+    plannedSourceIds?: string[]
 }
 export interface DevelopmentRemoteState {
     enabled?: boolean
@@ -70,11 +75,15 @@ function atWar(home: Room): boolean {
 function manualRooms(): Set<string> {
     if (manualTick === Game.time && manualShard === Game.shard.name) return manualTargets
     manualTick = Game.time; manualShard = Game.shard.name; manualTargets = new Set(); manualCounts = new Map()
+    const perHome = new Map<string, Set<string>>()
     for (const name in Game.flags) {
         const match = /^([WE]\d+[NS]\d+)_OUT\d+$/.exec(name)
         if (match === null) continue
-        manualTargets.add(Game.flags[name].pos.roomName)
-        manualCounts.set(match[1], (manualCounts.get(match[1]) || 0) + 1)
+        const target = Game.flags[name].pos.roomName
+        manualTargets.add(target)
+        const selected = perHome.get(match[1]) || new Set<string>()
+        selected.add(target); perHome.set(match[1], selected)
+        manualCounts.set(match[1], selected.size)
     }
     return manualTargets
 }
@@ -110,6 +119,10 @@ function block(home: Room, targetRoom: string, reason: string, status: Developme
     const state = stateFor(home)
     state.intel[targetRoom] = { seenAt: Game.time, status, sources: [], reason, blockedUntil: Game.time + policy.blockedRoomTicks }
     state.selectedRooms = state.selectedRooms.filter(name => name !== targetRoom)
+    const visible = Game.rooms[targetRoom], controller = visible?.controller
+    const ineligible = visible !== undefined && (controller === undefined || controller.owner !== undefined ||
+        controller.reservation !== undefined && controller.reservation.username !== username(home))
+    if (status === 'unreachable' || ineligible) releaseRemoteCommissioning(home, targetRoom, reason)
 }
 function planningReady(): boolean {
     if (Game.cpu.bucket < policy.minimumBucket || Game.cpu.tickLimit - Game.cpu.getUsed() < policy.minimumCpuHeadroom) return false
@@ -153,15 +166,20 @@ function observe(home: Room, target: Room, state: DevelopmentRemoteState): void 
     const previous = state.intel[target.name]
     const energyPerTick = (target.controller?.reservation?.username === username(home) ? SOURCE_ENERGY_CAPACITY : SOURCE_ENERGY_NEUTRAL_CAPACITY) / ENERGY_REGEN_TIME
     if (previous?.status === 'safe') for (const source of previous.sources) source.energyPerTick = energyPerTick
-    if (previous?.status === 'safe' && Game.time - previous.seenAt < policy.scanInterval) return
+    if (previous?.status === 'safe' && previous.planningComplete !== false && Game.time - previous.seenAt < policy.scanInterval) return
     if (!planningReady()) return
     const resources = target.find(FIND_SOURCES).slice(0, policy.maximumSourcesPerRoom)
     const matrices = new Map([[home.name, costs(home)], [target.name, costs(target)]])
     const terrain = new Map([[home.name, Game.map.getRoomTerrain(home.name)], [target.name, Game.map.getRoomTerrain(target.name)]])
-    const sources: DevelopmentRemoteSource[] = []
+    const continuing = (previous?.status === 'safe' || previous?.status === 'unknown') && previous.planningComplete === false &&
+        previous.plannedSourceIds?.every(id => resources.some(source => source.id === id)) === true
+    const sources: DevelopmentRemoteSource[] = continuing ? previous!.sources.map(source => ({ ...source, energyPerTick })) : []
+    const planned = new Set(continuing ? previous!.plannedSourceIds : [])
     for (const source of resources) {
+        if (planned.has(source.id)) continue
         if (!planningReady()) {
-            if (sources.length > 0) state.intel[target.name] = { seenAt: Game.time, status: 'safe', sources }
+            state.intel[target.name] = { seenAt: Game.time, status: sources.length > 0 ? 'safe' : 'unknown', sources,
+                planningComplete: false, plannedSourceIds: Array.from(planned) }
             return
         }
         routeChecks++
@@ -169,6 +187,7 @@ function observe(home: Room, target: Room, state: DevelopmentRemoteState): void 
             maxRooms: 2, maxOps: policy.routeMaximumOps, plainCost: 2, swampCost: 10,
             roomCallback: name => matrices.get(name) || false,
         })
+        planned.add(source.id)
         if (!result.incomplete) {
             let loadedTicks = 0
             for (const position of result.path) {
@@ -181,7 +200,8 @@ function observe(home: Room, target: Room, state: DevelopmentRemoteState): void 
         }
     }
     if (sources.length === 0) { block(home, target.name, '没有两房内可达的 Source', 'unreachable'); return }
-    state.intel[target.name] = { seenAt: Game.time, status: 'safe', sources }
+    state.intel[target.name] = { seenAt: Game.time, status: 'safe', sources,
+        planningComplete: true, plannedSourceIds: Array.from(planned) }
 }
 function fresh(intel: DevelopmentRemoteIntel | undefined): intel is DevelopmentRemoteIntel {
     return intel?.status === 'safe' && Game.time >= intel.seenAt && Game.time - intel.seenAt < policy.intelMaxAge
@@ -222,10 +242,17 @@ function localEconomyReady(home: Room): boolean {
     return false
 }
 function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant, displayName: string, data: DevelopmentRemoteData,
-    body?: CreepMemory['development']): void {
+    body?: CreepMemory['development'], maintenance = false): void {
     const name = addDemand(home, role, displayName, data)
     const config = home.memory.creepConfig[name]
     if (config && body) config.development = body
+    if (config) {
+        const priorities = populationPolicy.remote.startupPriorities
+        const priority = maintenance ? priorities.maintenance : role === 'reserver' ? priorities.reserver : role === 'rHarvester' ? priorities.harvester :
+            role === 'rFiller' ? priorities.hauler : undefined
+        if (priority !== undefined) config.spawnPriority = priority
+        if (role === 'reserver') config.bodyProfile = { ...config.bodyProfile, boostTier: 0 }
+    }
     const live = Game.creeps[name]
     if (live && isDevelopmentRemoteData(live.memory.data) && live.memory.data.developmentRemote.homeRoom === home.name) {
         // Only the single automatic scout is retargeted; worker caches remain intact.
@@ -242,7 +269,14 @@ function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant
 export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): void {
     const assigned = new Set<string>()
     for (const home of Object.values(Game.rooms)) {
-        if (!enabled(home) || isRoomEvacuating(home) || atWar(home)) continue
+        const commissioning = home.memory.remoteCommissioning
+        if (!enabled(home)) {
+            const current = commissioning?.current
+            if (current && commissioning!.rooms[current]?.kind === 'automatic')
+                releaseRemoteCommissioning(home, current, 'Automatic remotes are disabled for this home')
+            continue
+        }
+        if (isRoomEvacuating(home) || atWar(home)) continue
         const state = stateFor(home), manual = manualRooms()
         if (state.lastScanTick === undefined || Game.time - state.lastScanTick >= policy.scanInterval) discover(home, state)
         for (const roomName of state.candidates) {
@@ -251,41 +285,65 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
             if (target) observe(home, target, state)
         }
         const available = Math.max(0, policy.maximumRooms - (manualCounts.get(home.name) || 0))
-        state.selectedRooms = state.candidates.filter(name => !manual.has(name) && !assigned.has(name) && fresh(state.intel[name]))
+        const ranked = state.candidates.filter(name => !manual.has(name) && !assigned.has(name) && fresh(state.intel[name]))
             .sort((first, second) => state.intel[second].sources.length - state.intel[first].sources.length ||
-                averageTravel(state.intel[first]) - averageTravel(state.intel[second]) || first.localeCompare(second)).slice(0, available)
+                averageTravel(state.intel[first]) - averageTravel(state.intel[second]) || first.localeCompare(second))
+        // Do not evict the startup room or a paid fleet when later observations change route scores or quotas.
+        const current = home.memory.remoteCommissioning?.current
+        const retained = ranked.filter(name => name === current || home.memory.remoteCommissioning?.rooms[name]?.maintenance)
+            .sort((first, second) => Number(second === current) - Number(first === current))
+        state.selectedRooms = [...retained, ...ranked.filter(name => !retained.includes(name))]
+            .slice(0, Math.max(available, retained.length))
         for (const selected of state.selectedRooms) assigned.add(selected)
         const homePosition = { x: home.spawns[0].pos.x, y: home.spawns[0].pos.y }
-        const unknown = available > 0 ? state.candidates.find(name => !manual.has(name) && !fresh(state.intel[name]) &&
-            (state.intel[name]?.blockedUntil || 0) <= Game.time) : undefined
+        const unknowns = state.candidates.filter(name => !manual.has(name) && !fresh(state.intel[name]) &&
+            (state.intel[name]?.blockedUntil || 0) <= Game.time)
+        const unknown = available > 0 ? current && unknowns.includes(current) ? current : unknowns[0] : undefined
         state.scoutTarget = unknown
-        if (unknown) publish(addDemand, home, 'scout', `${home.name}_DEVELOPMENT_SCOUT`, {
-            developmentRemote: { homeRoom: home.name, targetRoom: unknown, kind: 'scout', homePosition },
-        }, { maximumCost: 50 })
-        if (!localEconomyReady(home)) continue
-        for (const targetRoom of state.selectedRooms) {
+        for (const targetRoom of localEconomyReady(home) ? state.selectedRooms : []) {
             const info = state.intel[targetRoom]
-            for (const source of info.sources) {
-                const metadata = { homeRoom: home.name, targetRoom, source: { ...source }, homePosition }
+            const plans = info.sources.map(source => {
                 const travelTicks = source.travelTicks || policy.travelTicksPerRoom * 2
                 const rate = source.energyPerTick || SOURCE_ENERGY_NEUTRAL_CAPACITY / ENERGY_REGEN_TIME
-                publish(addDemand, home, 'rHarvester', `${home.name}_DEVELOPMENT_HARVESTER_${source.id}`, {
-                    developmentRemote: { ...metadata, kind: 'harvester' }, sourceId: source.id, targetRoom,
-                }, { workParts: policy.harvesterWorkParts, carryParts: 1, stationary: true, travelTicks,
-                    maximumCost: Math.min(home.energyCapacityAvailable, policy.harvesterMaximumCost) })
                 const maximumCost = Math.min(home.energyCapacityAvailable, policy.haulerMaximumCost)
                 const carryLimit = Math.max(1, Math.min(policy.maximumCarryPartsPerHauler, Math.floor(maximumCost / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
                 const totalCarry = Math.max(1, Math.ceil(rate * travelTicks * policy.haulingTravelMargin / CARRY_CAPACITY))
                 const haulers = Math.min(policy.maximumHaulersPerSource, Math.ceil(totalCarry / carryLimit))
                 const carryParts = Math.min(carryLimit, Math.ceil(totalCarry / haulers))
-                for (let index = 0; index < haulers; index++) publish(addDemand, home, 'rFiller', `${home.name}_DEVELOPMENT_HAULER_${source.id}_${index}`, {
-                    developmentRemote: { ...metadata, kind: 'hauler' }, sourceFlag: source.id, targetFlag: home.spawns[0].id,
-                }, { carryParts, travelTicks, maximumCost })
-            }
+                return { source, travelTicks, maximumCost, haulers, carryParts }
+            })
+            const haulerCounts: Record<string, number> = {}
+            for (const plan of plans) haulerCounts[plan.source.id] = plan.haulers
+            const decision = remoteCommissioningDecision(home, targetRoom, info.sources, {
+                kind: 'automatic', reserveRequired: home.controller!.level >= policy.reserveMinimumLevel,
+                haulerCounts,
+                planningComplete: info.planningComplete,
+            })
+            if (!decision.admitted && !decision.maintenance) continue
             if (home.controller!.level >= policy.reserveMinimumLevel && home.energyCapacityAvailable >= policy.minimumReserveCapacity)
                 publish(addDemand, home, 'reserver', `${home.name}_DEVELOPMENT_RESERVER_${targetRoom}`, {
                     developmentRemote: { homeRoom: home.name, targetRoom, kind: 'reserver', homePosition }, targetRoom,
-                }, { maximumCost: policy.minimumReserveCapacity })
+                }, { maximumCost: policy.minimumReserveCapacity }, decision.maintenance)
+            const mine = decision.maintenance || ['mining', 'hauling', 'ready'].includes(decision.phase)
+            const haul = decision.maintenance || ['hauling', 'ready'].includes(decision.phase)
+            for (const { source, travelTicks, maximumCost, haulers, carryParts } of plans) {
+                const metadata = { homeRoom: home.name, targetRoom, source: { ...source }, homePosition }
+                if (mine) publish(addDemand, home, 'rHarvester', `${home.name}_DEVELOPMENT_HARVESTER_${source.id}`, {
+                    developmentRemote: { ...metadata, kind: 'harvester' }, sourceId: source.id, targetRoom,
+                }, { workParts: policy.harvesterWorkParts, carryParts: 1, stationary: true, travelTicks,
+                    maximumCost: Math.min(home.energyCapacityAvailable, policy.harvesterMaximumCost) }, decision.maintenance)
+                if (haul) for (let index = 0; index < haulers; index++) publish(addDemand, home, 'rFiller', `${home.name}_DEVELOPMENT_HAULER_${source.id}_${index}`, {
+                    developmentRemote: { ...metadata, kind: 'hauler' }, sourceFlag: source.id, targetFlag: home.spawns[0].id,
+                }, { carryParts, travelTicks, maximumCost }, decision.maintenance)
+            }
+        }
+        if (unknown) {
+            const decision = remoteCommissioningDecision(home, unknown, undefined, {
+                kind: 'automatic', reserveRequired: home.controller!.level >= policy.reserveMinimumLevel,
+            })
+            if (decision.admitted || decision.maintenance) publish(addDemand, home, 'scout', `${home.name}_DEVELOPMENT_SCOUT`, {
+                developmentRemote: { homeRoom: home.name, targetRoom: unknown, kind: 'scout', homePosition },
+            }, { maximumCost: 50 })
         }
     }
 }

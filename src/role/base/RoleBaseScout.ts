@@ -19,6 +19,13 @@ export default (data: CreepData): ICreepConfig => ({
         // 优先去标点位置
         const targetFlag = Game.flags[creepData.targetFlag]
 
+        // A dedicated OUT scout belongs to this one remote; other OUT flags must wait for admission.
+        if (/^[WE]\d+[NS]\d+_OUT\d+$/.test(creepData.targetFlag)) {
+            creep.memory.dontPullMe = false
+            if (targetFlag && !creep.pos.inRangeTo(targetFlag.pos, 1)) creep.moveTo(targetFlag, { range: 1 })
+            return true
+        }
+
         if (targetFlag != undefined && !creep.pos.isEqualTo(targetFlag.pos)) {
             creep.moveTo(targetFlag)
 

@@ -1,5 +1,6 @@
 import { haulerDeliveryPolicy as policy } from 'settings/haulerDelivery'
 import { continueCachedHaulerRoute, haulerEnergyPickupHandled, pickupAdjacentHaulerEnergy } from './haulerPickup'
+import { recordRemoteEnergyDelivery } from './remoteCommissioning'
 
 type Receiver = AnyStoreStructure | Creep
 interface RoomDelivery { room: Room; structures: AnyStoreStructure[]; workers?: Creep[] }
@@ -103,6 +104,7 @@ export function deliverHaulerEnergy(creep: Creep, room: Room = creep.room): bool
     if (result === ERR_NOT_IN_RANGE) creep.moveTo(target, { range: policy.deliveryRange })
     else if (result === OK) {
         committed.set(target.id, (committed.get(target.id) || 0) + amount)
+        recordRemoteEnergyDelivery(creep, amount)
         const storage = room.storage
         if (storage && storage.id !== target.id && free(storage) > 0 && creep.store[RESOURCE_ENERGY] > amount &&
             range(creep.pos, storage.pos) > policy.deliveryRange) creep.moveTo(storage, { range: policy.deliveryRange })

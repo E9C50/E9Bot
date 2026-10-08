@@ -519,8 +519,12 @@ test('a stale automatic remote queue consults the real role isNeed and cannot bl
     }
 });
 
-test('a still-selected automatic remote demand can spawn its explicitly affordable development body', () => {
+test('a selected and admitted automatic remote demand can spawn its explicitly affordable development body', () => {
     const w = transitionWorld({ level: 4 });
+    w.home.memory.remoteCommissioning = { current: w.remote.name, rooms: { [w.remote.name]: {
+        kind: 'automatic', reserveRequired: true, sources: { 'remote-source': { id: 'remote-source', x: 10, y: 20, haulers: 1 } },
+        phase: 'mining', maintenance: false, ready: false, admitted: true,
+    } } };
     const spawn = queuedSpawn(w, { automatic: { role: 'rHarvester', name: 'automatic', data: w.autoData(),
         development: { workParts: 5, stationary: true, maximumCost: 700 } } });
     spawn.doWork();

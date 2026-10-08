@@ -8,6 +8,7 @@ import { combatSpawnAllowed, recordCombatSpawn } from 'combat/spawning'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { hasUsableStorageFiller, isMatureStorageFiller } from 'creep/storageFillerLifecycle'
 import { isTargetDismantleSpawnReserved } from 'shard/targetDismantleControl'
+import { remoteSpawnAllowed } from 'creep/remoteCommissioning'
 
 export default class SpawnExtension extends StructureSpawn {
     public init(): void {
@@ -30,6 +31,7 @@ export default class SpawnExtension extends StructureSpawn {
                 continue
             }
             if (config && !combatSpawnAllowed(config)) { creepSpawnQueue.shift(); continue }
+            if (config && !remoteSpawnAllowed(this.room, config)) { creepSpawnQueue.shift(); continue }
             const developmentRemote = (config?.data as Partial<DevelopmentRemoteData> | undefined)?.developmentRemote
             // A demand refresh will publish legacy profiles after reaching RCL8; stale growth must wait for that refresh.
             const retiredDevelopment = !isDevelopingRoom(this.room) &&

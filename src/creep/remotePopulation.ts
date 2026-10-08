@@ -1,8 +1,8 @@
-import { bodyConfigs, roleAdvEnum, roleBaseEnum, roleWarEnum } from 'settings/creep'
+import { bodyConfigs, roleAdvEnum, roleBaseEnum } from 'settings/creep'
 import { populationPolicy } from 'settings/population'
-import { addCreepConfig } from './demand'
-import { sha1String } from 'utils'
+import { addCreepConfig, createCreepName } from './demand'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { getRemoteCommissioningSources, remoteCommissioningDecision } from './remoteCommissioning'
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
 export function releaseBootstrapBuilderConfig(): void {
@@ -51,121 +51,76 @@ export function releaseJobsCreepConfig(): void {
             )
         }
 
-        // 处理外矿房
+        // Keep every commissioned mine maintained, but admit only one new mine at a time.
+        const seen = new Set<string>(), remotes: Array<{ flag: Flag; target?: Room;
+            sources: Array<{ id: string; x: number; y: number }>; decision: ReturnType<typeof remoteCommissioningDecision> }> = []
         for (let i = 0; i < populationPolicy.maximumRemoteRooms; i++) {
             const flag = Game.flags[room.name + '_OUT' + i]
-            // 如果房间不可见，先发布侦察兵
-            if (flag != undefined && flag.room?.sources == undefined) {
-                const creepMemory: ScoutData = {
-                    targetFlag: room.name + '_SCOUT',
+            if (!flag || seen.has(flag.pos.roomName) || room.spawns.length === 0) continue
+            seen.add(flag.pos.roomName)
+            const target = Game.rooms[flag.pos.roomName]
+            const visible = target?.sources?.map(source => ({ id: source.id, x: source.pos.x, y: source.pos.y }))
+            const known = visible || getRemoteCommissioningSources(room, flag.pos.roomName)
+            const haulerCounts: Record<string, number> = {}
+            for (const source of known) haulerCounts[source.id] = 1
+            const decision = remoteCommissioningDecision(room, flag.pos.roomName, visible, {
+                kind: 'manual', reserveRequired: room.level > populationPolicy.remote.reserveAfterLevel,
+                haulerCounts, planningComplete: true,
+            })
+            if (!decision.admitted) continue
+            remotes.push({ flag, target, sources: getRemoteCommissioningSources(room, flag.pos.roomName), decision })
+        }
+
+        // One dedicated scout follows the admitted OUT flag, independently of the user's SCOUT command.
+        const unseen = remotes.filter(remote => remote.target?.sources === undefined)
+        const scouting = unseen.find(remote => !remote.decision.maintenance) || unseen[0]
+        if (scouting) {
+            const data: ScoutData = { targetFlag: scouting.flag.name }
+            const name = addCreepConfig(room, roleBaseEnum.SCOUT, `${room.name}_OUT_SCOUT`, data)
+            if (Game.creeps[name]) Game.creeps[name].memory.data = data
+        }
+
+        let builderPublished = false
+        for (const { flag, target, sources, decision } of remotes) {
+            const priority = populationPolicy.remote.startupPriorities
+            // Reserving depends on a room name, never on Source visibility. The full native body waits for 650 energy.
+            if (room.level > populationPolicy.remote.reserveAfterLevel &&
+                room.energyCapacityAvailable >= populationPolicy.remote.minimumReserveCapacity) {
+                const name = addCreepConfig(room, roleAdvEnum.RESERVER, `${room.name}_RESERVER_${flag.pos.roomName}`, {
+                    targetRoom: flag.pos.roomName,
+                } as ReserverData)
+                const config = room.memory.creepConfig[name]
+                if (config) {
+                    config.spawnPriority = decision.maintenance ? priority.maintenance : priority.reserver
+                    config.bodyProfile = { boostTier: 0, terrain: 'plain' }
                 }
-                const creepNameHarvester: string = room.name + '_SCOUT'
-                addCreepConfig(
-                    room,
-                    roleBaseEnum.SCOUT,
-                    creepNameHarvester,
-                    creepMemory
-                )
             }
-
-            if (
-                flag != undefined &&
-                flag.room?.sources != undefined &&
-                flag.room.sources.length > 0
-            ) {
-                // 等级大于2级发布矿房预定者
-                if (room.level > populationPolicy.remote.reserveAfterLevel) {
-                    const reserverMemory: ReserverData = {
-                        targetRoom: flag.pos.roomName,
-                    }
-                    const creepName =
-                        room.name + '_RESERVER_' + flag.pos.roomName
-                    addCreepConfig(
-                        room,
-                        roleAdvEnum.RESERVER,
-                        creepName,
-                        reserverMemory
-                    )
+            const mining = decision.maintenance || ['mining', 'hauling', 'ready'].includes(decision.phase)
+            const hauling = decision.maintenance || ['hauling', 'ready'].includes(decision.phase)
+            if (hauling && !builderPublished && target?.sources?.length &&
+                (target.constructionSites.length > 0 || target.roads.some(road =>
+                    road.hits < road.hitsMax * populationPolicy.remote.roadRepairRatio))) {
+                const logicalName = `${room.name}_OSBUILDER_${room.name}`
+                const data: RemoteBuilderData = { sourceFlag: target.sources[0].id, targetFlag: target.sources[0].id }
+                const live = Game.creeps[createCreepName(roleAdvEnum.RBUILDER, logicalName)]
+                if (live && room.storage && room.storage.store[RESOURCE_ENERGY] > populationPolicy.remote.builderStorageEnergy)
+                    data.sourceFlag = room.storage.id
+                const name = addCreepConfig(room, roleAdvEnum.RBUILDER, logicalName, data)
+                if (Game.creeps[name]) Game.creeps[name].memory.data = data
+                builderPublished = true
+            }
+            for (const source of sources) {
+                if (mining) {
+                    const name = addCreepConfig(room, roleAdvEnum.RHARVESTER, `${room.name}_RHARVESTER_${source.id}`, {
+                        sourceId: source.id, targetRoom: flag.pos.roomName,
+                    } as RemoteHarvesterData)
+                    if (room.memory.creepConfig[name]) room.memory.creepConfig[name].spawnPriority = decision.maintenance ? priority.maintenance : priority.harvester
                 }
-
-                // 如果外矿房有工地，或者需要修路，就发布远程修理工
-                const targetOutRoom = Game.rooms[flag.pos.roomName]
-                if (
-                    targetOutRoom != undefined &&
-                    (targetOutRoom.constructionSites.length > 0 ||
-                        targetOutRoom.roads.filter(
-                            (road) =>
-                                road.hits <
-                                road.hitsMax *
-                                    populationPolicy.remote.roadRepairRatio
-                        ).length > 0)
-                ) {
-                    const remoteBuilderMemory: RemoteBuilderData = {
-                        sourceFlag: targetOutRoom.sources[0].id,
-                        targetFlag: targetOutRoom.sources[0].id,
-                    }
-                    const creepName = room.name + '_OSBUILDER_' + room.name
-                    const creep =
-                        Game.creeps['OSBUILDER_' + sha1String(creepName)]
-                    if (creep == undefined) {
-                        addCreepConfig(
-                            room,
-                            roleAdvEnum.RBUILDER,
-                            creepName,
-                            remoteBuilderMemory
-                        )
-                    } else {
-                        // 如果修理工已经发布，就更新他的工作目标
-                        const creepData = creep.memory.data as RemoteBuilderData
-                        if (
-                            room.storage != undefined &&
-                            room.storage.store[RESOURCE_ENERGY] >
-                                populationPolicy.remote.builderStorageEnergy
-                        ) {
-                            creepData.sourceFlag = room.storage.id
-                        } else {
-                            creepData.sourceFlag = targetOutRoom.sources[0].id
-                        }
-                        creepData.targetFlag = targetOutRoom.sources[0].id
-                    }
-                }
-
-                for (let index in flag.room.sources) {
-                    const sourceId = flag.room.sources[index].id
-
-                    if (room.spawns.length == 0) continue
-
-                    // 发布外矿能量矿工
-                    const creepMemory: RemoteHarvesterData = {
-                        sourceId: sourceId,
-                        targetRoom: flag.room.name,
-                    }
-                    const creepNameHarvester: string =
-                        room.name + '_RHARVESTER_' + sourceId
-                    addCreepConfig(
-                        room,
-                        roleAdvEnum.RHARVESTER,
-                        creepNameHarvester,
-                        creepMemory
-                    )
-
-                    // 发布外矿能量搬运工
-                    const remoteFillerMemory: RemoteFillerData = {
-                        sourceFlag: sourceId,
-                        targetFlag: room.spawns[0].id,
-                    }
-                    const creepName =
-                        room.name +
-                        '_RFILLER_' +
-                        sourceId +
-                        '_' +
-                        room.spawns[0].id
-                    addCreepConfig(
-                        room,
-                        roleAdvEnum.RFILLER,
-                        creepName,
-                        remoteFillerMemory
-                    )
+                if (hauling) {
+                    const name = addCreepConfig(room, roleAdvEnum.RFILLER, `${room.name}_RFILLER_${source.id}_${room.spawns[0].id}`, {
+                        sourceFlag: source.id, targetFlag: room.spawns[0].id,
+                    } as RemoteFillerData)
+                    if (room.memory.creepConfig[name]) room.memory.creepConfig[name].spawnPriority = decision.maintenance ? priority.maintenance : priority.hauler
                 }
             }
         }

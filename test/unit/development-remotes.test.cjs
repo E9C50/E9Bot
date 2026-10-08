@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
-function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete = false, pathLength = 10, swamp = false, road = false } = {}) {
+function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete = false, pathLength = 10, swamp = false, road = false, sequential = false } = {}) {
     const calls = { routes: 0, paths: 0, published: [], moves: [], actions: [], delegated: 0, recycling: 0, sites: [] }, objects = new Map();
     class Position {
         constructor(x, y, roomName) { Object.assign(this, { x, y, roomName }); }
@@ -47,16 +47,22 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
         calls.published.push({ role, name, data }); room.memory.creepConfig[name] = { role, data }; return name;
     }
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RoomPosition: Position,
-        PathFinder: { CostMatrix: Matrix, search(from, goal, options) { calls.paths++; assert.equal(options.maxRooms, 2); return { incomplete,
+        PathFinder: { CostMatrix: Matrix, search(from, goal, options) { calls.paths++; assert.equal(options.maxRooms, 2); return { incomplete: typeof incomplete === 'function' ? incomplete(goal) : incomplete,
             path: path.map(position => new Position(position.x, position.y, position.roomName === target.name ? goal.pos.roomName : position.roomName)) }; } },
         FIND_SOURCES: 'sources', FIND_MINERALS: 'minerals', FIND_STRUCTURES: 'structures', FIND_HOSTILE_STRUCTURES: 'hostile-structures', FIND_HOSTILE_CREEPS: 'hostiles',
         FIND_DROPPED_RESOURCES: 'dropped', LOOK_STRUCTURES: 'look-structures', LOOK_CREEPS: 'look-creeps',
         STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_TOWER: 'tower', STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', STRUCTURE_CONTAINER: 'container', STRUCTURE_LINK: 'link',
         OBSTACLE_OBJECT_TYPES: ['spawn', 'tower', 'constructedWall'], ATTACK: 'attack', RANGED_ATTACK: 'ranged_attack', WORK: 'work', HEAL: 'heal',
-        CARRY: 'carry', MOVE: 'move', BODYPART_COST: { carry: 50, move: 50 }, TERRAIN_MASK_WALL: 1, TERRAIN_MASK_SWAMP: 2,
+        CARRY: 'carry', MOVE: 'move', CLAIM: 'claim', BODYPART_COST: { carry: 50, move: 50, claim: 600, work: 100 }, TERRAIN_MASK_WALL: 1, TERRAIN_MASK_SWAMP: 2,
         SOURCE_ENERGY_CAPACITY: 3000, SOURCE_ENERGY_NEUTRAL_CAPACITY: 1500, ENERGY_REGEN_TIME: 300, CONTAINER_DECAY: 5000, CONTROLLER_RESERVE_MAX: 5000,
         RESOURCE_ENERGY: 'energy', HARVEST_POWER: 2, CARRY_CAPACITY: 50, TOWER_ENERGY_COST: 10, ERR_NO_PATH: -2, ERR_NOT_IN_RANGE: -9, OK: 0, FIND_MY_CREEPS: 'my-creeps',
-    }, modules: { 'settings/runtime': { runtimePolicy: { warModeScope: 'empire' } } } });
+    }, modules: { 'settings/runtime': { runtimePolicy: { warModeScope: 'empire' } },
+        // Existing role/route cases operate commissioned remotes; admission has real integrated cases below.
+        ...(!sequential ? { './remoteCommissioning': {
+            remoteCommissioningDecision: () => ({ admitted: true, maintenance: true, phase: 'ready' }),
+            releaseRemoteCommissioning() {}, recordRemoteEnergyDelivery() {},
+        } } : {}),
+    } });
     const api = loader.load('creep/developmentRemotes');
     const policy = loader.load('settings/developmentRemotes').developmentRemotePolicy;
     function unit(data, room = home, { working = false, energy = 0, storeCapacity = 1000, x = 25, y = 25 } = {}) {
@@ -323,7 +329,7 @@ test('a low-level room scouts without flags but waits for capacity and a real lo
 
 test('safe adjacent sources publish separate采运 demand and RCL3 reserver with body profile metadata', () => {
     const w = world(); w.release();
-    assert.deepEqual(w.calls.published.map(call => call.role), ['rHarvester', 'rFiller', 'rHarvester', 'rFiller', 'reserver']);
+    assert.deepEqual(w.calls.published.map(call => call.role), ['reserver', 'rHarvester', 'rFiller', 'rHarvester', 'rFiller']);
     assert.equal(w.calls.paths, 2); assert.deepEqual(Array.from(w.home.memory.developmentRemotes.selectedRooms), [w.target.name]);
     for (const call of w.calls.published) {
         assert.equal(call.data.developmentRemote.homePosition.x, 25);
@@ -444,4 +450,174 @@ test('new Spawn identities update live automatic hauler destinations while prese
     assert.equal(creep.memory.data.withdrawTarget, 'remember-container');
     const reached = w.unit(creep.memory.data, w.target); w.api.withDevelopmentRemoteRole(reached.memory.data, w.behavior).prepare(reached);
     assert.equal(reached.memory.data.withdrawTarget, undefined, 'an actually destroyed store ID is cleared before automatic logistics runs');
+});
+
+function commissioningUnit(w, call) {
+    const marker = call.data.developmentRemote;
+    const point = call.role === 'reserver' ? w.target.controller.pos : marker.source;
+    const unit = w.unit(call.data, w.target, { x: point.x, y: point.y - 1 });
+    unit.name = call.name; unit.id = `${call.name}-native-id`; unit.spawning = false;
+    unit.memory.role = call.role; unit.memory.spawnRoom = w.home.name;
+    unit.memory.boostPlan = { tier: 0, steps: [], completed: true };
+    const parts = call.role === 'reserver' ? { claim: 1, move: 1 } :
+        call.role === 'rHarvester' ? { work: 5, carry: 1, move: 3 } : { carry: 6, move: 6 };
+    unit.getActiveBodyparts = type => parts[type] || 0;
+    w.game.creeps[unit.name] = unit;
+    return unit;
+}
+function refreshCommissioning(w) {
+    w.game.time++; w.calls.published.length = 0; w.release();
+}
+
+test('two automatic remotes reserve, mine and return energy from the first before the second gets a birth demand', () => {
+    const w = world({ sequential: true });
+    const second = { ...w.target, name: 'E39N4', controller: { my: false, pos: new w.Position(20, 20, 'E39N4') },
+        sources: [{ id: 'second-remote-source', pos: new w.Position(15, 25, 'E39N4'), energy: 3000 }] };
+    w.objects.set(second.sources[0].id, second.sources[0]); w.game.rooms[second.name] = second;
+    w.game.map.describeExits = () => ({ 7: w.target.name, 1: second.name });
+    w.release();
+    assert.equal(w.home.memory.developmentRemotes.selectedRooms.length, 2, 'selection stays intact for existing workers');
+    assert.deepEqual(w.calls.published.map(call => call.role), ['reserver']);
+    assert.equal(w.calls.published[0].data.targetRoom, w.target.name);
+    commissioningUnit(w, w.calls.published[0]);
+    w.target.controller.reservation = { username: 'me', ticksToEnd: 100 };
+    refreshCommissioning(w);
+    const mining = w.calls.published.filter(call => call.role === 'rHarvester');
+    assert.equal(mining.length, 2); assert.ok(!w.calls.published.some(call => call.role === 'rFiller'));
+    assert.ok(w.calls.published.every(call => call.data.developmentRemote.targetRoom === w.target.name));
+    const miners = mining.map(call => commissioningUnit(w, call));
+    miners[0].spawning = true; refreshCommissioning(w);
+    assert.ok(!w.calls.published.some(call => call.role === 'rFiller'), 'a spawning miner is not an operating mine');
+    miners[0].spawning = false; refreshCommissioning(w);
+    const hauling = w.calls.published.filter(call => call.role === 'rFiller');
+    assert.equal(hauling.length, 2);
+    const carriers = hauling.map(call => commissioningUnit(w, call));
+    refreshCommissioning(w);
+    assert.ok(w.calls.published.every(call => call.data.developmentRemote.targetRoom === w.target.name), 'arrival alone is not a delivery');
+    for (const carrier of carriers) {
+        carrier.room = w.home; carrier.pos = w.home.spawns[0].pos;
+        carrier.store = w.store(100); carrier.memory.working = true;
+        assert.equal(w.loader.load('creep/haulerDelivery').deliverHaulerEnergy(carrier), true);
+        carrier.store.energy = 0;
+    }
+    refreshCommissioning(w);
+    assert.equal(w.home.memory.remoteCommissioning.rooms[w.target.name].ready, true);
+    assert.ok(w.calls.published.some(call => call.role === 'reserver' && call.data.targetRoom === second.name));
+    assert.ok(!w.calls.published.some(call => call.role === 'rHarvester' && call.data.targetRoom === second.name));
+    delete w.game.creeps[miners[0].name]; refreshCommissioning(w);
+    const repair = w.home.memory.creepConfig[miners[0].name];
+    const expansion = w.calls.published.find(call => call.role === 'reserver' && call.data.targetRoom === second.name);
+    assert.ok(repair, 'paid mine replacement survives the next mine starting');
+    assert.ok(repair.spawnPriority < w.home.memory.creepConfig[expansion.name].spawnPriority);
+});
+
+test('partial automatic Source planning resumes its remaining Source and cannot finish the remote early', () => {
+    const w = world({ sequential: true }); w.policy.maximumRouteChecksPerTick = 1;
+    w.release();
+    assert.equal(w.calls.paths, 1);
+    assert.equal(w.home.memory.developmentRemotes.intel[w.target.name].planningComplete, false);
+    assert.equal(w.home.memory.remoteCommissioning.rooms[w.target.name].ready, false);
+    assert.deepEqual(w.calls.published.map(call => call.role), ['reserver']);
+    refreshCommissioning(w);
+    assert.equal(w.calls.paths, 2, 'completed Source paths are reused rather than spending the next budget on them again');
+    assert.equal(w.home.memory.developmentRemotes.intel[w.target.name].sources.length, 2);
+    assert.equal(w.home.memory.developmentRemotes.intel[w.target.name].planningComplete, true);
+    assert.equal(w.home.memory.remoteCommissioning.rooms[w.target.name].ready, false);
+});
+
+test('the admitted unknown automatic scout passes the native birth guard even outside selectedRooms', () => {
+    const w = world({ level: 2, capacity: 300, visible: false, sequential: true }); w.release();
+    assert.deepEqual(w.calls.published.map(call => call.role), ['scout']);
+    assert.equal(w.home.memory.developmentRemotes.selectedRooms.length, 0);
+    const config = w.home.memory.creepConfig[w.calls.published[0].name];
+    assert.equal(w.loader.load('creep/remoteCommissioning').remoteSpawnAllowed(w.home, config), true);
+    w.home.memory.developmentRemotes.scoutTarget = undefined;
+    assert.equal(w.loader.load('creep/remoteCommissioning').remoteSpawnAllowed(w.home, config), false);
+});
+
+test('duplicate OUT flags count one manual remote slot while automatic expansion still waits for that room', () => {
+    const w = world({ sequential: true });
+    w.game.flags.E39N5_OUT0 = { pos: new w.Position(25, 25, 'E41N5') };
+    w.game.flags.E39N5_OUT1 = { pos: new w.Position(20, 20, 'E41N5') };
+    w.release();
+    assert.equal(w.home.memory.developmentRemotes.selectedRooms.length, 1);
+    assert.equal(w.calls.published.length, 0);
+    assert.match(w.home.memory.remoteCommissioning.rooms[w.target.name].reason, /manual OUT/);
+});
+
+test('an ineligible scouted controller releases the startup slot for a safe neighbor', () => {
+    for (const invalid of ['owner', 'reservation', 'no-controller']) {
+        const w = world({ visible: false, sequential: true }); w.release();
+        assert.equal(w.home.memory.remoteCommissioning.current, w.target.name);
+        if (invalid === 'owner') w.target.controller.owner = { username: 'other' };
+        if (invalid === 'reservation') w.target.controller.reservation = { username: 'other', ticksToEnd: 4000 };
+        if (invalid === 'no-controller') delete w.target.controller;
+        const second = { ...w.target, name: 'E39N4', controller: { my: false, pos: new w.Position(20, 20, 'E39N4') },
+            sources: [{ id: 'safe-source', pos: new w.Position(15, 25, 'E39N4'), energy: 3000 }] };
+        w.game.rooms[w.target.name] = w.target; w.game.rooms[second.name] = second;
+        w.game.map.describeExits = () => ({ 7: w.target.name, 1: second.name });
+        w.home.memory.developmentRemotes.lastScanTick = undefined;
+        refreshCommissioning(w);
+        assert.equal(w.home.memory.remoteCommissioning.current, second.name, invalid);
+        assert.deepEqual(w.calls.published.map(call => call.data.targetRoom), [second.name]);
+    }
+});
+
+test('newly discovered higher-scoring rooms cannot evict the active startup room or its paid fleet', () => {
+    for (const maintenance of [false, true]) {
+        const w = world({ sequential: true }); w.target.sources = w.target.sources.slice(0, 1); w.release();
+        if (maintenance) {
+            w.home.memory.remoteCommissioning.rooms[w.target.name].maintenance = true;
+            delete w.home.memory.remoteCommissioning.current;
+        }
+        const others = ['E39N4', 'E39N6'].map(name => ({ ...w.target, name,
+            controller: { my: false, pos: new w.Position(20, 20, name) }, sources: [10, 40].map(x => ({
+                id: `${name}-${x}`, pos: new w.Position(x, 25, name), energy: 3000,
+            })) }));
+        for (const room of others) w.game.rooms[room.name] = room;
+        w.game.map.describeExits = () => ({ 7: w.target.name, 1: others[0].name, 5: others[1].name });
+        w.home.memory.developmentRemotes.lastScanTick = undefined;
+        refreshCommissioning(w);
+        assert.ok(w.home.memory.developmentRemotes.selectedRooms.includes(w.target.name));
+        assert.ok(w.calls.published.some(call => call.data.targetRoom === w.target.name));
+        assert.ok(w.calls.published.every(call => call.data.developmentRemote.targetRoom === w.target.name));
+    }
+});
+
+test('route continuation remembers an unreachable first Source and checks the second within the next budget', () => {
+    const w = world({ sequential: true, incomplete: goal => goal.pos.x === 10 });
+    w.policy.maximumRouteChecksPerTick = 1; w.release();
+    const partial = w.home.memory.developmentRemotes.intel[w.target.name];
+    assert.equal(partial.status, 'unknown'); assert.equal(partial.planningComplete, false);
+    assert.deepEqual(Array.from(partial.plannedSourceIds), ['remote-one']);
+    assert.deepEqual(w.calls.published.map(call => call.role), ['scout']);
+    refreshCommissioning(w);
+    const complete = w.home.memory.developmentRemotes.intel[w.target.name];
+    assert.equal(w.calls.paths, 2); assert.equal(complete.planningComplete, true);
+    assert.deepEqual(Array.from(complete.sources, source => source.id), ['remote-two']);
+    assert.deepEqual(w.calls.published.map(call => call.role), ['reserver']);
+});
+
+test('the admitted unknown scout keeps its room when discovery adds an earlier-sorted unknown neighbor', () => {
+    const w = world({ visible: false, sequential: true }); w.release();
+    w.game.map.describeExits = () => ({ 7: w.target.name, 1: 'E38N4' });
+    w.home.memory.developmentRemotes.lastScanTick = undefined; refreshCommissioning(w);
+    assert.equal(w.home.memory.developmentRemotes.scoutTarget, w.target.name);
+    assert.deepEqual(w.calls.published.map(call => call.data.developmentRemote.targetRoom), [w.target.name]);
+});
+
+test('disabling automatic growth releases its unfinished startup slot for manual OUT work', () => {
+    for (const disable of [w => { w.home.memory.fastUpgrade = false; },
+        w => { w.home.memory.developmentRemotes.enabled = false; }, w => { w.home.controller.level = 8; }]) {
+        const w = world({ sequential: true }); w.release();
+        assert.equal(w.home.memory.remoteCommissioning.current, w.target.name);
+        disable(w); w.game.flags.E39N5_OUT0 = { pos: new w.Position(25, 25, 'E41N5') };
+        refreshCommissioning(w);
+        assert.equal(w.home.memory.remoteCommissioning.current, undefined);
+        const decision = w.loader.load('creep/remoteCommissioning').remoteCommissioningDecision(w.home, 'E41N5', undefined,
+            { kind: 'manual', reserveRequired: true });
+        assert.equal(decision.admitted, true);
+        assert.equal(w.home.memory.remoteCommissioning.current, 'E41N5');
+        assert.equal(w.calls.published.length, 0);
+    }
 });

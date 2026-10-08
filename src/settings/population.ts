@@ -28,6 +28,8 @@ export const populationPolicy = {
     },
     remote: {
         reserveAfterLevel: 2,
+        minimumReserveCapacity: 650,
+        startupPriorities: { maintenance: 3.6, reserver: 3.75, harvester: 4.25, hauler: 4.5 },
         roadRepairRatio: 0.5,
         builderStorageEnergy: 100000,
     },
