@@ -7,6 +7,8 @@ export default class LinkExtension extends StructureLink {
         return this.pos.x <= structurePolicy.link.edgeMargin || this.pos.x >= 50 - structurePolicy.link.edgeMargin || this.pos.y <= structurePolicy.link.edgeMargin || this.pos.y >= 50 - structurePolicy.link.edgeMargin
     }
     public doWork(): void {
+        // Transfer is the only action here. Cooling or empty links cannot supply either receiver.
+        if (this.cooldown > 0 || !(this.store[RESOURCE_ENERGY] > 0)) return
         if (isDevelopingRoom(this.room) && this.cooldown === 0 && this.store[RESOURCE_ENERGY] > 0 &&
             this.room.energyAvailable >= Math.min(this.room.energyCapacityAvailable, developmentPolicy.logistics.emergencySpawnEnergy)) {
             const buffer = controllerEnergyBuffer(this.room)

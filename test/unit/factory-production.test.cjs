@@ -170,6 +170,26 @@ test('one factory planning pass captures Storage once while retaining fresh rese
     assert.equal(w.room.memory.factoryProduction, undefined);
 });
 
+test('factory cargo indexes skip unrelated creep rooms and read each relevant membership only once per tick', () => {
+    const w = measuredPlanning();
+    let unrelatedReads = 0, carrierReads = 0;
+    for (let index = 0; index < 43; index++) w.game.creeps[`harvester${index}`] = {
+        memory: { role: 'harvester' }, store: {}, get room() { unrelatedReads++; return w.room; },
+    };
+    for (const name of ['manager', 'processer']) w.game.creeps[name] = {
+        memory: { role: name }, store: {}, get room() { carrierReads++; return w.room; },
+    };
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(unrelatedReads, 0, 'unrelated creeps never need a room query');
+    assert.equal(carrierReads, 4, 'one membership read and one live planning validation per carrier');
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(carrierReads, 6, 'another synchronous planner reuses the empire membership index');
+    w.game.time++;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(carrierReads, 10, 'a new tick rebuilds current memberships');
+    assert.equal(unrelatedReads, 0);
+});
+
 test('an unavailable shared reagent short-circuits factory candidates while keeping precursor reserves current', () => {
     const w = measuredPlanning(false);
     w.production.planFactoryProduction(w.factory);

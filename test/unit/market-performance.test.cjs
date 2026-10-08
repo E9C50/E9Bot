@@ -14,6 +14,7 @@ function world() {
             './resourceNetwork': { isWarehouseRoom: room => room.name === 'E31N2', terminalUsed: () => false,
                 getResourceKeep: () => 50000, getOutgoingResourceAmount: () => 0,
                 getRoomResourceAmount: room => room.storage.store.energy + room.terminal.store.energy,
+                getRoomMovableResourceAmount: room => room.storage.store.energy + room.terminal.store.energy,
                 getAvailableResource: room => room.storage.store.energy + room.terminal.store.energy - 50000,
                 getTerminalResourceAmount: room => room.terminal.store.energy } } });
     const rooms = ['E31N2', 'E34N3', 'E35N1', 'E35N3', 'E36N2', 'E37N7', 'E38N5', 'E38N6', 'E41N7', 'E41N8', 'E37N5']

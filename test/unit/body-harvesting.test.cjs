@@ -89,6 +89,54 @@ function world({ remote = false, level = 8, marked = true, center = true, x = 10
     return { game, room, source, creep, behavior, objects, actions, walls, occupants, p, structure, tick, loader };
 }
 
+test('empty depleted stations avoid idle work queries and resume on live same-tick regeneration', () => {
+    for (const bufferType of ['link', 'container']) {
+        const w = world({ energy: 0, work: 30, carry: 5 });
+        const buffer = w.structure('buffer', bufferType, 10, 11);
+        w.source.energy = 0;
+        const reads = { capacity: 0, free: 0, body: 0, bufferFree: 0 };
+        const body = w.creep.body;
+        Object.defineProperty(w.creep, 'body', { get() { reads.body++; return body; } });
+        w.creep.store = { energy: 0,
+            getCapacity() { reads.capacity++; return 250; },
+            getFreeCapacity() { reads.free++; return 250 - this.energy; },
+            getUsedCapacity() { return this.energy; } };
+        buffer.store = { energy: 0,
+            getCapacity: () => bufferType === 'link' ? 800 : 2000,
+            getFreeCapacity() { reads.bufferFree++; return this.getCapacity() - this.energy; } };
+        for (let tick = 0; tick < 10; tick++) {
+            assert.equal(w.behavior.prepare(w.creep), true);
+            assert.equal(w.behavior.source(w.creep), true);
+            w.game.time++;
+        }
+        assert.deepEqual(reads, { capacity: 70, free: 0, body: 0, bufferFree: 0 },
+            'preparation remains live, while idle work stops Store capacity and harvest-power queries');
+        assert.deepEqual(w.actions, []);
+        // No stored wakeup timestamp can postpone an actual Source regeneration.
+        w.source.energy = 3000;
+        assert.equal(w.behavior.source(w.creep), true);
+        assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+        assert.equal(reads.body, 1);
+    }
+});
+
+test('the empty-source work guard preserves live tail deposits and critical Container recovery', () => {
+    const tail = world({ energy: 50, work: 30, carry: 5 });
+    tail.structure('buffer', 'link', 10, 11); tail.source.energy = 0;
+    assert.equal(tail.behavior.prepare(tail.creep), true); tail.behavior.source(tail.creep);
+    assert.deepEqual(tail.actions.map(action => action.type), ['transfer']);
+
+    const critical = world({ energy: 0, work: 30, carry: 5 });
+    const container = critical.structure('buffer', 'container', 10, 11, { energy: 100, hits: 5000 });
+    critical.source.energy = 0;
+    assert.equal(critical.behavior.prepare(critical.creep), true); critical.behavior.source(critical.creep);
+    assert.deepEqual(critical.actions.map(action => action.type), ['withdraw']);
+    critical.creep.store.energy = 60; critical.actions.length = 0;
+    assert.equal(critical.behavior.source(critical.creep), true);
+    assert.deepEqual(critical.actions.map(action => action.type), ['repair']);
+    assert.equal(critical.actions[0].target, container);
+});
+
 test('a full road miner delivers the same regeneration batch using far fewer successful native intents', () => {
     function cycle(work, carry) {
         const w = world({ energy: 0, work, carry });

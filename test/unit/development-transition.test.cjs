@@ -342,7 +342,7 @@ test('controller Link supply yields to emergency Spawn energy and never transfer
     assert.deepEqual(w.calls, []);
 });
 
-test('full controller Links and inactive cooldowns preserve the original central dispatch fallback', () => {
+test('full controller Links use central dispatch and cooling Links wait until ready', () => {
     const w = transitionWorld({ level: 6 });
     const source = controllerLinks(w);
     w.home.controllerLink.store.energy = 800;
@@ -350,7 +350,10 @@ test('full controller Links and inactive cooldowns preserve the original central
     assert.deepEqual(w.calls, [{ kind: 'link', from: source.id, to: w.home.centerLink.id }]);
     w.calls.length = 0; w.home.controllerLink.store.energy = 0; source.cooldown = 1;
     source.doWork();
-    assert.deepEqual(w.calls, [{ kind: 'link', from: source.id, to: w.home.centerLink.id }]);
+    assert.deepEqual(w.calls, []);
+    source.cooldown = 0;
+    source.doWork();
+    assert.deepEqual(w.calls, [{ kind: 'link', from: source.id, to: w.home.controllerLink.id }]);
 });
 
 test('RCL8 Link dispatch keeps the legacy source-to-center route and never reads growth state', () => {

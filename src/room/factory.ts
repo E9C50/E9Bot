@@ -82,10 +82,13 @@ function factoryAmount(factory: StructureFactory | undefined, resource: Resource
 function carriers(room: Room): readonly Creep[] {
     if (carrierTick !== Game.time) {
         carrierTick = Game.time; roomCarriers = new Map()
-        for (const creep of Object.values(Game.creeps || {})) {
-            if (!creep.room || !['manager', 'processer'].includes(creep.memory.role)) continue
-            const list = roomCarriers.get(creep.room.name) || []
-            list.push(creep); roomCarriers.set(creep.room.name, list)
+        for (const name in Game.creeps || {}) {
+            const creep = Game.creeps[name]
+            if (creep.memory.role !== 'manager' && creep.memory.role !== 'processer') continue
+            const currentRoom = creep.room
+            if (!currentRoom) continue
+            const list = roomCarriers.get(currentRoom.name) || []
+            list.push(creep); roomCarriers.set(currentRoom.name, list)
         }
     }
     return roomCarriers.get(room.name) || []

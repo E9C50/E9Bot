@@ -79,6 +79,13 @@ export function getRoomResourceAmount(room: Room, resource: ResourceConstant): n
     for (const lab of room.labs || []) result += positive(lab.store[resource])
     return result + positive(received.get(room.name)?.[resource]) - positive(sent.get(room.name)?.[resource])
 }
+/** Storage, Terminal and local logistics cargo, excluding stock held inside Labs and Factory. */
+export function getRoomMovableResourceAmount(room: Room, resource: ResourceConstant): number {
+    prepare()
+    return positive(room.storage?.store[resource]) + positive(room.terminal?.store[resource]) +
+        positive(localCargo.get(room.name)?.[resource]) + positive(received.get(room.name)?.[resource]) -
+        positive(sent.get(room.name)?.[resource])
+}
 export function getGlobalResourceAmount(resource: ResourceConstant): number {
     return getResourceRooms().reduce((total, room) => total + getRoomResourceAmount(room, resource), 0)
 }

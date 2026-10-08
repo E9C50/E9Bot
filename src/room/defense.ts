@@ -2,13 +2,32 @@ import { roomPolicy } from 'settings/roomPolicy'
 import { hasTowerIntent, issueTowerRepair, runRoomTowerDefense } from 'combat/towers'
 
 // 与 structuresNeedRepair 原有优先序一致，但塔只需首个目标，无需构造完整数组。
-const repairGroups: readonly (keyof Room)[] = ['extensions', 'spawns', 'towers', 'labs', 'containers', 'links']
-const repairSingles: readonly (keyof Room)[] = ['nuker', 'storage', 'factory', 'terminal', 'observer', 'extractor', 'powerSpawn']
+// Core hit limits are fixed at construction. Verify each ID against the engine
+// constant before reusing its full-health limit; private-server outliers continue
+// reading actual hitsMax. Roads (terrain) and ramparts (RCL) never use this path.
+const repairGroups: readonly (readonly [keyof Room, number | undefined])[] = [
+    ['extensions', typeof EXTENSION_HITS === 'number' ? EXTENSION_HITS : undefined],
+    ['spawns', typeof SPAWN_HITS === 'number' ? SPAWN_HITS : undefined],
+    ['towers', typeof TOWER_HITS === 'number' ? TOWER_HITS : undefined],
+    ['labs', typeof LAB_HITS === 'number' ? LAB_HITS : undefined],
+    ['containers', typeof CONTAINER_HITS === 'number' ? CONTAINER_HITS : undefined],
+    ['links', typeof LINK_HITS_MAX === 'number' ? LINK_HITS_MAX : undefined],
+]
+const repairSingles: readonly (readonly [keyof Room, number | undefined])[] = [
+    ['nuker', typeof NUKER_HITS === 'number' ? NUKER_HITS : undefined],
+    ['storage', typeof STORAGE_HITS === 'number' ? STORAGE_HITS : undefined],
+    ['factory', typeof FACTORY_HITS === 'number' ? FACTORY_HITS : undefined],
+    ['terminal', typeof TERMINAL_HITS === 'number' ? TERMINAL_HITS : undefined],
+    ['observer', typeof OBSERVER_HITS === 'number' ? OBSERVER_HITS : undefined],
+    ['extractor', typeof EXTRACTOR_HITS === 'number' ? EXTRACTOR_HITS : undefined],
+    ['powerSpawn', typeof POWER_SPAWN_HITS === 'number' ? POWER_SPAWN_HITS : undefined],
+]
 
 interface RoadInspection {
     pendingIds?: Id<StructureRoad>[]
     lastInspection?: number
     recentEnemyTick?: number
+    verifiedCoreHits?: Map<string, number>
     phase: number
 }
 let inspectionTick: number | undefined, inspectionShard: string | undefined
@@ -99,18 +118,35 @@ function firstRoadRepairTarget(room: Room, tower: StructureTower): StructureRoad
 function firstRepairTarget(room: Room, tower: StructureTower): Structure | undefined {
     const road = firstRoadRepairTarget(room, tower)
     if (road != undefined) return road
-    for (const key of repairGroups) {
+    const inspection = roadInspection(room)
+    const verified = inspection.verifiedCoreHits || (inspection.verifiedCoreHits = new Map())
+    // Destroyed IDs are harmless, but cap historical rebuilds without retaining native objects.
+    if (verified.size > 1024) verified.clear()
+    for (const [key, fullHits] of repairGroups) {
         for (const structure of room[key] as Structure[]) {
-            const hits = structure.hits, hitsMax = structure.hitsMax
-            if (hits >= hitsMax) continue
+            if (!coreNeedsRepair(structure, fullHits, verified)) continue
             return structure
         }
     }
-    for (const key of repairSingles) {
+    for (const [key, fullHits] of repairSingles) {
         const structure = room[key] as Structure | undefined
-        if (structure != undefined && structure.hits < structure.hitsMax) return structure
+        if (structure == undefined) continue
+        if (coreNeedsRepair(structure, fullHits, verified)) return structure
     }
     return undefined
+}
+
+function coreNeedsRepair(structure: Structure, fullHits: number | undefined, verified: Map<string, number>): boolean {
+    // Never cache live health: even one point of new damage is checked this tick.
+    const hits = structure.hits
+    if (fullHits != undefined && hits === fullHits) {
+        const id = structure.id
+        if (id != undefined && verified.get(id) === fullHits) return false
+        const hitsMax = structure.hitsMax
+        if (id != undefined && hitsMax === fullHits) verified.set(id, fullHits)
+        return hits < hitsMax
+    }
+    return hits < structure.hitsMax
 }
 
 export function findTowerEnemy(room: Room): void {

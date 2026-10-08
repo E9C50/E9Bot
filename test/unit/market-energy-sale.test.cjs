@@ -79,6 +79,7 @@ test('unstaged, reserved and already withdrawn mineral stock does not query or r
     const reserved = w.add('W2N1', { storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 } });
     const withdrawn = w.add('W3N1', { storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 } });
     reserved.memory.boostNeed = { ops: 101000 };
+    Object.defineProperty(unstaged, 'labs', { get() { assert.fail('an empty staged mineral does not need whole-room availability'); } });
     w.network.recordTerminalWithdrawal(withdrawn, 'ops', 1000);
     for (const room of [unstaged, reserved, withdrawn]) w.sellResource(room, 'ops', 5000, 0.001, 1000);
     assert.equal(w.queries(), 0);
@@ -104,6 +105,42 @@ test('400k storage plus 50k terminal is the ordinary-room floor and does not sca
     w.processRoomMarket(room);
     assert.equal(w.queries(), 0);
     assert.equal(room.memory.terminalAmount.energy, 50000);
+    assert.equal(w.deals.length, 0);
+});
+
+test('ordinary energy-sale planning reads zero Lab or Factory energy while preserving the same daily staging budget', () => {
+    const w = world(), room = w.add('W1N1', { storage: { energy: 401100 } });
+    let labReads = 0, factoryReads = 0;
+    room.labs = Array.from({ length: 10 }, () => ({ store: { get energy() { labReads++; return 2000; } } }));
+    room.factory = { store: { get energy() { factoryReads++; return 20000; } } };
+    room.terminal.cooldown = 0;
+    for (let tick = 0; tick < 25; tick++) {
+        w.processOrdinaryEnergySale(room);
+        assert.equal(room.memory.terminalAmount.energy, 51100, 'only the same 1100 movable surplus can be staged');
+        w.tick();
+    }
+    assert.equal(labReads, 0, 'previous whole-room-minus-fixed algebra read 500 Lab energy entries');
+    assert.equal(factoryReads, 0, 'previous whole-room-minus-fixed algebra read Factory twice per planning pass');
+    assert.equal(w.queries(), 1, 'market scan cadence and shared order cache remain unchanged');
+    room.storage.store.energy = 400000;
+    w.processOrdinaryEnergySale(room);
+    assert.equal(room.memory.terminalAmount.energy, 50000, 'fresh native storage changes still cancel a no-longer-funded sale');
+    assert.equal(w.deals.length, 0);
+});
+
+test('a room without a movable energy surplus avoids native terminal capacity and fixed-stock queries', () => {
+    const w = world(), room = w.add('W1N1', { storage: { energy: 400000 } });
+    room.terminal.store = new Proxy(room.terminal.store, { get(target, key) {
+        if (key === 'getFreeCapacity') assert.fail('no staging space is needed without a surplus');
+        return target[key];
+    } });
+    Object.defineProperties(room, {
+        labs: { get() { assert.fail('no sale budget uses fixed Lab stock'); } },
+        factory: { get() { assert.fail('no sale budget uses fixed Factory stock'); } },
+    });
+    w.processOrdinaryEnergySale(room);
+    assert.equal(room.memory.terminalAmount.energy, 50000);
+    assert.equal(w.queries(), 0);
     assert.equal(w.deals.length, 0);
 });
 

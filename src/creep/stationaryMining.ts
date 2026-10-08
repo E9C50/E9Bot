@@ -171,6 +171,10 @@ export function runStationaryMining(creep: Creep, source: Source): boolean {
     }
     creep.memory.working = false
     const energy = creep.store[RESOURCE_ENERGY]
+    // An empty depleted station has no harvest or unload to schedule. Keep geometry live,
+    // and retain the critical Container refill/repair path while awaiting regeneration.
+    if (energy <= 0 && source.energy <= 0 &&
+        (station.container === undefined || station.container.hits > CONTAINER_DECAY)) return true
     const free = creep.store.getFreeCapacity(RESOURCE_ENERGY)
     const capacity = creep.store.getCapacity(RESOURCE_ENERGY)
     const batch = getHarvestPower(creep)

@@ -8,7 +8,7 @@ import { roomWorkDue } from 'runtime/roomSchedule'
 import { cpuRecoveryInterval } from 'runtime/cpuRecovery'
 import { basicMinerals, resourcePolicy } from 'settings/resourcePolicy'
 import {
-    getAvailableResource, getOutgoingResourceAmount, getResourceKeep, getRoomResourceAmount,
+    getAvailableResource, getOutgoingResourceAmount, getResourceKeep, getRoomMovableResourceAmount,
     getTerminalResourceAmount, isWarehouseRoom, recordResourceDebit, terminalUsed,
 } from './resourceNetwork'
 import { affordableSendAmount, resourceTransactionCost } from './terminal'
@@ -105,9 +105,7 @@ function dealResource(room: Room, order: Order, resource: ResourceConstant, amou
 
 /** Local cargo remains part of the batch while Manager moves it out of Storage. */
 function energySaleBudget(room: Room): number {
-    let fixed = room.factory?.store.energy || 0
-    for (const lab of room.labs || []) fixed += lab.store.energy || 0
-    const movable = getRoomResourceAmount(room, RESOURCE_ENERGY) - fixed
+    const movable = getRoomMovableResourceAmount(room, RESOURCE_ENERGY)
     const storageReserve = roomPolicy.market.ordinaryEnergyStorageReserve
     return Math.max(0, Math.min(movable - storageReserve - resourcePolicy.terminalEnergyReserve,
         movable - storageReserve - getResourceKeep(room, RESOURCE_ENERGY) - getOutgoingResourceAmount(room.name, RESOURCE_ENERGY)))
@@ -153,8 +151,10 @@ export function processOrdinaryEnergySale(room: Room, due = true): void {
         retryEnergyRooms.delete(room.name)
         demand.energy = reserve
     }
-    const budget = energySaleBudget(room), headroom = terminalEnergyHeadroom(room)
-    if (budget <= 0 || headroom <= 0) { clear(); return }
+    const budget = energySaleBudget(room)
+    if (budget <= 0) { clear(); return }
+    const headroom = terminalEnergyHeadroom(room)
+    if (headroom <= 0) { clear(); return }
     const retry = retryEnergyRooms.delete(room.name)
     if (due || retry) {
         plan = selectEnergyPlan(room, budget, headroom)
@@ -175,10 +175,11 @@ export function processOrdinaryEnergySale(room: Room, due = true): void {
     plan.stagedTarget = demand.energy
     if (room.terminal.cooldown > 0 || terminalUsed(room)) return
     const terminalEnergy = getTerminalResourceAmount(room, RESOURCE_ENERGY)
+    if (terminalEnergy < demand.energy) return
     const liquidBudget = Math.min((room.storage.store.energy || 0) + terminalEnergy -
         roomPolicy.market.ordinaryEnergyStorageReserve - reserve,
         getAvailableResource(room, RESOURCE_ENERGY) - roomPolicy.market.ordinaryEnergyStorageReserve)
-    if (terminalEnergy < demand.energy || plan.amount + fee > liquidBudget) return
+    if (plan.amount + fee > liquidBudget) return
     if (dealResource(room, order, RESOURCE_ENERGY, plan.amount)) {
         console.log(`卖出energy [${room.name}] => [${order.roomName}]，单价为：${order.price}，数量为：${plan.amount}`)
         clear()
@@ -206,7 +207,9 @@ export function sellResource(
         return
 
     // Storage surplus may still be reserved or unstaged; do not query native market orders until it can sell.
-    const localAvailable = Math.min(sellAmount, getTerminalResourceAmount(room, resourceType), getAvailableResource(room, resourceType))
+    const stagedAmount = Math.min(sellAmount, getTerminalResourceAmount(room, resourceType))
+    if (stagedAmount <= 0) return
+    const localAvailable = Math.min(stagedAmount, getAvailableResource(room, resourceType))
     if (localAvailable <= 0) return
     let bestPrice = 0
     let selectedOrder: Order | undefined

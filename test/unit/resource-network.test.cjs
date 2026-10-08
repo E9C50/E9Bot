@@ -39,6 +39,28 @@ test('warehouses require enabled power and actual 8M capacity, not amount of inv
     ordinary.controller.isPowerEnabled = true; assert.equal(w.isWarehouseRoom(ordinary), false);
 });
 
+test('movable inventory excludes Labs and Factory without reading them and retains cargo plus native intent ledgers', () => {
+    const w = world(), donor = w.room('donor', { energy: 1000 }, { terminal: { energy: 500 } });
+    const target = w.room('target', { energy: 100 }, { terminal: { energy: 50 } });
+    donor.labs = [{ store: { energy: 3000 } }];
+    donor.factory = { store: { energy: 4000 } };
+    w.game.creeps.manager = { room: donor, memory: { role: 'manager' }, store: { energy: 500 } };
+    w.game.creeps.processor = { room: donor, memory: { role: 'processer' }, store: { energy: 300 } };
+    assert.equal(w.getRoomResourceAmount(donor, 'energy'), 9300);
+    Object.defineProperties(donor, {
+        labs: { get() { assert.fail('movable inventory never reads Labs'); } },
+        factory: { get() { assert.fail('movable inventory never reads Factory'); } },
+    });
+    assert.equal(w.getRoomMovableResourceAmount(donor, 'energy'), 2300);
+    w.recordResourceSend(donor, target.name, 'energy', 1000, 100);
+    assert.equal(w.getRoomMovableResourceAmount(donor, 'energy'), 1200);
+    assert.equal(w.getRoomMovableResourceAmount(target, 'energy'), 1150, 'accepted receives are visible immediately');
+    w.recordTerminalWithdrawal(donor, 'energy', 200);
+    assert.equal(w.getRoomMovableResourceAmount(donor, 'energy'), 1200, 'local transfers retain total room cargo');
+    w.recordResourceDebit(donor, 'energy', 2000, 0);
+    assert.equal(w.getRoomMovableResourceAmount(donor, 'energy'), -800, 'pending debits retain the original signed algebra');
+});
+
 test('dispatch eligibility shares native terminal activation across imports and balancing, without caching stock', () => {
     const w = world(31);
     const donor = w.room('warehouse', { UH2O: 10000 }, { warehouse: true });
