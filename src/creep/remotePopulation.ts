@@ -4,6 +4,8 @@ import { addCreepConfig } from './demand'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { getRemoteCommissioningSources, remoteCommissioningDecision } from './remoteCommissioning'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
+import { getReserveFlagForRoom } from './reserveFlags'
+import { releaseReserveFlagConfigs } from './reserveFlagPopulation'
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
 export function releaseBootstrapBuilderConfig(): void {
@@ -87,7 +89,7 @@ export function releaseJobsCreepConfig(): void {
             const priority = populationPolicy.remote.startupPriorities
             // Reserving depends on a room name, never on Source visibility. The full native body waits for 650 energy.
             if (room.level > populationPolicy.remote.reserveAfterLevel &&
-                room.energyCapacityAvailable >= populationPolicy.remote.minimumReserveCapacity) {
+                room.energyCapacityAvailable >= populationPolicy.remote.minimumReserveCapacity && !getReserveFlagForRoom(room, flag.pos.roomName)) {
                 const name = addCreepConfig(room, roleAdvEnum.RESERVER, `${room.name}_RESERVER_${flag.pos.roomName}`, {
                     targetRoom: flag.pos.roomName,
                 } as ReserverData)
@@ -170,6 +172,8 @@ export function releaseJobsCreepConfig(): void {
                 )
             }
         }
+
+        releaseReserveFlagConfigs(room, addCreepConfig)
 
         // 发布新房占领
         const claimFlag = Game.flags[room.name + '_CLAIM']

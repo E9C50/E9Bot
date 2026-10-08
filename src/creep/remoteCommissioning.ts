@@ -1,6 +1,7 @@
 import { populationPolicy } from 'settings/population'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 import { getRemoteRoadWork } from './remoteRoads'
+import { reserveFlagSpawnAllowed } from './reserveFlags'
 
 export interface RemoteCommissioningSource { id: string; x: number; y: number }
 export type RemoteCommissioningPhase = 'scouting' | 'reserving' | 'mining' | 'hauling' | 'ready' | 'waiting'
@@ -264,6 +265,7 @@ export function remoteSpawnAllowed(home: Room, config: CreepMemory): boolean {
         developmentRemote?: { targetRoom?: string; source?: { id: string } }
     }
     // Spawnless newly claimed rooms use their own bootstrap pipeline, even when a Source belonged to an old OUT mine.
+    if (config.role === 'reserver' && data.reserveFlag) return reserveFlagSpawnAllowed(home, data as ReserverData)
     if (config.role === 'rBuilder' && data.bootstrap === true) return true
     if (config.role === 'rBuilder' && data.roadHome &&
         (data.roadHome !== home.name || !getRemoteRoadWork(home))) return false

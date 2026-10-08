@@ -12,6 +12,7 @@ import { isRoomEvacuating } from 'room/evacuationState'
 import { populationPolicy } from 'settings/population'
 import { remoteCommissioningDecision, releaseRemoteCommissioning } from './remoteCommissioning'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
+import { getReserveFlagForRoom } from './reserveFlags'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -216,18 +217,25 @@ function activeTarget(state: DevelopmentRemoteState | undefined, task: Developme
     return state?.selectedRooms.includes(task.targetRoom) === true && fresh(intel) &&
         (task.source === undefined || intel.sources.some(source => source.id === task.source!.id))
 }
-/** Read-only safety gate for a handoff that skips this tick's ordinary remote prepare hook. */
-export function canRelayDevelopmentHauler(creep: Creep, data: DevelopmentRemoteData): boolean {
+/** Read-only safety gate for reusing a worker outside this tick's ordinary remote prepare hook. */
+function canReuseDevelopmentWorker(creep: Creep, data: DevelopmentRemoteData, kind: 'hauler' | 'reserver'): boolean {
     const task = data.developmentRemote, home = Game.rooms[creep.memory.spawnRoom]
-    if (task.kind !== 'hauler' || task.retiring || task.homeRoom !== creep.memory.spawnRoom || !enabled(home) || atWar(home) ||
+    if (task.kind !== kind || task.retiring || task.homeRoom !== creep.memory.spawnRoom || !enabled(home) || atWar(home) ||
         manualRooms().has(task.targetRoom) || !activeTarget(home.memory.developmentRemotes, task)) return false
     const intel = home.memory.developmentRemotes!.intel[task.targetRoom]
     if ((intel.blockedUntil || 0) > Game.time) return false
     const visible = Game.rooms[task.targetRoom]
     return visible === undefined || issue(visible, home) === undefined
 }
+export function canRelayDevelopmentHauler(creep: Creep, data: DevelopmentRemoteData): boolean {
+    return canReuseDevelopmentWorker(creep, data, 'hauler')
+}
+export function canBorrowDevelopmentReserver(creep: Creep, data: DevelopmentRemoteData): boolean {
+    return canReuseDevelopmentWorker(creep, data, 'reserver')
+}
 function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant, displayName: string, data: DevelopmentRemoteData,
     body?: CreepMemory['development'], maintenance = false): void {
+    if (role === 'reserver' && getReserveFlagForRoom(home, data.developmentRemote.targetRoom)) return
     const name = addDemand(home, role, displayName, data)
     const config = home.memory.creepConfig[name]
     if (config && body) config.development = body

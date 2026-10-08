@@ -61,6 +61,28 @@ Memory.rooms['E41N6'].remoteCommissioning.rooms
 
 `phase` 为 `scouting`、`reserving`、`mining`、`hauling`、`ready` 或 `waiting`；`reason` 记录等待原因。`ready` 记录该矿曾完成启动，`operational` 表示当前人员是否仍满足运行条件。
 
+## 独立预定旗
+
+将 `主房_RESERVE0` 到 `主房_RESERVE19` 放到要持续预订的普通房间，旗子颜色和具体格子不限，只看所在房间。在主房所在 shard 控制台执行：
+
+```js
+new RoomPosition(25, 25, 'E41N5').createFlag('E41N6_RESERVE0')
+```
+
+上例由 `E41N6` 持续预订 `E41N5`，目标无视野也会派兵，不必添加 OUT 旗，也不受逐矿启动顺序限制。主房须自有、有 Spawn、出生容量至少 650；发展期先有本地矿工和搬运工。容量达到 1300 时等待完整的 2 CLAIM + 2 MOVE；650–1299 时等待 1 CLAIM + 1 MOVE，不强化，优先级 2.7。
+
+每旗稳定使用两个轮换名额，通常一只在役；旧工寿命不足以覆盖预计路程、出生时间及余量时提前派继任者，交接期间允许重叠。双 CLAIM 会积累预订时间缓冲，单 CLAIM 依靠提前交接维持；实际路程过长、缺出生能量、被堵或遇敌仍可能中断。同主房多个旗指向同一房间时，只使用编号最小的旗；与 OUT 或自动外矿共用预订需求，已有健康预定工先工作到接班期。
+
+移动旗子让现有旗预定工跟随新房间，删除旗子后停止续派，现有旗单位回出生房待命；仍存在的 OUT 或自动外矿会恢复自己的预定工发布：
+
+```js
+Game.flags.E41N6_RESERVE0.setPosition(new RoomPosition(25, 25, 'E42N6'))
+Game.flags.E41N6_RESERVE0.remove()
+help('RESERVE')
+```
+
+该任务只在同 shard 普通控制器房运行，拒绝本房、Highway/Keeper 房、无 Controller 或已占领房；外人预订先清除再预订。战争、疏散、敌方 creep、入侵核心或敌方 Tower 会暂停补派并撤回现有旗单位。
+
 ## 旗子控制的黄球拆迁
 
 黄球跟随指定旗子，只拆旗子所在一格的合法敌方建筑：优先 Rampart，其次 Wall，再拆同格其他建筑。移动旗子就调整位置，可以换到另一个房间；不会拆邻格或清理整房围墙。旗颜色不限，旗名可以用中文。创建任务前只放旗不会自动派兵。

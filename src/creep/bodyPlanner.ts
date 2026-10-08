@@ -224,8 +224,8 @@ function claimBody(room: Room, config: CreepMemory, terrain: CreepBodyTerrain,
     if (config.role === 'reserver') {
         const target = Game.rooms[(config.data as ReserverData).targetRoom]
         const reservation = target?.controller?.reservation
-        // A visible friendly reservation close to expiry benefits from two CLAIM; unknown rooms use one.
-        if (reservation && reservation.username === room.controller?.owner?.username &&
+        // Continuous flags build a reservation buffer; ordinary remotes use two CLAIM only when urgent.
+        if ((config.data as ReserverData).reserveFlag || reservation && reservation.username === room.controller?.owner?.username &&
             reservation.ticksToEnd < bodyPolicy.economy.reservationUrgencyTicks) desired = bodyPolicy.economy.maximumReserverClaimParts
     }
     for (let claim = desired; claim > 0; claim--) {

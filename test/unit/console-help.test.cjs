@@ -147,6 +147,7 @@ test('overview includes the complete inventory and details remain queryable with
     assert.equal(renderHelp('  旗子  ', 'text'), renderHelp('flags', 'text'));
     assert.equal(renderHelp('SHARDTASK', 'text'), renderHelp('shardTask', 'text'));
     assert.equal(renderHelp('E31N2_OUT0', 'text'), renderHelp('OUT', 'text'));
+    assert.equal(renderHelp('E41N6_RESERVE0', 'text'), renderHelp('RESERVE', 'text'));
     assert.equal(renderHelp('E31N2_RF_T19', 'text'), renderHelp('RF', 'text'));
     assert.equal(renderHelp('PC_myPowerCreep', 'text'), renderHelp('PC', 'text'));
 });

@@ -165,7 +165,7 @@ interface BuilderData { sourceId: string, buildTarget?: string, repairTarget?: s
 interface RepairerData { sourceId: string, repairTarget?: string }
 
 interface ScoutData { targetFlag: string }
-interface ReserverData { targetRoom: string }
+interface ReserverData { targetRoom: string, reserveFlag?: string, reserveSlot?: 0 | 1 }
 interface ClaimerData { targetFlag: string }
 
 interface RemoteFillerData { sourceFlag: string, targetFlag: string, withdrawTarget?: string }

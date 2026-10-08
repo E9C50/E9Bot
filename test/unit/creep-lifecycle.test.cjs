@@ -122,10 +122,11 @@ function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'emp
     return { api: loader.load('creep/execution'), game, errors };
 }
 
-test('road workers reach their safety prepare during war while ordinary manual builders remain paused', () => {
-    for (const scope of ['empire', 'room']) {
-        const road = unit('road', { role: 'rBuilder' }), manual = unit('manual', { role: 'rBuilder' });
-        road.memory.data.roadHome = 'W2N1';
+test('road and reserve flag workers reach their safety prepare during war while ordinary manual roles remain paused', () => {
+    for (const scope of ['empire', 'room']) for (const task of ['road', 'reserve']) {
+        const role = task === 'road' ? 'rBuilder' : 'reserver';
+        const road = unit('road', { role }), manual = unit('manual', { role });
+        if (task === 'road') road.memory.data.roadHome = 'W2N1'; else road.memory.data.reserveFlag = 'W2N1_RESERVE0';
         const calls = [], w = executionWorld({ road, manual }, (_, data) => ({
             prepare() { calls.push(data.name); return false; },
             source() { throw Error('a retreating road worker must stop before work'); }

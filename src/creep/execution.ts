@@ -47,15 +47,16 @@ export function creepWorkController(): void {
                 : warModes[creep.room.name]
         const automaticRemote = isDevelopmentRemoteData(creep.memory.data)
         const remoteRoadWorker = creep.memory.role === 'rBuilder' && !!(creep.memory.data as RemoteBuilderData)?.roadHome
+        const reserveFlagWorker = creep.memory.role === 'reserver' && !!(creep.memory.data as ReserverData)?.reserveFlag
         const targetedDismantle = creep.memory.targetDismantle !== undefined
         // Preserve the ordinary war skip and its profiling semantics when there is no cargo task to intercept.
-        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !targetedDismantle &&
+        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !reserveFlagWorker && !targetedDismantle &&
             !isRoomEvacuating(creep.room) && !isRoomEvacuating(creep.memory.spawnRoom)) continue
         const roleStarted = roleProfiling ? Game.cpu.getUsed() : 0
         try {
             if (runRoomEvacuationCreep(creep)) continue
             // Automatic remotes must reach prepare even during war so their safety wrapper can evacuate them.
-            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !targetedDismantle) continue
+            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !reserveFlagWorker && !targetedDismantle) continue
             if (!automaticRemote && retireDevelopmentCreep(creep)) continue
             if (creep.memory.role === 'builder' && idleBuilderIfNoWork(creep)) continue
             // A paused/cancelled precise task must stop before the normal boost hook can move it.
