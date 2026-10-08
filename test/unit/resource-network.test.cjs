@@ -57,6 +57,37 @@ test('ordinary surplus obeys T3/basic/G/ops/T1/T2 floors and protects active pro
         assert.equal(w.getIncomingResourceAmount(warehouse.name, resource), amount, resource);
 });
 
+test('ordinary rooms retain 300k of their own mineral before exporting while other minerals still retain 10k', () => {
+    const w = world(), source = w.room('ordinary', { O: 300000, U: 15000 });
+    source.mineral = { mineralType: 'O' };
+    const warehouse = w.room('warehouse', {}, { warehouse: true });
+    w.planResourceDistribution();
+    assert.equal(w.getResourceKeep(source, 'O'), 300000);
+    assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 0);
+    assert.equal(w.getIncomingResourceAmount(warehouse.name, 'U'), 5000);
+    source.storage.store.O = 302000;
+    w.game.time = 60; w.planResourceDistribution();
+    assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 2000);
+    assert.equal(w.projectedResource(source, 'O'), 300000);
+    assert.equal(w.getIncomingResourceAmount(warehouse.name, 'O'), 2000);
+});
+
+test('old automatic native-mineral exports are released under the raised reserve and production promises remain protected', () => {
+    const w = world(1), source = w.room('ordinary', { O: 15000 });
+    source.mineral = { mineralType: 'O' };
+    const warehouse = w.room('warehouse', {}, { warehouse: true });
+    source.memory.terminalSendJob.old = { targetRoom: warehouse.name, resourceType: 'O', amount: 5000, kind: 'surplus' };
+    w.planResourceDistribution();
+    assert.equal(source.memory.terminalSendJob.old, undefined);
+    assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 0);
+    source.storage.store.O = 304000;
+    source.memory.productionReserve = { lab: { O: 3000 } };
+    w.game.time = 30; w.planResourceDistribution();
+    assert.equal(w.getOutgoingResourceAmount(source.name, 'O'), 1000);
+    assert.equal(w.getResourceKeep(source, 'O'), 303000);
+    assert.equal(w.ordinaryResourceTarget('O'), 10000, 'room refill does not import 300k of a locally mined mineral');
+});
+
 test('warehouse balancing includes queued stock and sends normal-room surplus directly to the least stocked warehouse', () => {
     const w = world(), source = w.room('ordinary', { wire: 100000 });
     const low = w.room('low', {}, { warehouse: true }), high = w.room('high', { wire: 100000 }, { warehouse: true });

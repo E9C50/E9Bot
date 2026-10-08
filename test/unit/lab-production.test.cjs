@@ -87,6 +87,22 @@ test('ordinary labs replenish a local T3 shortage before a globally scarcer full
     assert.equal(room.memory.productionReserve.lab.UH2O, 1000);
 });
 
+test('an ordinary room can feed its own labs from the 300k native-mineral backup', () => {
+    const w = world(), room = w.addRoom('W1N1', { U: 3000, H: 6000, O: 290000, X: 3000 });
+    room.mineral = { mineralType: 'O' };
+    w.update(room);
+    assert.equal(w.loader.load('room/resourceNetwork').getAvailableResource(room, 'O'), 0,
+        'the native backup is unavailable for automatic export');
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(room.memory.productionReserve.lab.O, 3000);
+    room.memory.roomLabConfig.reactionAmount = 3000;
+    room.memory.roomFillJob.labInMineral = [{ labId: 'W1N1-one', resourceType: 'O' }];
+    const amounts = [], creep = { room, store: store({}), memory: {},
+        withdraw: (_, resource, amount) => { amounts.push({ resource, amount }); return 0; } };
+    w.loader.load('role/adv/RoleAdvProcesser').default({}).source(creep);
+    assert.deepEqual(amounts, [{ resource: 'O', amount: 3000 }], 'the local lab transporter can use the backup');
+});
+
 test('full ordinary rooms and warehouse rooms select the globally least stocked T3', () => {
     const w = world(), room = w.addRoom('W1N1', { XUH2O: 20000, XLHO2: 20000, UH2O: 3000, LHO2: 3000, X: 6000 });
     const warehouse = w.addRoom('W2N2', { XUH2O: 10000, LHO2: 3000, X: 3000 }, true);

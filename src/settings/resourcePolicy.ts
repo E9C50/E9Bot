@@ -16,6 +16,7 @@ export const resourcePolicy = {
     terminalEnergyReserve: 50000,
     warehouseCapacity: 8000000,
     warehouseRawMineralReserve: 300000,
+    minedMineralReserve: 300000,
     t3Reserve: 20000,
     basicMineralReserve: 10000,
     ghodiumReserve: 10000,
@@ -40,4 +41,10 @@ export function ordinaryResourceTarget(resource: ResourceConstant): number {
 
 export function ordinaryResourceKeep(resource: ResourceConstant): number {
     return intermediateResources.includes(resource) ? resourcePolicy.intermediateReserve : ordinaryResourceTarget(resource)
+}
+
+/** Ordinary rooms accumulate their own mineral before exporting or compressing it. */
+export function ordinaryRoomResourceKeep(room: Room, resource: ResourceConstant): number {
+    const keep = ordinaryResourceKeep(resource)
+    return room.mineral?.mineralType === resource ? Math.max(keep, resourcePolicy.minedMineralReserve) : keep
 }

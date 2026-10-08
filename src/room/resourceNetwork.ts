@@ -1,4 +1,4 @@
-import { basicMinerals, ordinaryResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
+import { basicMinerals, ordinaryRoomResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { isRoomEvacuating } from './evacuationState'
 
 type Amounts = Record<string, number>
@@ -94,7 +94,7 @@ export function getProductionReserve(room: Room, resource: ResourceConstant): nu
 }
 export function getResourceKeep(room: Room, resource: ResourceConstant): number {
     const base = resource === 'energy' ? resourcePolicy.terminalEnergyReserve :
-        isWarehouseRoom(room) ? 0 : ordinaryResourceKeep(resource)
+        isWarehouseRoom(room) ? 0 : ordinaryRoomResourceKeep(room, resource)
     return Math.max(base, positive(room.memory.boostNeed?.[resource])) + getProductionReserve(room, resource)
 }
 export function getAvailableResource(room: Room, resource: ResourceConstant): number {

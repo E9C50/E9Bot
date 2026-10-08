@@ -248,7 +248,7 @@ test('resource requests index existing queues once instead of rescanning for eve
 
 test('distribution subtracts existing commitments and preserves manual target/resource jobs', () => {
     const world = terminalWorld();
-    const room = world.addRoom('W1N1', { X: 15000, B: 200 }, { mineral: { mineralType: 'X' } });
+    const room = world.addRoom('W1N1', { X: 305000, B: 200 }, { mineral: { mineralType: 'X' } });
     const center = world.addRoom('W0N0', { H: 100000 });
     center.memory.terminalSendJob.existing = { targetRoom: room.name, resourceType: 'H', amount: 50 };
     room.memory.terminalSendJob.otherTarget = { targetRoom: 'elsewhere', resourceType: 'B', amount: 50 };

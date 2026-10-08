@@ -1,4 +1,4 @@
-import { basicMinerals, compressedMinerals, ordinaryResourceKeep, resourcePolicy } from 'settings/resourcePolicy'
+import { basicMinerals, compressedMinerals, ordinaryRoomResourceKeep, resourcePolicy } from 'settings/resourcePolicy'
 import { getGlobalResourceAmount, getOutgoingResourceAmount, getTerminalResourceAmount, isWarehouseRoom,
     recordTerminalWithdrawal } from './resourceNetwork'
 import { isRoomEvacuating } from './evacuationState'
@@ -120,7 +120,7 @@ function localAmount(room: Room, resource: ResourceConstant): number {
 function ingredientKeep(room: Room, resource: ResourceConstant, warehouse = isWarehouseRoom(room)): number {
     if (resource === RESOURCE_ENERGY) return resourcePolicy.terminalEnergyReserve
     const rawMineral = basicMinerals.includes(resource) || resource === RESOURCE_GHODIUM
-    const minimum = warehouse ? rawMineral ? resourcePolicy.warehouseRawMineralReserve : 0 : ordinaryResourceKeep(resource)
+    const minimum = warehouse ? rawMineral ? resourcePolicy.warehouseRawMineralReserve : 0 : ordinaryRoomResourceKeep(room, resource)
     return Math.max(minimum, room.memory.boostNeed?.[resource] || 0)
 }
 function availableIngredient(room: Room, resource: ResourceConstant): number {
