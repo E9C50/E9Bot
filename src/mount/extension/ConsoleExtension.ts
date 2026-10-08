@@ -12,8 +12,9 @@ import { renderHelp } from 'runtime/consoleHelp'
 import { createRoomEvacuation, getRoomEvacuationStatus, cancelRoomEvacuation } from 'room/evacuation'
 import { getRoomResourceAmount, isWarehouseRoom, updateResourceJob } from 'room/resourceNetwork'
 import { ordinaryResourceTarget, resourcePolicy } from 'settings/resourcePolicy'
-import { createTargetDismantleTask, listTargetDismantleTasks, cancelTargetDismantleTask } from 'shard/targetDismantleControl'
-import type { TargetDismantleTaskInput } from 'shard/targetDismantleControl'
+import { createTargetDismantleTask, createFlagDismantleTask, listTargetDismantleTasks,
+    pauseTargetDismantleTask, resumeTargetDismantleTask, cancelTargetDismantleTask } from 'shard/targetDismantleControl'
+import type { TargetDismantleTaskInput, FlagDismantleTaskOptions } from 'shard/targetDismantleControl'
 
 export default class ConsoleExtension {
     public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
@@ -35,8 +36,15 @@ export default class ConsoleExtension {
     public shardTaskResume(id: string): string { return setShardTaskState(id, 'active') }
     public shardTaskCancel(id: string): string { return setShardTaskState(id, 'cancelled') }
     public shardDismantleTask(id: string, config: TargetDismantleTaskInput): string { return createTargetDismantleTask(id, config) }
-    public shardDismantleTasks(): string { return listTargetDismantleTasks() }
+    public shardDismantleTasks(id?: string): string { return listTargetDismantleTasks(id) }
+    public shardDismantlePause(id: string): string { return pauseTargetDismantleTask(id) }
+    public shardDismantleResume(id: string, options?: { maxEnergy?: number }): string { return resumeTargetDismantleTask(id, options) }
     public shardDismantleCancel(id: string): string { return cancelTargetDismantleTask(id) }
+    public dismantleTask(home: string, flagName: string, options?: FlagDismantleTaskOptions): string { return createFlagDismantleTask(home, flagName, options) }
+    public dismantleTasks(id?: string): string { return listTargetDismantleTasks(id) }
+    public dismantlePause(id: string): string { return pauseTargetDismantleTask(id) }
+    public dismantleResume(id: string, options?: { maxEnergy?: number }): string { return resumeTargetDismantleTask(id, options) }
+    public dismantleCancel(id: string): string { return cancelTargetDismantleTask(id) }
 
     public cpuProfile(enabled?: boolean, limit?: number): string {
         if (enabled != undefined) runtimePolicy.profiling.enabled = enabled

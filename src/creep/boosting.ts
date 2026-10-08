@@ -75,6 +75,17 @@ function syncTick(): void {
     reservations = new Map(); claimedLabs = new Set(); attemptedCreeps = new Set()
 }
 
+function dismantleBoostAllowed(memory: CreepMemory): boolean {
+    const state = memory.targetDismantle?.controlState
+    return state === undefined || state === 'active'
+}
+
+/** Task control runs after room planning. Rebuild only the boost index from this tick's cached members. */
+export function invalidateBoostRequestIndex(): void {
+    syncTick()
+    boostCreepsByRoom = new Map(); boostIndexed = false
+}
+
 function roomCreeps(roomName: string, boostOnly = false): RoomMember[] {
     syncTick()
     if (rawMembers === undefined) {
@@ -89,8 +100,8 @@ function roomCreeps(roomName: string, boostOnly = false): RoomMember[] {
             const { creep } = member
             // Ordinary native bodies never need room getters or body scans for Lab demand.
             // The separate full index still retains them for real logistics preflight.
-            if (boostOnly && (creep.memory.boostPlan ? !pendingLabPlan(creep.memory.boostPlan) :
-                !roleBoostConfig[creep.memory.role]?.length)) continue
+            if (boostOnly && (!dismantleBoostAllowed(creep.memory) ||
+                (creep.memory.boostPlan ? !pendingLabPlan(creep.memory.boostPlan) : !roleBoostConfig[creep.memory.role]?.length))) continue
             const home = creep.memory.spawnRoom || creep.room.name
             const group = index.get(home)
             if (group == undefined) index.set(home, [member])
@@ -109,6 +120,7 @@ export function getRoomBoostRequests(room: Room, excludePlan?: CreepBoostPlan): 
     const liveNames = reservations.size > 0 ? new Set<string>() : undefined
     for (const { name, creep } of members) {
         liveNames?.add(name)
+        if (!dismantleBoostAllowed(creep.memory)) continue
         const stored = creep.memory.boostPlan
         if ((excludePlan != undefined && stored === excludePlan) || stored?.completed || stored?.failed) continue
         if (stored?.tier === 0 && stored.steps?.length === 0) continue
@@ -119,7 +131,8 @@ export function getRoomBoostRequests(room: Room, excludePlan?: CreepBoostPlan): 
         for (const step of remainingSteps(plan, counts)) result.push({ ...step, priority: stored == undefined ? 2 : 0 })
     }
     for (const [name, reservation] of reservations) {
-        if (reservation.roomName != room.name || liveNames?.has(name) || Game.creeps[name] || reservation.plan === excludePlan) continue
+        if (reservation.roomName != room.name || liveNames?.has(name) || Game.creeps[name] || reservation.plan === excludePlan ||
+            room.memory.creepConfig?.[name] && !dismantleBoostAllowed(room.memory.creepConfig[name])) continue
         for (const step of reservation.plan.steps) result.push({ ...step, priority: 1 })
     }
     return result
@@ -140,6 +153,7 @@ export function getActiveRoomBoostRequests(room: Room): BoostRequest[] {
     const seen = reservations.size > 0 || approved.length > 0 ? new Set<string>() : undefined
     for (const { name, creep } of roomCreeps(room.name, true)) {
         seen?.add(name)
+        if (!dismantleBoostAllowed(creep.memory)) continue
         const stored = creep.memory.boostPlan
         if (stored && !pendingLabPlan(stored)) continue
         if (!stored && !roleBoostConfig[creep.memory.role]?.length) continue
@@ -153,6 +167,7 @@ export function getActiveRoomBoostRequests(room: Room): BoostRequest[] {
     for (const [name, reservation] of reservations) {
         if (reservation.roomName !== room.name || seen?.has(name) || Game.creeps[name] || !pendingLabPlan(reservation.plan) ||
             reservation.combat && !combatSpawnAllowed(reservation.combat as CreepMemory) ||
+            room.memory.creepConfig?.[name] && !dismantleBoostAllowed(room.memory.creepConfig[name]) ||
             room.memory.creepConfig?.[name] && !combatSpawnAllowed(room.memory.creepConfig[name])) continue
         seen?.add(name)
         for (const step of reservation.plan.steps) result.push({ ...step, priority: 1 })
@@ -275,7 +290,7 @@ function fail(creep: Creep, plan: CreepBoostPlan, message: string): false {
 
 /** OK only schedules a boost: completion is confirmed from the next tick's actual body. */
 export function runCreepBoosts(creep: Creep): boolean {
-    if (creep.spawning) return false
+    if (creep.spawning || !dismantleBoostAllowed(creep.memory)) return false
     const explicit = creep.memory.boostPlan
     if (explicit?.failed) { returnForRecycling(creep); return false }
     if (explicit != undefined && !validPlan(explicit)) return fail(creep, explicit, 'invalid boost plan')

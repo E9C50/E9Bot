@@ -202,6 +202,7 @@ test('spawn rejects stale economy or shard births immediately between population
         'settings/creep': { roleAdvEnum: { MANAGER: 'manager' }, roleBaseEnum: { FILLER: 'filler', HARVESTER: 'harvester' } },
         role: { isRoleSupported: () => true }, 'creep/bodySelection': { selectCreepBody: () => ({ body: ['move'], boostPlan: { steps: [] } }) },
         'creep/boosting': { reserveBoostPlan() {} }, 'creep/development': { isDevelopingRoom: () => false },
+        'shard/targetDismantleControl': { isTargetDismantleSpawnReserved: () => false },
         'creep/developmentRemotes': {}, 'combat/spawning': { combatSpawnAllowed: () => true, recordCombatSpawn() {} },
     } });
     const spawn = new (loader.load('mount/structure/SpawnExtension').default)(); spawn.room = room;

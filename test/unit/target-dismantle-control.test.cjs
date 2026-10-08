@@ -2,6 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 const { createCombatWorld } = require('../helpers/combat-world.cjs');
+const BOOST_CONFIG = { boostMove: ['ZO', 'ZHO2', 'XZHO2'], boostDismantle: ['ZH', 'ZH2O', 'XZH2O'],
+    boostTough: ['GO', 'GHO2', 'XGHO2'], boostHeal: ['LO', 'LHO2', 'XLHO2'] };
+const BOOST_PARTS = { boostMove: 'move', boostDismantle: 'work', boostTough: 'tough', boostHeal: 'heal' };
+const BOOST_TYPES = { BoostTypeMove: 'boostMove', BoostTypeDismantle: 'boostDismantle',
+    BoostTypeTough: 'boostTough', BoostTypeHeal: 'boostHeal' };
 
 const route = [{ shard: 'shard3', roomName: 'E40N0', x: 20, y: 20, destinationShard: 'shard2', destinationRoom: 'E40N0' }];
 function input(overrides = {}) {
@@ -14,9 +19,11 @@ function sharedWorld() {
     function runtime(shard = 'shard3') {
         const combat = createCombatWorld(), game = combat.game, memory = { creeps: {} }, calls = [], plans = [];
         game.shard.name = shard;
+        game.flags = {};
+        for (const [index, resource] of BOOST_CONFIG.boostMove.entries()) combat.loader.globals.BOOSTS.move[resource] = { fatigue: index + 2 };
         const home = combat.room('E41N8', { my: true });
         home.energyCapacityAvailable = 5600; home.energyAvailable = 5600;
-        let canBoost = true, spawnResult = 0;
+        let canBoost = true, spawnResult = 0, boostIndexInvalidations = 0;
         const spawn = { id: `spawn-${shard}`, spawning: null, spawnCreep(body, name, options) {
             calls.push({ body: [...body], name, memory: options.memory });
             if (spawnResult === 0) spawn.spawning = { name, remainingTime: 150 };
@@ -27,11 +34,14 @@ function sharedWorld() {
         const loader = createSourceLoader({ globals: { ...combat.loader.globals, Game: game, Memory: memory,
             Date: class extends Date { static now() { return clock.now; } },
             StructureSpawn: class {}, BODYPART_COST: { work: 100, move: 50, carry: 50 },
+            MAX_CREEP_SIZE: 50,
             FIND_MY_SPAWNS: 'my-spawns', RESOURCE_CATALYZED_ZYNTHIUM_ACID: 'XZH2O', RESOURCE_CATALYZED_ZYNTHIUM_ALKALIDE: 'XZHO2',
             InterShardMemory: { getLocal: () => { reads.push(`${shard}:local`); return bus[shard] || ''; },
                 getRemote: peer => { reads.push(`${shard}:${peer}`); return bus[peer] || ''; },
                 setLocal: value => { writes.push(shard); bus[shard] = value; } },
-        }, modules: { 'creep/boosting': {
+        }, modules: { 'settings/boost': { boostConfig: BOOST_CONFIG, boostBodyPart: BOOST_PARTS, boostTypeEnum: BOOST_TYPES },
+            'creep/boosting': {
+            invalidateBoostRequestIndex() { boostIndexInvalidations++; },
             canPrepareBoosts(room, plan) { plans.push(JSON.parse(JSON.stringify(plan))); return canBoost; },
             reserveBoostPlan(room, name, plan) { calls.push({ reservation: name, plan }); },
         }, role: { isRoleSupported: () => true },
@@ -59,18 +69,30 @@ function sharedWorld() {
         const state = { ...combat, game, memory, home, spawn, loader, api, transport, policy, calls, plans, born, worker, tick,
             task: () => Object.values(memory.targetDismantleTasks || {})[0],
             births: () => calls.filter(call => call.body), reservations: () => calls.filter(call => call.reservation),
+            boostIndexInvalidations: () => boostIndexInvalidations,
             setCanBoost: value => { canBoost = value; }, setSpawnResult: value => { spawnResult = value; } };
         worlds.push(state); return state;
     }
     return { bus, clock, worlds, reads, writes, runtime };
 }
 function create(w, overrides = {}, id = 'entrance') { assert.match(w.api.createTargetDismantleTask(id, input(overrides)), /已创建/); return w.task(); }
+function placeFlag(w, name = 'yellow', { roomName = 'E41N5', x = 10, y = 35, work = false, visible = true } = {}) {
+    w.game.flags[name] = { name, pos: w.position(x, y, roomName) };
+    if (visible) w.room(roomName); else delete w.game.rooms[roomName];
+    if (work) w.structure(`flag-${name}-${x}-${y}`, 'rampart', { roomName, x, y });
+    return w.game.flags[name];
+}
+function createFlag(w, options = {}, name = 'yellow') {
+    assert.match(w.api.createFlagDismantleTask('E41N8', name, { id: 'entrance', ...options }), /已创建/);
+    return w.task();
+}
 function spawnAndArrive(shared, source, destination) {
     source.tick(); const unit = source.born(); source.tick();
     unit.memory.data.transferPreparedAt = source.game.time; source.tick();
     assert.equal(source.transport.publishCreepTransfer(unit, destination.game.shard.name, 1), true);
     source.transport.flushInterShardMemory(); delete source.game.creeps[unit.name];
     const arrival = destination.worker(unit.name, {}, { roomName: 'E41N5', blank: true });
+    destination.game.time++; // Arrival is a new tick, after any earlier empty status cached the source.
     assert.equal(destination.transport.restoreArrivingCreeps(), 1);
     destination.tick(); source.tick(); return arrival;
 }
@@ -97,7 +119,7 @@ test('invalid targets/routes/budgets/ownership/capacity never create a task or r
     }
     for (const change of ['capacity', 'ownership']) {
         const w = sharedWorld().runtime();
-        if (change === 'capacity') w.home.energyCapacityAvailable = 3000; else w.home.controller.my = false;
+        if (change === 'capacity') w.home.energyCapacityAvailable = 100; else w.home.controller.my = false;
         assert.doesNotMatch(w.api.createTargetDismantleTask('bad', input()), /已创建/);
     }
 });
@@ -106,7 +128,7 @@ test('native spawning waits for full 4500 energy and exact boosts; reserves only
     const w = sharedWorld().runtime(); create(w);
     w.home.energyAvailable = 4000; w.tick(); assert.equal(w.births().length, 0); assert.match(w.task().reason, /4500/);
     w.home.energyAvailable = 5600; w.setCanBoost(false); w.tick(); assert.equal(w.births().length, 0);
-    assert.match(w.task().reason, /1200.*300/); assert.equal(w.task().spent, 0); assert.equal(w.reservations().length, 0);
+    assert.match(w.task().reason, /300.*1200/); assert.equal(w.task().spent, 0); assert.equal(w.reservations().length, 0);
     w.setCanBoost(true); w.setSpawnResult(-6); w.tick();
     assert.equal(w.task().spent, 0); assert.equal(w.task().lease, undefined); assert.equal(w.reservations().length, 0);
     w.setSpawnResult(0); w.tick();
@@ -115,7 +137,7 @@ test('native spawning waits for full 4500 energy and exact boosts; reserves only
     assert.equal(call.body.filter(part => part === 'move').length, 10);
     assert.equal(call.memory.role, 'sBuilder'); assert.equal(call.memory.boostPlan.tier, 3);
     assert.deepEqual(JSON.parse(JSON.stringify(call.memory.boostPlan.steps)), [
-        { type: 'boostDismantle', resource: 'XZH2O', parts: 40 }, { type: 'boostMove', resource: 'XZHO2', parts: 10 },
+        { type: 'boostMove', resource: 'XZHO2', parts: 10 }, { type: 'boostDismantle', resource: 'XZH2O', parts: 40 },
     ]);
     assert.equal(w.task().spent, 4500); assert.equal(w.reservations().length, 1);
     assert.equal(w.loader.load('shard/missions').isShardUnitData(call.memory.data), false);
@@ -363,4 +385,215 @@ test('commands for other routes do not force an unrelated shard into every-tick 
     for (let i = 0; i < 9; i++) { unrelated.game.time++; unrelated.api.runTargetDismantleControl(); }
     assert.equal(s.reads.length, start);
     assert.equal(unrelated.transport.getLocalShardState().reports, undefined);
+});
+
+test('same-shard flag tasks create, spawn, pause, resume and cancel without InterShardMemory', () => {
+    for (const unavailable of ['disabled', 'missing']) {
+        const shared = sharedWorld(), w = shared.runtime();
+        if (unavailable === 'disabled') w.policy.enabled = false; else w.loader.globals.InterShardMemory = undefined;
+        placeFlag(w, 'yellow', { work: true }); createFlag(w, { boostTier: 0, workParts: 10 }); w.setCanBoost(false);
+        assert.equal(w.task().input.targetShard, 'shard3'); assert.equal(w.task().input.route.length, 0);
+        assert.equal(w.task().input.targets.length, 0); assert.equal(w.task().input.controller, undefined);
+        w.tick(); const unit = w.born(); w.tick();
+        assert.equal(w.births().length, 1); assert.equal(w.task().spent, 1500);
+        assert.equal(w.reservations().length, 0); assert.equal(unit.memory.targetDismantle.flagName, 'yellow');
+        assert.match(w.api.pauseTargetDismantleTask('entrance'), /已暂停/); w.tick();
+        assert.equal(unit.memory.targetDismantle.controlState, 'paused');
+        const lease = w.task().lease.name, generation = w.task().generation;
+        assert.match(w.api.resumeTargetDismantleTask('entrance'), /已恢复/); w.tick();
+        assert.equal(unit.memory.targetDismantle.controlState, 'active'); assert.equal(w.task().lease.name, lease);
+        assert.equal(w.task().generation, generation); assert.equal(w.births().length, 1);
+        assert.match(w.api.cancelTargetDismantleTask('entrance'), /已取消/); w.tick();
+        assert.equal(unit.memory.targetDismantle.controlState, 'cancelled'); assert.equal(shared.writes.length, 0);
+    }
+});
+
+test('arbitrary native flag names get stable independent default ids and listing can filter', () => {
+    const w = sharedWorld().runtime();
+    const first = w.api.createFlagDismantleTask('E41N8', '黄球 一', { boostTier: 0 });
+    const second = w.api.createFlagDismantleTask('E41N8', '黄球 二', { boostTier: 0 });
+    assert.match(first, /已创建.*黄球 一/); assert.match(second, /已创建.*黄球 二/);
+    const tasks = Object.values(w.memory.targetDismantleTasks);
+    assert.equal(tasks.length, 2); assert.notEqual(tasks[0].id, tasks[1].id);
+    assert.match(w.api.createFlagDismantleTask('E41N8', '黄球 一', { boostTier: 0 }), /已存在/);
+    assert.match(w.api.listTargetDismantleTasks(tasks[0].id), /黄球 一/);
+    assert.doesNotMatch(w.api.listTargetDismantleTasks(tasks[0].id), /黄球 二/);
+});
+
+test('missing/clear flags idle without spawning, while moved unseen flags may send a worker for vision', () => {
+    const w = sharedWorld().runtime(); createFlag(w, { boostTier: 0 });
+    w.tick(); assert.equal(w.births().length, 0); assert.equal(w.task().state, 'active');
+    placeFlag(w); w.tick(); assert.equal(w.births().length, 0); assert.match(w.task().reason, /tile is clear/);
+    const cleared = w.task().clearedFlag;
+    delete w.game.rooms.E41N5; w.tick(); assert.equal(w.births().length, 0); assert.equal(w.task().clearedFlag, cleared);
+    delete w.game.flags.yellow; w.tick();
+    placeFlag(w, 'yellow', { visible: false }); w.tick(); assert.equal(w.births().length, 0);
+    placeFlag(w, 'yellow', { visible: false, x: 12 }); w.tick();
+    assert.equal(w.births().length, 1); assert.equal(w.task().clearedFlag, undefined);
+    assert.equal(w.task().state, 'active');
+});
+
+test('a never-observed flag room allows its first worker without confusing absence with cleared work', () => {
+    const w = sharedWorld().runtime(); placeFlag(w, 'yellow', { visible: false }); createFlag(w, { boostTier: 0 });
+    w.tick(); assert.equal(w.births().length, 1); assert.equal(w.task().lastFlag.hasWork, undefined);
+});
+
+test('flag deletion pauses unfinished boosts without permanently pausing the task; moving a flag revives one live slot', () => {
+    const w = sharedWorld().runtime(); placeFlag(w, 'yellow', { work: true }); createFlag(w); w.tick();
+    const unit = w.born(); unit.memory.boostPlan.completed = false; w.tick();
+    delete w.game.flags.yellow; w.tick(); assert.equal(unit.memory.targetDismantle.controlState, 'paused');
+    assert.equal(w.task().state, 'active');
+    placeFlag(w, 'yellow', { work: true, x: 12 }); w.tick();
+    assert.equal(unit.memory.targetDismantle.controlState, 'active'); assert.equal(w.births().length, 1);
+    placeFlag(w, 'yellow', { x: 14 }); w.tick();
+    assert.equal(unit.memory.targetDismantle.controlState, 'paused'); assert.equal(w.task().state, 'active');
+    unit.memory.targetDismantle.done = true; w.tick(); assert.equal(w.task().state, 'active');
+});
+
+test('body capacity and boost settings determine actual costs; current energy cannot shrink a requested worker', () => {
+    const w = sharedWorld().runtime(); w.home.energyCapacityAvailable = 800; w.home.energyAvailable = 150;
+    placeFlag(w, 'yellow', { work: true }); createFlag(w, { boostTier: 0, workParts: 5, maxEnergy: 750 });
+    w.tick(); assert.equal(w.births().length, 0); assert.match(w.task().reason, /750 spawn energy/);
+    w.home.energyAvailable = 750; w.tick();
+    const body = w.births()[0].body;
+    assert.equal(body.filter(part => part === 'work').length, 5); assert.equal(body.filter(part => part === 'move').length, 5);
+    assert.equal(w.task().spent, 750); assert.equal(w.births()[0].memory.boostPlan.tier, 0);
+    const small = sharedWorld().runtime(); small.home.energyCapacityAvailable = 800;
+    assert.doesNotMatch(small.api.createFlagDismantleTask('E41N8', 'yellow', { workParts: 10 }), /已创建/);
+    assert.equal(small.task(), undefined);
+});
+
+test('resume extends exhausted budget without changing the slot generation or bypassing failed boost state', () => {
+    const w = sharedWorld().runtime(); placeFlag(w, 'yellow', { work: true }); createFlag(w, { boostTier: 0, workParts: 5, maxEnergy: 750 });
+    w.tick(); const unit = w.born(); w.tick(); delete w.game.creeps[unit.name]; w.tick();
+    assert.equal(w.task().state, 'paused'); assert.match(w.task().reason, /budget/);
+    assert.doesNotMatch(w.api.resumeTargetDismantleTask('entrance', { maxEnergy: 749 }), /已恢复/);
+    assert.match(w.api.resumeTargetDismantleTask('entrance', { maxEnergy: 1500 }), /已恢复/);
+    assert.equal(w.task().generation, 1); assert.equal(w.task().spent, 750); w.tick();
+    assert.equal(w.births().length, 2); assert.equal(w.task().spent, 1500);
+    const second = w.born(); second.memory.boostPlan.failed = true; w.tick();
+    assert.equal(w.task().state, 'paused'); const name = w.task().lease.name, generation = w.task().generation;
+    assert.match(w.api.resumeTargetDismantleTask('entrance'), /已恢复/); w.tick();
+    assert.equal(w.task().state, 'paused'); assert.match(w.task().reason, /Boost failed/);
+    assert.equal(w.task().lease.name, name); assert.equal(w.task().generation, generation); assert.equal(w.births().length, 2);
+});
+
+test('cross-shard flags require explicit routes and fresh destination reports before spawning', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2');
+    assert.doesNotMatch(source.api.createFlagDismantleTask('E41N8', 'yellow', { targetShard: 'shard2' }), /已创建/);
+    createFlag(source, { targetShard: 'shard2', route }); source.tick(); assert.equal(source.births().length, 0);
+    dest.tick(); source.tick(); assert.equal(source.births().length, 0);
+    const absent = JSON.parse(s.bus.shard2).ecbotShard.reports[`${source.task().key}:status`];
+    assert.equal(absent.flag, null); assert.equal(absent.units.length, 0);
+    placeFlag(dest, 'yellow', { work: true }); dest.tick();
+    const saved = s.bus.shard2, stale = JSON.parse(saved);
+    stale.ecbotShard.reports[`${source.task().key}:status`].updatedAt -= source.policy.reportMaxAge + 1;
+    s.bus.shard2 = JSON.stringify(stale); source.tick(); assert.equal(source.births().length, 0);
+    s.bus.shard2 = saved; source.tick(); assert.equal(source.births().length, 1);
+    assert.equal(source.births()[0].memory.targetDismantle.targetRoom, 'E41N5');
+});
+
+test('a target-shard flag wakes spawning without workers and its moved position overrides old source idle immediately', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2');
+    createFlag(source, { targetShard: 'shard2', route });
+    placeFlag(dest); dest.tick(); source.tick(); assert.equal(source.births().length, 0);
+    placeFlag(dest, 'yellow', { work: true, x: 12 }); dest.tick(); source.tick();
+    assert.equal(source.births().length, 1);
+    const arrival = spawnAndArrive(s, source, dest);
+    placeFlag(dest, 'yellow', { x: 14 }); dest.tick(); source.tick(); dest.tick();
+    assert.equal(arrival.memory.targetDismantle.controlState, 'paused'); assert.equal(source.task().state, 'active');
+    // The destination observes the newly moved flag while the source still advertises flagReady=false.
+    placeFlag(dest, 'yellow', { work: true, x: 16 }); dest.tick();
+    assert.equal(arrival.memory.targetDismantle.controlState, 'active');
+    assert.equal(source.births().length, 1);
+    assert.match(source.api.pauseTargetDismantleTask('entrance'), /已暂停/); dest.tick();
+    placeFlag(dest, 'yellow', { work: true, x: 18 }); dest.tick();
+    assert.equal(arrival.memory.targetDismantle.controlState, 'paused');
+});
+
+test('cleared cross-shard flags retain idle memory after vision loss and confirmed death cannot spawn useless replacements', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2');
+    createFlag(source, { targetShard: 'shard2', route }); placeFlag(dest, 'yellow', { work: true }); dest.tick(); source.tick();
+    const arrival = spawnAndArrive(s, source, dest);
+    placeFlag(dest, 'yellow', { x: 14 }); dest.tick(); source.tick();
+    delete dest.game.creeps[arrival.name]; delete dest.game.rooms.E41N5; dest.tick(61000); source.tick();
+    assert.equal(source.task().lease, undefined); assert.equal(source.births().length, 1);
+    assert.equal(source.task().state, 'active'); assert.match(source.task().reason, /Previously cleared/);
+    placeFlag(dest, 'yellow', { x: 16, visible: false }); dest.tick(); source.tick();
+    assert.equal(source.births().length, 2);
+});
+
+test('cross-shard pause/resume and an expired lease retain the one in-transit slot', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2');
+    createFlag(source, { targetShard: 'shard2', route }); placeFlag(dest, 'yellow', { work: true }); dest.tick(); source.tick();
+    const unit = source.born(); unit.memory.data.transferPreparedAt = source.game.time; source.tick();
+    delete source.game.creeps[unit.name]; source.tick(source.policy.leaseDuration + 1);
+    assert.equal(source.task().state, 'paused'); const generation = source.task().generation;
+    assert.match(source.api.resumeTargetDismantleTask('entrance', { maxEnergy: 200000 }), /已恢复/);
+    assert.equal(source.task().lease.name, unit.name); assert.equal(source.task().generation, generation);
+    source.tick(); assert.equal(source.births().length, 1); assert.ok(source.task().lease);
+});
+
+function realBoosting(w) {
+    for (const room of Object.values(w.game.rooms)) room.labs ||= [];
+    return createSourceLoader({ globals: { ...w.loader.globals, LAB_BOOST_MINERAL: 30, LAB_BOOST_ENERGY: 20 },
+        modules: { 'settings/boost': { boostConfig: BOOST_CONFIG, boostBodyPart: BOOST_PARTS, roleBoostConfig: {} },
+            'combat/spawning': { combatSpawnAllowed: () => true } } }).load('creep/boosting');
+}
+
+test('pending boost timeout excludes more than 300 paused ticks for deleted flags, clear tiles and manual pauses', () => {
+    for (const reason of ['missing', 'clear', 'manual']) {
+        const w = sharedWorld().runtime(); placeFlag(w, 'yellow', { work: true }); createFlag(w); w.tick();
+        const unit = w.born(), plan = unit.memory.boostPlan;
+        plan.completed = false; plan.startedAt = w.game.time - 50; w.tick();
+        const name = unit.name, generation = w.task().generation, beforeInvalidations = w.boostIndexInvalidations();
+        if (reason === 'missing') delete w.game.flags.yellow;
+        else if (reason === 'clear') placeFlag(w, 'yellow', { x: 14 });
+        else w.api.pauseTargetDismantleTask('entrance');
+        w.tick(); assert.equal(unit.memory.targetDismantle.controlState, 'paused');
+        assert.equal(w.boostIndexInvalidations(), beforeInvalidations + 1);
+        const pausedAt = unit.memory.targetDismantle.boostClock.pausedAt, activeAge = pausedAt - plan.startedAt;
+        w.game.time += 500; w.tick(); assert.equal(unit.memory.targetDismantle.boostClock.pausedAt, pausedAt);
+        if (reason === 'manual') w.api.resumeTargetDismantleTask('entrance');
+        else placeFlag(w, 'yellow', { work: true, x: 16 });
+        w.tick(); assert.equal(unit.memory.targetDismantle.controlState, 'active');
+        assert.equal(w.game.time - plan.startedAt, activeAge);
+        assert.equal(unit.memory.targetDismantle.boostClock.pausedAt, undefined);
+        assert.equal(w.boostIndexInvalidations(), beforeInvalidations + 2);
+        // Invoke the real timeout path: missing Labs wait, rather than declaring the resumed plan failed.
+        assert.equal(realBoosting(w).runCreepBoosts(unit), false); assert.notEqual(plan.failed, true);
+        assert.equal(w.task().lease.name, name); assert.equal(w.task().generation, generation); assert.equal(w.births().length, 1);
+    }
+});
+
+test('pending boost clocks reset across shard migration and missing source heartbeats freeze the local timer', () => {
+    const s = sharedWorld(), source = s.runtime(), dest = s.runtime('shard2'); create(source);
+    const arrival = spawnAndArrive(s, source, dest), plan = arrival.memory.boostPlan;
+    plan.completed = false; plan.startedAt = 100;
+    arrival.memory.targetDismantle.boostClock = { shard: 'shard3', pausedAt: 10000 };
+    dest.game.time = 100000; dest.tick();
+    assert.equal(plan.startedAt, dest.game.time); assert.equal(arrival.memory.targetDismantle.boostClock.shard, 'shard2');
+    assert.equal(arrival.memory.targetDismantle.boostClock.pausedAt, undefined);
+    plan.startedAt = dest.game.time - 50;
+    dest.tick(source.policy.reportMaxAge + 1);
+    assert.equal(arrival.memory.targetDismantle.controlState, 'paused');
+    const elapsed = dest.game.time - plan.startedAt;
+    dest.game.time += 500; dest.tick(); source.tick(); dest.tick();
+    assert.equal(arrival.memory.targetDismantle.controlState, 'active'); assert.equal(dest.game.time - plan.startedAt, elapsed);
+    assert.equal(realBoosting(dest).runCreepBoosts(arrival), false); assert.notEqual(plan.failed, true);
+    assert.equal(source.births().length, 1); assert.equal(source.task().lease.name, arrival.name);
+});
+
+test('completed and genuinely failed boost plans never have their timers or outcomes rewritten by task pauses', () => {
+    for (const outcome of ['completed', 'failed']) {
+        const w = sharedWorld().runtime(); placeFlag(w, 'yellow', { work: true }); createFlag(w); w.tick();
+        const unit = w.born(), plan = unit.memory.boostPlan;
+        plan.completed = outcome === 'completed'; plan.failed = outcome === 'failed'; plan.startedAt = w.game.time - 10;
+        if (plan.failed) plan.failureReason = 'actual preparation failure';
+        unit.memory.targetDismantle.boostClock = { shard: 'shard3', pausedAt: w.game.time };
+        const original = JSON.stringify(plan); delete w.game.flags.yellow; w.tick(); w.game.time += 500; w.tick();
+        placeFlag(w, 'yellow', { work: true, x: 16 }); w.api.resumeTargetDismantleTask('entrance'); w.tick();
+        assert.equal(JSON.stringify(plan), original); assert.equal(unit.memory.targetDismantle.boostClock, undefined);
+        assert.equal(w.births().length, 1);
+    }
 });

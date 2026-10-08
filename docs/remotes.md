@@ -14,36 +14,56 @@ new RoomPosition(25, 25, 'E41N5').createFlag('E41N6_OUT0')
 
 上例将 `E41N5` 设为 `E41N6` 的手动外矿。主房须自有、有 Spawn 且 RCL 至少 3。手动旗优先于自动外矿；旗所在房间就是目标，不用把旗放在 Source 上。删除该旗停止发布对应外矿需求。
 
-## 跨 shard 精确拆除
+## 旗子控制的黄球拆迁
 
-在起点 shard 使用 `shardDismantleTask(id, config)`。需要明确的 Portal 路线，以及有限的 wall/rampart ID、坐标和类型；只拆所列目标。单位为 40 WORK + 10 MOVE，使用 T3 拆解、移动强化，每次出生 4500 能量、1200 XZH2O 和 300 XZHO2。起点先等能量、实际强化库存及服务条件充足再出生；不影响经济救援或更高优先级防守。
+黄球跟随指定旗子，只拆旗子所在一格的合法敌方建筑：优先 Rampart，其次 Wall，再拆同格其他建筑。移动旗子就调整位置，可以换到另一个房间；不会拆邻格或清理整房围墙。旗颜色不限，旗名可以用中文。创建任务前只放旗不会自动派兵。
 
-始终保留一个名额。跨 shard 存活报告和入境确认用于判断死亡，不能因起点 `Game.creeps` 查不到单位就补派。确认死亡后继续补派，拆完指定障碍并确认能走到 Controller 一格范围后停止续派，存活黄球移到旁边空位让路。失联且无法确认死亡、强化失败或能量预算耗尽时暂停，并显示原因。
-
-2026-10-08 现场确认的 E41N5 控制器入口配置如下。Portal 位置和障碍 ID 对应当时现场，应在重新发布新任务前核对：
+同 shard 示例，在需要拆迁的建筑上创建旗，然后从自有出生房发布任务：
 
 ```js
-shardDismantleTask('open_E41N5_controller', {
-    sourceRoom: 'E41N8',
-    targetShard: 'shard2',
-    targetRoom: 'E41N5',
-    route: [{ shard: 'shard3', roomName: 'E40N10', x: 34, y: 39,
-        destinationShard: 'shard2', destinationRoom: 'E40N10' }],
-    targets: [
-        { id: '61bc0fe9558126265a37317f', x: 10, y: 35, type: 'rampart' },
-        { id: '61ba63d87328afc39f5048b5', x: 11, y: 36, type: 'rampart' }
-    ],
-    controller: { x: 10, y: 37 },
-    maxEnergy: 180000
+new RoomPosition(15, 20, 'W2N1').createFlag('yellow')
+dismantleTask('W1N1', 'yellow', {
+    id: 'yellow1', boostTier: 0, workParts: 5, maxEnergy: 15000
 })
 ```
 
-这两道相邻障碍形成同一个通道，不拆其他围墙。现场外层约 2.44 亿、内层约 421 万血，需要多次补派。`maxEnergy` 是实际出生能量预算，上例最多 40 次出生；只在原生 `spawnCreep` 成功后记账。
+房名和坐标换成实际目标。上例每次出生 5 WORK + 5 MOVE，750 能量，不需要药剂。省略 `workParts` 时，按出生房的能量容量选择最大可用身体；`boostTier` 为 0..3，默认 T3。MOVE 数按平原速度和移动强化计算。孵化等完整身体能量和所需强化就绪，不因当前出生能量少而改为小身体；更高优先级的经济救援、NPC 防守先出生。
+
+在目标 shard 控制台移动或删除旗：
 
 ```js
-shardDismantleTasks()
-shardDismantleCancel('open_E41N5_controller')
-help('shardDismantleTask')
+Game.flags.yellow.setPosition(new RoomPosition(16, 21, 'W2N1'))
+Game.flags.yellow.setPosition(new RoomPosition(12, 10, 'W2N2'))
+Game.flags.yellow.remove()
 ```
 
-同 id 重复创建会返回已有任务，不重复派兵。取消会停止续派，并通过 InterShardMemory 通知远端单位停止拆除、让出通道。沿途 shard 均需运行此版本的代码。
+旗格清空或旗被删除时，黄球让路等待，任务保留且不补派无事可干的单位；移动或重放旗后可继续。无视野的旗位可先派黄球前往查看，但已确认空格的同一位置不会因后来失去视野而反复派兵。自己和白名单建筑、Controller、Portal、PowerBank、KeeperLair、InvaderCore 不拆，敌方安全模式或无敌效果期间等待。
+
+跨 shard 时，旗放在目标 shard，创建任务的指令在出生房所在 shard 执行。例如已有实际可用的 `route` 后：
+
+```js
+// 在目标 shard 放旗
+new RoomPosition(15, 20, 'W2N1').createFlag('yellow')
+
+// 在出生 shard 发布；route 为 shardPortals() 查到并核对过的逐跳 Portal 数组
+dismantleTask('W1N1', 'yellow', {
+    id: 'yellow1', targetShard: 'shard2', route,
+    boostTier: 3, maxEnergy: 180000
+})
+```
+
+跨 shard 单位通过 InterShardMemory 共享存活状态和目标旗位置，沿途 shard 均需运行此版本。同 shard 不需要 Portal 路线或跨 shard 通信。整个任务始终保留一个单位名额，确认死亡后持续补派；起点查不到跨出的单位不代表死亡。无法确认存活/死亡时保留名额并暂停，恢复指令不会强行清空名额或多派兵。
+
+```js
+dismantleTasks()
+dismantleTasks('yellow1')
+dismantlePause('yellow1')
+dismantleResume('yellow1')
+dismantleResume('yellow1', { maxEnergy: 360000 })
+dismantleCancel('yellow1')
+help('dismantleTask')
+```
+
+`maxEnergy` 是整个任务的实际出生能量预算，默认 180000，只在原生 `spawnCreep` 成功后记账。增加预算不会增加名额；不能将预算设得低于已花费量。手动暂停会停止行进、强化、拆除和后继补派，让现有黄球就近让路；取消停止后继补派并通知存活黄球让路。暂停或取消的单位不再占用 Lab 强化请求，暂停时间不计入强化超时。已发生强化失败的单位仍需处理失败原因，恢复任务不会绕过精确强化检查。
+
+旧 `shardDismantleTask(id, config)` 的有限目标列表仍兼容，也可以传 `flagName` 使用旗模式；旧的 `shardDismantleTasks/Pause/Resume/Cancel` 是相应控制指令的兼容入口。运行代码没有特定房间、障碍 ID 或 Portal 坐标；所有任务都由控制台发布。

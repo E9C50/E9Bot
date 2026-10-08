@@ -1,5 +1,7 @@
-import { canPrepareBoosts, reserveBoostPlan } from 'creep/boosting'
-import type { DismantleTarget, TargetDismantleOrder } from 'creep/targetDismantle'
+import { canPrepareBoosts, invalidateBoostRequestIndex, reserveBoostPlan } from 'creep/boosting'
+import { planDismantleBody } from 'creep/dismantleBody'
+import { getFlagDismantleSnapshot } from 'creep/targetDismantle'
+import type { DismantleTarget, FlagDismantleSnapshot, TargetDismantleOrder } from 'creep/targetDismantle'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { interShardPolicy } from 'settings/interShard'
 import { cancelCreepTransfers, flushInterShardMemory, getLocalShardState, getShardTransportError,
@@ -9,13 +11,29 @@ import { isPortalTravelData, isRecord, PortalHop, PortalTravelData, ShardEnvelop
 type TaskState = 'active' | 'paused' | 'completed' | 'cancelled'
 export interface TargetDismantleTaskInput {
     sourceRoom: string
-    targetShard: string
-    targetRoom: string
-    route: PortalHop[]
-    targets: DismantleTarget[]
-    controller: { x: number; y: number }
+    targetShard?: string
+    targetRoom?: string
+    route?: PortalHop[]
+    targets?: DismantleTarget[]
+    controller?: { x: number; y: number }
+    flagName?: string
+    workParts?: number
+    boostTier?: 0 | 1 | 2 | 3
     /** Native spawn energy only; boost minerals remain subject to real-stock preflight. */
     maxEnergy?: number
+}
+export interface FlagDismantleTaskOptions {
+    id?: string
+    targetShard?: string
+    route?: PortalHop[]
+    maxEnergy?: number
+    workParts?: number
+    boostTier?: 0 | 1 | 2 | 3
+}
+interface NormalizedTaskInput extends TargetDismantleTaskInput {
+    targetShard: string
+    route: PortalHop[]
+    targets: DismantleTarget[]
 }
 interface UnitLease {
     name: string; generation: number; createdAt: number; expiresAt: number
@@ -23,15 +41,19 @@ interface UnitLease {
     leaving?: boolean; confirmed?: boolean
 }
 export interface TargetDismantleTask {
-    id: string; key: string; sourceShard: string; input: TargetDismantleTaskInput
+    id: string; key: string; sourceShard: string; input: NormalizedTaskInput
     state: TaskState; createdAt: number; updatedAt: number; finishedAt?: number
     generation: number; spent: number; maxEnergy: number; index: number
     lease?: UnitLease; reason?: string
+    lastFlag?: FlagDismantleSnapshot | null
+    clearedFlag?: string
+    flagReady?: boolean
 }
 interface Command {
     type: 'targetDismantleCommand'; missionId: string; originShard: string
     state: TaskState; generation: number; updatedAt: number; expiresAt: number
-    route: PortalHop[]; reason?: string
+    route: PortalHop[]; reason?: string; targetShard?: string; flagName?: string
+    flagReady?: boolean; clearedFlag?: string
 }
 interface UnitStatus {
     name: string; generation: number; index: number; done: boolean
@@ -40,11 +62,11 @@ interface UnitStatus {
 interface Status {
     type: 'targetDismantleStatus'; missionId: string; originShard: string
     shard: string; generation: number; updatedAt: number; units: UnitStatus[]
+    flag?: FlagDismantleSnapshot | null
 }
 declare global { interface Memory { targetDismantleTasks?: Record<string, TargetDismantleTask> } }
 
 const PREFIX = 'targetDismantle:'
-const BODY_COST = 4500
 const HISTORY_LIMIT = 20
 const DEFAULT_BUDGET = 180000
 const STATES: TaskState[] = ['active', 'paused', 'completed', 'cancelled']
@@ -67,21 +89,22 @@ function point(value: unknown): boolean {
     return isRecord(value) && Number.isInteger(value.x) && Number.isInteger(value.y) &&
         (value.x as number) >= 0 && (value.x as number) < 50 && (value.y as number) >= 0 && (value.y as number) < 50
 }
-function boostPlan(): CreepBoostPlan {
-    return { tier: 3, steps: [
-        { type: 'boostDismantle', resource: RESOURCE_CATALYZED_ZYNTHIUM_ACID, parts: 40 },
-        { type: 'boostMove', resource: RESOURCE_CATALYZED_ZYNTHIUM_ALKALIDE, parts: 10 },
-    ] }
+function communicationAvailable(): boolean { return interShardPolicy.enabled && typeof InterShardMemory !== 'undefined' }
+function crossShard(task: TargetDismantleTask): boolean { return task.input.targetShard !== task.sourceShard }
+function commandFor(task: TargetDismantleTask, now = Date.now()): Command {
+    return { type: 'targetDismantleCommand', missionId: task.key, originShard: task.sourceShard,
+        state: task.state, generation: task.generation, reason: task.reason, route: task.input.route,
+        flagName: task.input.flagName, targetShard: task.input.targetShard,
+        flagReady: task.flagReady, clearedFlag: task.clearedFlag,
+        updatedAt: now, expiresAt: now + interShardPolicy.arrivalHistoryTtl }
 }
 function publish(task: TargetDismantleTask, heartbeat = false): void {
+    if (!crossShard(task) || !communicationAvailable()) return
     const state = getLocalShardState(), reports = state.reports || (state.reports = {})
     const old = reports[task.key]
     if (!heartbeat && isRecord(old) && old.type === 'targetDismantleCommand' && old.state === task.state &&
-        old.generation === task.generation && old.reason === task.reason) return
-    const now = Date.now()
-    reports[task.key] = { type: 'targetDismantleCommand', missionId: task.key, originShard: task.sourceShard,
-        state: task.state, generation: task.generation, reason: task.reason, route: task.input.route,
-        updatedAt: now, expiresAt: now + interShardPolicy.arrivalHistoryTtl } as Command
+        old.generation === task.generation && old.reason === task.reason && old.flagReady === task.flagReady && old.clearedFlag === task.clearedFlag) return
+    reports[task.key] = commandFor(task)
     markShardStateDirty()
 }
 function pause(task: TargetDismantleTask, reason: string): void {
@@ -96,14 +119,22 @@ function command(value: unknown, source: string, now: number): value is Command 
         STATES.includes(value.state as TaskState) && Number.isInteger(value.generation) && (value.generation as number) >= 0 &&
         typeof value.updatedAt === 'number' && value.updatedAt <= now + 5000 &&
         typeof value.expiresAt === 'number' && value.expiresAt > now &&
+        (value.flagName === undefined || typeof value.flagName === 'string' && !!value.flagName && typeof value.targetShard === 'string') &&
+        (value.flagReady === undefined || typeof value.flagReady === 'boolean') &&
+        (value.clearedFlag === undefined || typeof value.clearedFlag === 'string') &&
         isPortalTravelData({ missionId: value.missionId, originShard: source, route: value.route, hopIndex: 0 })
 }
 function fresh(time: number, now: number): boolean { return time <= now + 5000 && now - time <= interShardPolicy.reportMaxAge }
+function flagSnapshot(value: unknown): value is FlagDismantleSnapshot | null {
+    return value === null || isRecord(value) && typeof value.roomName === 'string' && /^[WE]\d+[NS]\d+$/.test(value.roomName) &&
+        point(value) && (value.hasWork === undefined || typeof value.hasWork === 'boolean')
+}
 function validStatus(value: unknown, task: TargetDismantleTask, shard: string, now: number): value is Status {
     return isRecord(value) && value.type === 'targetDismantleStatus' && value.missionId === task.key &&
         task.input.route.some(hop => hop.shard === shard || hop.destinationShard === shard) &&
         value.originShard === task.sourceShard && value.shard === shard && typeof value.updatedAt === 'number' &&
         Number.isInteger(value.generation) && fresh(value.updatedAt, now) && Array.isArray(value.units) && value.units.length <= 2 &&
+        (value.flag === undefined || flagSnapshot(value.flag)) &&
         value.units.every(unit => isRecord(unit) && typeof unit.name === 'string' && Number.isInteger(unit.generation) &&
             Number.isInteger(unit.index) && (unit.index as number) >= 0 && (unit.index as number) <= task.input.targets.length &&
             typeof unit.done === 'boolean' && typeof unit.boostFailed === 'boolean' && typeof unit.leaving === 'boolean')
@@ -119,77 +150,186 @@ function acceptUnit(task: TargetDismantleTask, unit: UnitStatus, shard: string, 
     lease.lastShard = shard; lease.seenAt = Math.max(lease.seenAt || 0, updatedAt); lease.expiresAt = now + interShardPolicy.leaseDuration
     lease.locationAt = Math.max(lease.locationAt, updatedAt); lease.leaving = unit.leaving; lease.confirmed = true
     task.index = Math.max(task.index, unit.index)
-    if (unit.done && !task.finishedAt) finish(task, 'completed')
+    if (unit.done && !task.input.flagName && !task.finishedAt) finish(task, 'completed')
     else if (unit.boostFailed && !task.finishedAt) pause(task, `Boost failed: ${unit.error || 'exact T3 boost preparation failed'}`)
     else if (task.state === 'active') task.reason = unit.error
 }
 
-/** Explicit route and exact barrier list; there is no general attack or builder fallback. */
+/** A named flag controls position; legacy explicit barrier lists remain supported. */
 export function createTargetDismantleTask(id: string, input: TargetDismantleTaskInput): string {
-    if (!interShardPolicy.enabled || typeof InterShardMemory === 'undefined') return '跨 shard 通信不可用'
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || !isRecord(input)) return '须指定 1..64 位任务 id 和有效配置'
     const existing = taskFor(id)
-    if (existing) return `精确拆除任务 ${id} 已存在（${existing.state}），不会重复派兵`
-    if (Object.values(allTasks()).filter(task => !task.finishedAt).length >= interShardPolicy.maximumTasks) return '精确拆除任务数量已达上限'
+    if (existing) return `拆迁任务 ${id} 已存在（${existing.state}），不会重复派兵`
+    if (Object.values(allTasks()).filter(task => !task.finishedAt).length >= interShardPolicy.maximumTasks) return '拆迁任务数量已达上限'
     const roomNames = /^[WE]\d+[NS]\d+$/
-    if (typeof input.sourceRoom !== 'string' || typeof input.targetRoom !== 'string' ||
-        !roomNames.test(input.sourceRoom) || !roomNames.test(input.targetRoom) || typeof input.targetShard !== 'string' ||
-        !input.targetShard || input.targetShard === Game.shard.name) return '须指定自有起点及另一个 shard 的目标房间'
+    const targetShard = input.targetShard ?? Game.shard.name, route = input.route ?? [], targets = input.targets ?? []
+    if (typeof input.sourceRoom !== 'string' || !roomNames.test(input.sourceRoom) || typeof targetShard !== 'string' || !targetShard ||
+        input.targetRoom !== undefined && (typeof input.targetRoom !== 'string' || !roomNames.test(input.targetRoom))) return '须指定自有起点及有效目标 shard/房间'
+    if (input.flagName !== undefined && (typeof input.flagName !== 'string' || !input.flagName || input.flagName.length > 100)) return '须指定有效旗名'
+    const remote = targetShard !== Game.shard.name
+    if (remote && !communicationAvailable()) return '跨 shard 通信不可用'
     const home = Game.rooms[input.sourceRoom]
     if (!home?.controller?.my || !home.find(FIND_MY_SPAWNS).length) return '起点须有自有 Spawn'
-    if (home.energyCapacityAvailable < BODY_COST) return '起点容量不足 4500，不能孵化 40 WORK / 10 MOVE'
-    if (!isPortalTravelData({ missionId: keyFor(id), originShard: Game.shard.name, route: input.route, hopIndex: 0 }) ||
-        !input.route?.length || input.route.length > 8 || input.route.some(hop => hop.shard === hop.destinationShard || !roomNames.test(hop.roomName)) ||
-        input.route[input.route.length - 1].destinationShard !== input.targetShard) return '须指定逐跳连通并到达目标 shard 的明确 Portal 路线'
-    if (!point(input.controller) || !Array.isArray(input.targets) || !input.targets.length || input.targets.length > 8 ||
-        input.targets.some(target => !isRecord(target) || typeof target.id !== 'string' || !target.id || !point(target) ||
+    const body = planDismantleBody(home, input)
+    if (body.error || !body.body.length || body.cost <= 0) return body.error || '起点容量不能孵化有效拆迁身体'
+    if (!isPortalTravelData({ missionId: keyFor(id), originShard: Game.shard.name, route, hopIndex: 0 }) ||
+        route.length > 8 || route.some(hop => hop.shard === hop.destinationShard || !roomNames.test(hop.roomName)) ||
+        (remote ? !route.length || route[route.length - 1].destinationShard !== targetShard : route.length !== 0))
+        return '须指定逐跳连通并到达目标 shard 的明确 Portal 路线；同 shard 不需要路线'
+    if (!input.flagName && (typeof input.targetRoom !== 'string' || !point(input.controller) || !Array.isArray(targets) || !targets.length || targets.length > 8 ||
+        targets.some(target => !isRecord(target) || typeof target.id !== 'string' || !target.id || !point(target) ||
             ![STRUCTURE_WALL, STRUCTURE_RAMPART].includes(target.type)) ||
-        new Set(input.targets.map(target => target.id)).size !== input.targets.length) return '须指定 controller 坐标及最多 8 个唯一的 wall/rampart ID 和坐标'
+        new Set(targets.map(target => target.id)).size !== targets.length)) return '须指定旗名，或 controller 坐标及最多 8 个唯一的 wall/rampart ID 和坐标'
     const budget = input.maxEnergy ?? DEFAULT_BUDGET
-    if (!Number.isSafeInteger(budget) || budget < BODY_COST) return '孵化能量预算须为至少 4500 的整数'
+    if (!Number.isSafeInteger(budget) || budget < body.cost) return `孵化能量预算须为至少 ${body.cost} 的整数`
     const now = Date.now(), key = `${keyFor(id)}:${now}:${Game.time}`
-    const task: TargetDismantleTask = { id, key, sourceShard: Game.shard.name, input: clone(input),
+    const normalized: NormalizedTaskInput = { ...input, targetShard, route, targets: input.flagName ? [] : targets }
+    const task: TargetDismantleTask = { id, key, sourceShard: Game.shard.name, input: clone(normalized),
         state: 'active', createdAt: now, updatedAt: now, generation: 0, spent: 0, maxEnergy: budget, index: 0 }
     const records = Memory.targetDismantleTasks || (Memory.targetDismantleTasks = {})
     records[key] = task; publish(task)
-    if (!flushInterShardMemory()) {
+    if (remote && !flushInterShardMemory()) {
         delete records[key]; delete getLocalShardState().reports?.[key]; markShardStateDirty()
         return `任务未创建：${getShardTransportError() || '跨 shard 命令无法写入'}`
     }
     pruneHistory()
-    return `已创建精确拆除任务 ${id}，一个名额持续补派，预算 ${budget} 能量`
+    return `已创建${input.flagName ? `旗帜拆迁任务 ${id}（${input.flagName}）` : `精确拆除任务 ${id}`}，一个名额持续补派，预算 ${budget} 能量`
 }
 
-export function listTargetDismantleTasks(): string {
-    const tasks = Object.values(allTasks())
+export function createFlagDismantleTask(home: string, flagName: string, options: FlagDismantleTaskOptions = {}): string {
+    if (!isRecord(options)) return '须指定有效拆迁选项'
+    if (typeof home !== 'string' || typeof flagName !== 'string' || !flagName ||
+        options.targetShard !== undefined && typeof options.targetShard !== 'string') return '须指定有效起点、旗名和目标 shard'
+    if (options.id !== undefined && typeof options.id !== 'string') return '须指定有效任务 id'
+    const identity = JSON.stringify([home, options.targetShard ?? Game.shard.name, flagName])
+    // Two independent hashes preserve arbitrary native flag names without replacement collisions.
+    let first = 2166136261, second = 5381
+    for (let index = 0; index < identity.length; index++) {
+        first = Math.imul(first ^ identity.charCodeAt(index), 16777619)
+        second = Math.imul(second, 33) ^ identity.charCodeAt(index)
+    }
+    const id = options.id ?? `flag_${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`
+    return createTargetDismantleTask(id, { ...options, sourceRoom: home, flagName })
+}
+
+export function listTargetDismantleTasks(id?: string): string {
+    const tasks = id === undefined ? Object.values(allTasks()) : [taskFor(id)].filter((task): task is TargetDismantleTask => !!task)
     return tasks.length ? tasks.map(task => `${task.id}: ${task.state}, ${task.sourceShard}/${task.input.sourceRoom} → ` +
-        `${task.input.targetShard}/${task.input.targetRoom}, 目标 ${task.index}/${task.input.targets.length}, ` +
-        `能量 ${task.spent}/${task.maxEnergy}, 单位 ${task.lease?.name || '无'}${task.reason ? `, ${task.reason}` : ''}`).join('\n') : '没有精确拆除任务'
+        `${task.input.targetShard}/${task.lastFlag?.roomName || task.input.targetRoom || '?'}, ` +
+        (task.input.flagName ? `旗 ${task.input.flagName}${task.lastFlag ? ` (${task.lastFlag.x},${task.lastFlag.y})` : ' 未放置'}, ` : `目标 ${task.index}/${task.input.targets.length}, `) +
+        `能量 ${task.spent}/${task.maxEnergy}, 单位 ${task.lease?.name || '无'}${task.reason ? `, ${task.reason}` : ''}`).join('\n') : '没有拆迁任务'
+}
+function flushTask(task: TargetDismantleTask): boolean { return !crossShard(task) || flushInterShardMemory() }
+export function pauseTargetDismantleTask(id: string): string {
+    const task = taskFor(id)
+    if (!task || task.sourceShard !== Game.shard.name) return '本 shard 未找到拆迁任务'
+    if (task.finishedAt) return `任务已 ${task.state}`
+    pause(task, 'Paused by source shard')
+    if (!flushTask(task)) return `已记录暂停 ${task.id}，远端广播尚未成功：${getShardTransportError() || '通信不可用'}`
+    return `已暂停 ${task.id}：保留现有单位名额，停止出生及拆除`
+}
+export function resumeTargetDismantleTask(id: string, options: { maxEnergy?: number } = {}): string {
+    const task = taskFor(id)
+    if (!task || task.sourceShard !== Game.shard.name) return '本 shard 未找到拆迁任务'
+    if (task.finishedAt) return `任务已 ${task.state}，请用新 id 创建任务`
+    if (!isRecord(options)) return '须指定有效恢复选项'
+    if (options.maxEnergy !== undefined) {
+        const home = Game.rooms[task.input.sourceRoom], body = home && planDismantleBody(home, task.input)
+        if (!Number.isSafeInteger(options.maxEnergy) || options.maxEnergy < task.spent || options.maxEnergy < (body?.cost || 1))
+            return '预算须为整数，且不能低于已花费能量或一个有效身体的出生成本'
+        task.maxEnergy = options.maxEnergy; task.input.maxEnergy = options.maxEnergy
+    }
+    task.state = 'active'; task.updatedAt = Date.now(); delete task.reason; publish(task)
+    if (!flushTask(task)) return `已记录恢复 ${task.id}，远端广播尚未成功：${getShardTransportError() || '通信不可用'}`
+    return `已恢复 ${task.id}：保留现有单位名额及代次，预算 ${task.maxEnergy}`
 }
 export function cancelTargetDismantleTask(id: string): string {
     const task = taskFor(id)
-    if (!task || task.sourceShard !== Game.shard.name) return '本 shard 未找到精确拆除任务'
+    if (!task || task.sourceShard !== Game.shard.name) return '本 shard 未找到拆迁任务'
     if (task.state === 'completed' || task.state === 'cancelled') return `任务已 ${task.state}`
     finish(task, 'cancelled', 'Cancelled by source shard')
-    if (!flushInterShardMemory()) return `已记录取消 ${task.id}，远端广播尚未成功：${getShardTransportError() || '通信不可用'}`
+    if (!flushTask(task)) return `已记录取消 ${task.id}，远端广播尚未成功：${getShardTransportError() || '通信不可用'}`
     return `已取消 ${task.id}：停止续派，远端单位收到命令后停止拆除并让出通道`
+}
+
+/** Pause time cannot exhaust an unfinished exact boost; shard clocks are never subtracted across portals. */
+function synchronizeBoostClock(creep: Creep): void {
+    const order = creep.memory.targetDismantle!, plan = creep.memory.boostPlan
+    if (!plan?.steps.length || plan.completed || plan.failed) { delete order.boostClock; return }
+    let clock = order.boostClock
+    const migrated = !!clock && clock.shard !== Game.shard.name || !clock && order.sourceShard !== Game.shard.name
+    const invalidClock = !!clock && clock.pausedAt !== undefined &&
+        (!Number.isSafeInteger(clock.pausedAt) || clock.pausedAt < 0 || clock.pausedAt > Game.time)
+    if (!clock || migrated || invalidClock) {
+        if ((migrated || invalidClock) && plan.startedAt !== undefined) plan.startedAt = Game.time
+        clock = order.boostClock = { shard: Game.shard.name }
+    }
+    if (order.controlState !== 'active') {
+        if (clock.pausedAt === undefined) clock.pausedAt = Game.time
+    } else if (clock.pausedAt !== undefined) {
+        if (plan.startedAt !== undefined) plan.startedAt = Math.min(Game.time, plan.startedAt + Game.time - clock.pausedAt)
+        delete clock.pausedAt
+    }
 }
 
 /** Called before creep execution. A missing source heartbeat stops movement/boosting/dismantling. */
 function synchronizeWorkers(commands: Map<string, Command>, now: number): void {
+    let changed = false
     for (const creep of Object.values(Game.creeps)) {
         const order = creep.memory.targetDismantle
         if (!order?.missionId || !order.sourceShard || order.generation === undefined) continue
+        const previous = order.controlState
         const source = commands.get(order.missionId)
         if (!source || !fresh(source.updatedAt, now)) {
-            order.controlState = 'paused'; order.lastError = 'Waiting for source command heartbeat'; continue
+            order.controlState = 'paused'; order.lastError = 'Waiting for source command heartbeat'
+            synchronizeBoostClock(creep); changed ||= previous !== order.controlState
+            continue
         }
         order.controlState = source.generation === order.generation ? source.state : 'cancelled'
+        if (order.controlState === 'active' && source.flagName) {
+            // The target shard sees flag movement immediately, even before its next report reaches the source.
+            const localFlag = source.targetShard === Game.shard.name ? getFlagDismantleSnapshot(source.flagName) : undefined
+            const idle = localFlag === null || localFlag?.hasWork === false || localFlag?.hasWork === undefined &&
+                !!localFlag && source.clearedFlag === flagSignature(localFlag)
+            if (source.targetShard === Game.shard.name ? idle : source.flagReady === false) {
+                order.controlState = 'paused'
+                order.lastError = 'Waiting for a placed flag with dismantle work'
+            } else if (order.lastError === 'Waiting for a placed flag with dismantle work') delete order.lastError
+        }
         if (order.controlState !== 'active') {
-            order.lastError = source.generation !== order.generation ? 'Superseded precise dismantle generation' : source.reason || `Task ${source.state}`
+            if (order.lastError !== 'Waiting for a placed flag with dismantle work' || source.state !== 'active')
+                order.lastError = source.generation !== order.generation ? 'Superseded precise dismantle generation' : source.reason || `Task ${source.state}`
             cancelCreepTransfers(creep)
         } else if (order.lastError === 'Waiting for source command heartbeat') delete order.lastError
+        synchronizeBoostClock(creep); changed ||= previous !== order.controlState
     }
+    if (changed) invalidateBoostRequestIndex()
+}
+
+function flagSignature(flag: FlagDismantleSnapshot): string { return `${flag.roomName}:${flag.x}:${flag.y}` }
+/** Report absence/cleared state even without workers; only a moved flag forgets an idle tile. */
+function updateFlag(task: TargetDismantleTask, peers: Map<string, ShardEnvelope | undefined>, now: number): boolean {
+    if (!task.input.flagName) return true
+    let flag: FlagDismantleSnapshot | null | undefined
+    if (!crossShard(task)) flag = getFlagDismantleSnapshot(task.input.flagName)
+    else {
+        const status = peers.get(task.input.targetShard)?.reports?.[`${task.key}:status`]
+        if (!validStatus(status, task, task.input.targetShard, now) || status.flag === undefined) {
+            task.reason = 'Waiting for a fresh target-shard flag report'; return false
+        }
+        flag = status.flag
+    }
+    task.lastFlag = flag && clone(flag)
+    if (!flag) { task.reason = `Waiting for flag ${task.input.flagName} on ${task.input.targetShard}`; return false }
+    const signature = flagSignature(flag)
+    if (task.clearedFlag && task.clearedFlag !== signature) delete task.clearedFlag
+    if (flag.hasWork === false) {
+        task.clearedFlag = signature; task.reason = 'Flag tile is clear; move the flag to the next dismantle position'; return false
+    }
+    if (flag.hasWork === undefined && task.clearedFlag === signature) {
+        task.reason = 'Previously cleared flag tile has no vision; move the flag to choose new work'; return false
+    }
+    return true
 }
 
 function reconcile(task: TargetDismantleTask, peers: Map<string, ShardEnvelope | undefined>, now: number): void {
@@ -237,11 +377,15 @@ function reconcile(task: TargetDismantleTask, peers: Map<string, ShardEnvelope |
     if (now >= lease.expiresAt && task.state === 'active') pause(task, 'Cross-shard heartbeat expired; death is unconfirmed, preserving the single slot')
 }
 
-function spawn(task: TargetDismantleTask, now: number): void {
+function spawn(task: TargetDismantleTask, now: number, flagReady = true): void {
     if (task.state !== 'active' || task.lease) return
-    if (task.spent + BODY_COST > task.maxEnergy) { pause(task, 'Native spawn energy budget exhausted'); return }
+    if (!flagReady) return
+    if (crossShard(task) && !communicationAvailable()) { task.reason = 'Waiting for cross-shard communication'; return }
     const room = Game.rooms[task.input.sourceRoom]
     if (!room?.controller?.my) { pause(task, 'Source room is no longer owned'); return }
+    const selected = planDismantleBody(room, task.input)
+    if (selected.error || !selected.body.length || selected.cost <= 0) { pause(task, selected.error || 'Cannot select a valid dismantle body'); return }
+    if (task.spent + selected.cost > task.maxEnergy) { pause(task, 'Native spawn energy budget exhausted'); return }
     if (isRoomEvacuating(room) || Memory.warMode?.[room.name] || room.enemies?.length) {
         task.reason = 'Waiting for source evacuation/hostilities to clear'; return
     }
@@ -249,19 +393,22 @@ function spawn(task: TargetDismantleTask, now: number): void {
         const config = room.memory.creepConfig?.[name]
         return !!config && !Game.creeps[name] && config.spawnPriority < 3.5
     })) { task.reason = 'Waiting for higher-priority economy or defense spawn demands'; return }
-    if (room.energyAvailable < BODY_COST) { task.reason = 'Waiting for 4500 spawn energy'; return }
+    if (room.energyAvailable < selected.cost) { task.reason = `Waiting for ${selected.cost} spawn energy`; return }
     const nativeSpawn = room.find(FIND_MY_SPAWNS).find(candidate => !candidate.spawning && !isTargetDismantleSpawnReserved(candidate))
     if (!nativeSpawn) { task.reason = 'Waiting for an idle Spawn'; return }
-    const plan = boostPlan()
-    if (!canPrepareBoosts(room, plan)) { task.reason = 'Waiting for exact T3 boosts: XZH2O 1200 / XZHO2 300'; return }
+    const plan = selected.boostPlan
+    if (plan.steps.length && !canPrepareBoosts(room, plan)) {
+        task.reason = `Waiting for exact T${plan.tier} boosts: ${plan.steps.map(step => `${step.resource} ${step.parts * 30}`).join(' / ')}`; return
+    }
     const generation = task.generation + 1, name = `td_${task.id}_${task.createdAt.toString(36)}_${generation}_${Game.time}`
     const data: PortalTravelData = { missionId: task.key, originShard: task.sourceShard, route: clone(task.input.route), hopIndex: 0 }
     const order: TargetDismantleOrder = { missionId: task.key, sourceShard: task.sourceShard, generation, controlState: 'active',
-        targetShard: task.input.targetShard, targetRoom: task.input.targetRoom, targets: clone(task.input.targets), controller: clone(task.input.controller) }
+        targetShard: task.input.targetShard, targetRoom: task.lastFlag?.roomName || task.input.targetRoom || room.name,
+        flagName: task.input.flagName, targets: clone(task.input.targets),
+        ...(task.input.controller ? { controller: clone(task.input.controller) } : {}) }
     const memory: CreepMemory = { name, displayName: task.id, role: 'sBuilder', spawnRoom: room.name, spawnPriority: 3.5,
         ready: false, working: false, data, boostPlan: plan, targetDismantle: order }
-    const body: BodyPartConstant[] = [...Array<BodyPartConstant>(40).fill(WORK), ...Array<BodyPartConstant>(10).fill(MOVE)]
-    const result = nativeSpawn.spawnCreep(body, name, { memory })
+    const result = nativeSpawn.spawnCreep(selected.body, name, { memory })
     if (result !== OK) { task.reason = `Native spawn rejected (${result})`; return }
     if (spawnReservationTick !== Game.time || spawnReservationShard !== Game.shard.name) {
         spawnReservationTick = Game.time; spawnReservationShard = Game.shard.name; spawnReservations = new Set()
@@ -269,16 +416,16 @@ function spawn(task: TargetDismantleTask, now: number): void {
     }
     spawnReservations.add(nativeSpawn.id)
     spawnRoomReservations.add(room.name)
-    task.generation = generation; task.spent += BODY_COST; task.updatedAt = now; delete task.reason
+    task.generation = generation; task.spent += selected.cost; task.updatedAt = now; delete task.reason
     task.lease = { name, generation, createdAt: now, expiresAt: now + interShardPolicy.leaseDuration,
         lastShard: Game.shard.name, locationAt: now }
     publish(task)
-    reserveBoostPlan(room, name, plan)
+    if (plan.steps.length) reserveBoostPlan(room, name, plan)
 }
 
 function pruneHistory(): void {
     const records = allTasks(), done = Object.values(records).filter(task => task.finishedAt).sort((a, b) => b.finishedAt! - a.finishedAt!)
-    const now = Date.now(), reports = getLocalShardState().reports
+    const now = Date.now(), reports = communicationAvailable() ? getLocalShardState().reports : undefined
     for (let index = 0; index < done.length; index++) {
         const task = done[index]
         if (index < HISTORY_LIMIT && now - task.finishedAt! < interShardPolicy.arrivalHistoryTtl) continue
@@ -295,38 +442,53 @@ function pruneHistory(): void {
 
 /** Source owns spawning; every route shard emits alive/empty reports and enforces source commands. */
 export function runTargetDismantleControl(): void {
-    if (!interShardPolicy.enabled || typeof InterShardMemory === 'undefined') return
     const tasks = Object.values(allTasks()), workers = Object.values(Game.creeps).filter(creep => !!creep.memory.targetDismantle?.missionId)
+    const communication = communicationAvailable()
     const heartbeat = Game.time % interShardPolicy.reportInterval === 0
-    if (!tasks.length && !workers.length && !knownRemoteTasks && !heartbeat) return
+    if (!tasks.length && !workers.length && (!communication || !knownRemoteTasks && !heartbeat)) return
     // Peers may own a task even when this shard has no workers; cached transport reads stay bounded to four.
-    const peers = new Set(interShardPolicy.peers)
+    const peers = new Set(communication ? interShardPolicy.peers : [])
     for (const task of tasks) for (const hop of task.input.route) { peers.add(hop.shard); peers.add(hop.destinationShard) }
     for (const creep of workers) if (creep.memory.targetDismantle?.sourceShard) peers.add(creep.memory.targetDismantle.sourceShard)
     peers.delete(Game.shard.name)
-    const states = new Map(Array.from(peers, peer => [peer, readRemoteShardState(peer)] as const)), now = Date.now()
-    for (const task of tasks) if (task.sourceShard === Game.shard.name) { reconcile(task, states, now); spawn(task, now); publish(task, heartbeat) }
+    const states = new Map<string, ShardEnvelope | undefined>(communication ? Array.from(peers, peer => [peer, readRemoteShardState(peer)] as const) : [])
+    const now = Date.now()
+    for (const task of tasks) if (task.sourceShard === Game.shard.name) {
+        reconcile(task, states, now)
+        const ready = task.state === 'active' ? updateFlag(task, states, now) : false
+        if (task.input.flagName && task.state === 'active') task.flagReady = ready
+        spawn(task, now, ready); publish(task, heartbeat)
+    }
     const commands = new Map<string, Command>()
-    for (const [shard, state] of [...states, [Game.shard.name, getLocalShardState()] as const]) {
+    for (const [shard, state] of [...states, ...(communication ? [[Game.shard.name, getLocalShardState()] as const] : [])]) {
         for (const value of Object.values(state?.reports || {})) if (command(value, shard, now)) commands.set(value.missionId, value)
     }
-    knownRemoteTasks = Array.from(commands.values()).some(source => source.originShard !== Game.shard.name &&
+    // Same-shard control never depends on InterShardMemory, its policy, or an old serialized heartbeat.
+    for (const task of tasks) if (task.sourceShard === Game.shard.name) {
+        const local = commandFor(task, now)
+        if (crossShard(task) && !communication) { local.state = 'paused'; local.reason = 'Waiting for cross-shard communication' }
+        commands.set(task.key, local)
+    }
+    knownRemoteTasks = communication && Array.from(commands.values()).some(source => source.originShard !== Game.shard.name &&
         source.route.some(hop => hop.shard === Game.shard.name || hop.destinationShard === Game.shard.name))
     synchronizeWorkers(commands, now)
-    const localState = getLocalShardState()
+    const localState = communication ? getLocalShardState() : undefined
     for (const source of commands.values()) {
+        if (!localState) break
         if (!source.route.some(hop => hop.shard === Game.shard.name || hop.destinationShard === Game.shard.name)) continue
         const reports = localState.reports || (localState.reports = {})
         const units = workers.filter(creep => creep.memory.targetDismantle?.missionId === source.missionId).map(unitStatus)
         const key = `${source.missionId}:status`, previous = reports[key]
         const next: Status = { type: 'targetDismantleStatus', missionId: source.missionId, originShard: source.originShard,
             shard: Game.shard.name, generation: source.generation, updatedAt: now, units }
+        if (source.flagName && source.targetShard === Game.shard.name) next.flag = getFlagDismantleSnapshot(source.flagName)
         // TTL changes every tick; identity, progress and errors trigger immediate reports, TTL only the periodic heartbeat.
         const stable = (values: unknown) => Array.isArray(values) ? values.map(value => {
             if (!isRecord(value)) return value
             const { ttl, ...unit } = value; return unit
         }) : undefined
         if (heartbeat || !isRecord(previous) || previous.generation !== source.generation ||
+            JSON.stringify(previous.flag) !== JSON.stringify(next.flag) ||
             JSON.stringify(stable(previous.units)) !== JSON.stringify(stable(units))) {
             reports[key] = next; markShardStateDirty()
         }

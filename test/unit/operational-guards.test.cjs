@@ -30,7 +30,8 @@ function spawnWorld(body = ['move']) {
             role: { isRoleSupported: role => ['harvester', 'builder', 'manager'].includes(role) },
             'creep/bodySelection': { selectCreepBody(room, config, force) {
                 bodyCalls.push(force); return { body, boostPlan: { tier: 0, steps: [] } } } },
-            'creep/boosting': { reserveBoostPlan() {} }
+            'creep/boosting': { reserveBoostPlan() {} },
+            'shard/targetDismantleControl': { isTargetDismantleSpawnReserved: () => false }
         }
     });
     const SpawnExtension = loader.load('mount/structure/SpawnExtension').default;

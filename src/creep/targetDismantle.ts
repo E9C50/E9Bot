@@ -1,19 +1,26 @@
 import { isCombatHostile, isInvulnerable } from 'combat/intelligence'
+import { creepWhiteList } from 'settings/settings'
 import { travelPortalRoute } from 'shard/travel'
 import { isPortalTravelData } from 'shard/types'
 
 export interface DismantleTarget { id: string; x: number; y: number; type: 'rampart' | 'constructedWall' }
+export interface FlagDismantleSnapshot { roomName: string; x: number; y: number; hasWork?: boolean }
 export interface TargetDismantleOrder {
     /** Optional persistent controller identity; old explicit one-unit orders remain supported. */
     missionId?: string
     sourceShard?: string
     generation?: number
     controlState?: 'active' | 'paused' | 'completed' | 'cancelled'
+    /** Boost timeout uses local shard ticks; paused ticks are excluded before resuming. */
+    boostClock?: { shard: string; pausedAt?: number }
     targetShard: string
     targetRoom: string
+    /** Resolve only on targetShard. Moving the flag changes the one tile this worker may dismantle. */
+    flagName?: string
     targets: DismantleTarget[]
-    controller: { x: number; y: number }
-    waitPos?: { x: number; y: number }
+    controller?: { x: number; y: number }
+    lastFlagPos?: { roomName: string; x: number; y: number }
+    waitPos?: { x: number; y: number; roomName?: string }
     index?: number
     done?: boolean
     lastError?: string
@@ -26,13 +33,45 @@ function coordinates(value: { x: number; y: number } | undefined): boolean {
         value.x >= 0 && value.x < 50 && value.y >= 0 && value.y < 50
 }
 function valid(order: TargetDismantleOrder): boolean {
+    const flag = typeof order.flagName === 'string' && !!order.flagName
     return typeof order.targetShard === 'string' && !!order.targetShard &&
-        typeof order.targetRoom === 'string' && /^[WE]\d+[NS]\d+$/.test(order.targetRoom) &&
-        Array.isArray(order.targets) && order.targets.length > 0 && order.targets.length <= 8 &&
+        (order.flagName === undefined || flag) && typeof order.targetRoom === 'string' &&
+        (flag && order.targetRoom === '' || /^[WE]\d+[NS]\d+$/.test(order.targetRoom)) &&
+        Array.isArray(order.targets) && (flag || order.targets.length > 0) && order.targets.length <= 8 &&
         order.targets.every(target => target && typeof target.id === 'string' && !!target.id && coordinates(target) &&
-            (target.type === STRUCTURE_RAMPART || target.type === STRUCTURE_WALL)) && coordinates(order.controller) &&
-        (order.waitPos === undefined || coordinates(order.waitPos)) &&
+            (target.type === STRUCTURE_RAMPART || target.type === STRUCTURE_WALL)) &&
+        (flag ? order.controller === undefined || coordinates(order.controller) : coordinates(order.controller)) &&
+        (order.lastFlagPos === undefined || coordinates(order.lastFlagPos) && /^[WE]\d+[NS]\d+$/.test(order.lastFlagPos.roomName)) &&
+        (order.waitPos === undefined || coordinates(order.waitPos) &&
+            (order.waitPos.roomName === undefined || /^[WE]\d+[NS]\d+$/.test(order.waitPos.roomName))) &&
         (order.index === undefined || Number.isInteger(order.index) && order.index >= 0 && order.index <= order.targets.length)
+}
+
+// These are the native dismantle targets. Controller, portals, banks, lairs and invader cores reject WORK intents.
+const dismantleTypes = new Set(['spawn', 'extension', 'road', 'constructedWall', 'rampart', 'link', 'storage',
+    'tower', 'observer', 'powerSpawn', 'extractor', 'lab', 'terminal', 'container', 'nuker', 'factory'])
+
+function flagTarget(room: Room, x: number, y: number): Structure | undefined {
+    if (room.controller?.my || room.controller?.owner && creepWhiteList.includes(room.controller.owner.username)) return undefined
+    const candidates = room.lookForAt(LOOK_STRUCTURES, x, y).filter(structure => {
+        if (!dismantleTypes.has(structure.structureType) || !(structure.hits > 0)) return false
+        const owned = structure as Structure & { my?: boolean; owner?: Owner }
+        if (owned.my === true) return false
+        if (owned.owner) return isCombatHostile(structure, room)
+        return structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART ||
+            structure.structureType === STRUCTURE_ROAD || structure.structureType === STRUCTURE_CONTAINER
+    })
+    const priority = (structure: Structure) => structure.structureType === STRUCTURE_RAMPART ? 0 :
+        structure.structureType === STRUCTURE_WALL ? 1 : 2
+    return candidates.sort((first, second) => priority(first) - priority(second) || first.id.localeCompare(second.id))[0]
+}
+
+/** A missing flag and an unseen flag room remain distinct from a visible tile with no work. */
+export function getFlagDismantleSnapshot(flagName: string): FlagDismantleSnapshot | null {
+    const flag = Game.flags?.[flagName]
+    if (!flag) return null
+    const { roomName, x, y } = flag.pos, room = Game.rooms[roomName]
+    return { roomName, x, y, ...(room ? { hasWork: !!flagTarget(room, x, y) } : {}) }
 }
 function passable(room: Room, x: number, y: number): boolean {
     if (x < 0 || y < 0 || x > 49 || y > 49 || room.getTerrain().get(x, y) & TERRAIN_MASK_WALL) return false
@@ -58,11 +97,22 @@ function controllerReachable(creep: Creep, controller: StructureController): boo
 }
 function park(creep: Creep, order: TargetDismantleOrder): void {
     const room = creep.room
-    if (room.name !== order.targetRoom) return
-    if (order.waitPos && (!passable(room, order.waitPos.x, order.waitPos.y) ||
-        Math.max(Math.abs(order.waitPos.x - order.controller.x), Math.abs(order.waitPos.y - order.controller.y)) <= 2 ||
+    const anchor = Game.shard.name !== order.targetShard ? undefined : order.flagName ?
+        order.lastFlagPos?.roomName === room.name ? order.lastFlagPos : undefined :
+        room.name === order.targetRoom ? order.controller : undefined
+    const structures = room.structures || room.find(FIND_STRUCTURES)
+    const suitable = (x: number, y: number) => passable(room, x, y) && x > 0 && x < 49 && y > 0 && y < 49 &&
+        (!anchor || Math.max(Math.abs(x - anchor.x), Math.abs(y - anchor.y)) > 2) &&
+        !structures.some(structure => structure.structureType === STRUCTURE_SPAWN &&
+            Math.max(Math.abs(x - structure.pos.x), Math.abs(y - structure.pos.y)) <= 2) &&
+        !room.lookForAt(LOOK_STRUCTURES, x, y).some(structure => structure.structureType === STRUCTURE_ROAD)
+    if (order.waitPos && (order.waitPos.roomName !== undefined && order.waitPos.roomName !== room.name ||
+        Math.max(Math.abs(order.waitPos.x - creep.pos.x), Math.abs(order.waitPos.y - creep.pos.y)) > 5 ||
+        !suitable(order.waitPos.x, order.waitPos.y) ||
         room.lookForAt(LOOK_CREEPS, order.waitPos.x, order.waitPos.y).some(unit => unit.name !== creep.name) ||
         room.lookForAt(LOOK_POWER_CREEPS, order.waitPos.x, order.waitPos.y).length > 0)) delete order.waitPos
+    // Older orders stored only x/y; retain a nearby valid tile and bind it to this room.
+    if (order.waitPos) order.waitPos.roomName = room.name
     if (!order.waitPos) {
         // Leave the opened passage empty for the reserver, without walking through another barrier.
         const queue = [creep.pos], seen = new Set([creep.pos.x * 50 + creep.pos.y])
@@ -70,10 +120,8 @@ function park(creep: Creep, order: TargetDismantleOrder): void {
             const point = queue[index]
             const empty = !room.lookForAt(LOOK_CREEPS, point.x, point.y).some(unit => unit.name !== creep.name) &&
                 room.lookForAt(LOOK_POWER_CREEPS, point.x, point.y).length === 0
-            if (point.x > 0 && point.x < 49 && point.y > 0 && point.y < 49 && empty &&
-                Math.max(Math.abs(point.x - order.controller.x), Math.abs(point.y - order.controller.y)) > 2 &&
-                !room.lookForAt(LOOK_STRUCTURES, point.x, point.y).some(structure => structure.structureType === STRUCTURE_ROAD)) {
-                order.waitPos = { x: point.x, y: point.y }; break
+            if (empty && suitable(point.x, point.y)) {
+                order.waitPos = { x: point.x, y: point.y, roomName: room.name }; break
             }
             for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
                 const x = point.x + dx, y = point.y + dy, key = x * 50 + y
@@ -86,13 +134,39 @@ function park(creep: Creep, order: TargetDismantleOrder): void {
         creep.moveTo(new RoomPosition(order.waitPos.x, order.waitPos.y, room.name), { range: 0, ignoreCreeps: false })
 }
 
+function runFlagDismantle(creep: Creep, order: TargetDismantleOrder): void {
+    const snapshot = getFlagDismantleSnapshot(order.flagName!)
+    if (!snapshot) {
+        order.lastError = 'Waiting for the dismantle flag'; park(creep, order); return
+    }
+    if (!order.lastFlagPos || snapshot.roomName !== order.lastFlagPos.roomName || snapshot.x !== order.lastFlagPos.x ||
+        snapshot.y !== order.lastFlagPos.y) delete order.waitPos
+    order.lastFlagPos = { roomName: snapshot.roomName, x: snapshot.x, y: snapshot.y }
+    order.targetRoom = snapshot.roomName
+    // Clear an old completion marker on resumed flag orders: the flag remains an adjustable target.
+    delete order.done
+    if (creep.room.name !== snapshot.roomName) {
+        delete order.lastError
+        creep.moveTo(new RoomPosition(snapshot.x, snapshot.y, snapshot.roomName), { range: 1 }); return
+    }
+    const room = creep.room, target = flagTarget(room, snapshot.x, snapshot.y)
+    if (!target) { order.lastError = 'Flag tile is clear; waiting for the flag to move'; park(creep, order); return }
+    if (room.controller?.safeMode && !room.controller.my) { order.lastError = 'Target is in safe mode'; return }
+    if (isInvulnerable(target)) { order.lastError = 'Flag target is invulnerable'; return }
+    const result = creep.dismantle(target)
+    if (result === ERR_NOT_IN_RANGE) {
+        const move = creep.moveTo(target, { range: 1, maxRooms: 1, ignoreCreeps: false })
+        order.lastError = move === ERR_NO_PATH ? 'No path to the flag tile; no other tile will be dismantled' : undefined
+    } else order.lastError = result === OK ? undefined : `dismantle rejected (${result})`
+}
+
 /** Explicit one-creep order. Returning true also consumes invalid, blocked and completed orders. */
 export function runTargetDismantle(creep: Creep): boolean {
     const order = creep.memory.targetDismantle
     if (!order) return false
     creep.memory.dontPullMe = false
     if (!valid(order)) { order.lastError = 'Invalid precise dismantle order'; return true }
-    if (order.done) { park(creep, order); return true }
+    if (order.done && !order.flagName) { park(creep, order); return true }
     if (order.controlState && order.controlState !== 'active') { park(creep, order); return true }
     if (creep.memory.boostPlan?.failed) { order.lastError = 'Boost preparation failed'; return true }
     if (creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed) {
@@ -105,6 +179,7 @@ export function runTargetDismantle(creep: Creep): boolean {
     const travel = travelPortalRoute(creep, data)
     if (travel.status !== 'arrived') { order.lastError = travel.message || 'Travelling to the target shard'; return true }
     if (Game.shard.name !== order.targetShard) { order.lastError = 'Portal route ended on another shard'; return true }
+    if (order.flagName) { runFlagDismantle(creep, order); return true }
     if (creep.room.name !== order.targetRoom) {
         delete order.lastError
         creep.moveTo(new RoomPosition(25, 25, order.targetRoom), { range: 20 }); return true
@@ -128,7 +203,7 @@ export function runTargetDismantle(creep: Creep): boolean {
         return true
     }
     const controller = room.controller
-    if (!controller || controller.pos.x !== order.controller.x || controller.pos.y !== order.controller.y) {
+    if (!controller || controller.pos.x !== order.controller!.x || controller.pos.y !== order.controller!.y) {
         order.lastError = 'Expected controller is not present'; return true
     }
     if (order.lastPathCheck !== undefined && Game.time - order.lastPathCheck < 25) return true

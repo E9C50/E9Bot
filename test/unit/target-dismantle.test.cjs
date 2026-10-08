@@ -47,6 +47,206 @@ function completePathFinder(w) {
     return () => searches;
 }
 
+function flagWorld(options = {}) {
+    const w = world(options), flagName = 'yellow-demolition';
+    w.game.flags = { [flagName]: { pos: w.position(11, 36, roomName) } };
+    w.unit.memory.targetDismantle = { targetShard: w.game.shard.name, targetRoom: '', targets: [], flagName };
+    w.flagName = flagName;
+    w.moveFlag = (x, y, name = roomName) => { w.game.flags[flagName] = { pos: w.position(x, y, name) }; };
+    w.snapshot = () => w.loader.load('creep/targetDismantle').getFlagDismantleSnapshot(flagName);
+    return w;
+}
+
+test('flag snapshots distinguish missing flags, unseen rooms, visible empty tiles and dismantle targets', () => {
+    const w = flagWorld();
+    assert.deepEqual({ ...w.snapshot() }, { roomName, x: 11, y: 36, hasWork: true });
+    w.moveFlag(20, 20);
+    assert.deepEqual({ ...w.snapshot() }, { roomName, x: 20, y: 20, hasWork: false });
+    w.moveFlag(20, 20, 'E42N5');
+    assert.deepEqual({ ...w.snapshot() }, { roomName: 'E42N5', x: 20, y: 20 });
+    delete w.game.flags[w.flagName];
+    assert.equal(w.snapshot(), null);
+});
+
+test('flag orders have no fixed room or controller and only dismantle the flag tile, with rampart cover first', () => {
+    const w = flagWorld();
+    w.structure('protected-spawn', 'spawn', { roomName, x: 11, y: 36 });
+    w.structure('neighbour-wall', 'constructedWall', { roomName, x: 12, y: 35, owner: null });
+    assert.equal(w.run(), true);
+    assert.deepEqual(w.unit.actions, [{ kind: 'dismantle', target: w.barrier.id }]);
+    assert.equal(w.unit.memory.targetDismantle.targetRoom, roomName);
+    w.remove(w.barrier); w.unit.actions.length = 0; w.run();
+    assert.deepEqual(w.unit.actions, [{ kind: 'dismantle', target: 'protected-spawn' }]);
+    assert.equal(w.unit.memory.targetDismantle.done, undefined);
+});
+
+test('moving the flag changes the dismantle tile immediately without finishing or advancing a fixed target list', () => {
+    const w = flagWorld();
+    const other = w.structure('new-location', 'constructedWall', { roomName, x: 12, y: 35, owner: null });
+    w.run(); w.unit.actions.length = 0;
+    w.moveFlag(12, 35); w.run();
+    assert.deepEqual(w.unit.actions, [{ kind: 'dismantle', target: other.id }]);
+    assert.deepEqual({ ...w.unit.memory.targetDismantle.lastFlagPos }, { roomName, x: 12, y: 35 });
+    assert.equal(w.unit.memory.targetDismantle.index, undefined);
+    assert.equal(w.unit.memory.targetDismantle.done, undefined);
+});
+
+test('moving the flag to another room updates the approach room and never dismantles the previous room tile', () => {
+    const w = flagWorld(); w.run(); w.unit.actions.length = 0;
+    w.unit.memory.targetDismantle.waitPos = { x: 13, y: 39 };
+    w.newRoom('E42N5'); w.moveFlag(20, 21, 'E42N5'); w.run();
+    assert.equal(w.unit.memory.targetDismantle.targetRoom, 'E42N5');
+    assert.equal(w.unit.memory.targetDismantle.waitPos, undefined);
+    assert.equal(w.unit.actions.length, 1);
+    assert.equal(w.unit.actions[0].kind, 'moveTo');
+    assert.deepEqual(w.unit.actions[0].pos, w.position(20, 21, 'E42N5'));
+    assert.equal(w.unit.actions[0].options.range, 1);
+});
+
+test('a flag in an unseen room can direct the worker there without declaring its tile clear', () => {
+    const w = flagWorld(); w.moveFlag(20, 21, 'E42N5');
+    assert.equal(w.snapshot().hasWork, undefined);
+    w.run();
+    assert.equal(w.unit.actions.at(-1).pos.roomName, 'E42N5');
+    assert.equal(w.unit.memory.targetDismantle.done, undefined);
+});
+
+test('an empty flag tile parks off roads and away from the flag; moving or replacing the flag resumes work', () => {
+    const w = flagWorld();
+    w.moveFlag(12, 36); w.structure('traffic-road', 'road', { roomName, x: 12, y: 36, owner: null });
+    // Roads are legal targets; clear this tile first, then leave it available to normal traffic.
+    const road = w.byId.get('traffic-road'); w.remove(road);
+    w.structure('beside-road', 'road', { roomName, x: 13, y: 36, owner: null });
+    w.run();
+    const order = w.unit.memory.targetDismantle;
+    assert.ok(order.waitPos);
+    assert.ok(Math.max(Math.abs(order.waitPos.x - 12), Math.abs(order.waitPos.y - 36)) > 2);
+    assert.equal(w.room.lookForAt('structure', order.waitPos.x, order.waitPos.y).some(s => s.structureType === 'road'), false);
+    assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false);
+    assert.equal(order.done, undefined);
+    delete w.game.flags[w.flagName]; w.unit.actions.length = 0; w.run();
+    assert.match(order.lastError, /Waiting for the dismantle flag/);
+    assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false);
+    w.moveFlag(11, 36); w.unit.actions.length = 0; w.run();
+    assert.deepEqual(w.unit.actions, [{ kind: 'dismantle', target: w.barrier.id }]);
+    assert.equal(order.waitPos, undefined);
+});
+
+test('a same-named source-shard flag cannot retarget a worker before its portal route arrives on the target shard', () => {
+    const w = flagWorld();
+    w.unit.memory.targetDismantle.targetShard = 'shard2';
+    w.travel.status = 'moving'; w.run();
+    assert.equal(w.unit.memory.targetDismantle.targetRoom, '');
+    assert.equal(w.unit.memory.targetDismantle.lastFlagPos, undefined);
+    assert.equal(w.unit.actions.length, 0);
+    w.travel.status = 'arrived'; w.run();
+    assert.match(w.unit.memory.targetDismantle.lastError, /another shard/);
+    assert.equal(w.unit.memory.targetDismantle.lastFlagPos, undefined);
+    assert.equal(w.unit.actions.length, 0);
+    w.game.shard.name = 'shard2'; w.run();
+    assert.equal(w.unit.actions.at(-1).target, w.barrier.id);
+});
+
+test('paused, cancelled and failed-boost flag workers never travel or dismantle', () => {
+    for (const state of ['paused', 'cancelled', 'completed', 'failed']) {
+        const w = flagWorld();
+        if (state === 'failed') w.unit.memory.boostPlan.failed = true;
+        else w.unit.memory.targetDismantle.controlState = state;
+        w.run();
+        assert.equal(w.calls.length, 0, state);
+        assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false, state);
+    }
+});
+
+test('cancelling during travel parks outside the spawn apron without needing a controller or target-room vision', () => {
+    const w = flagWorld();
+    w.unit.pos = w.position(25, 25, 'E41N6'); w.newRoom('E41N6');
+    w.structure('home-spawn', 'spawn', { roomName: 'E41N6', x: 24, y: 25, my: true });
+    w.structure('home-road', 'road', { roomName: 'E41N6', x: 25, y: 25, owner: null });
+    w.unit.memory.targetDismantle.controlState = 'cancelled';
+    w.run();
+    const wait = w.unit.memory.targetDismantle.waitPos;
+    assert.ok(wait);
+    assert.ok(Math.max(Math.abs(wait.x - 24), Math.abs(wait.y - 25)) > 2);
+    assert.equal(w.unit.actions.at(-1).kind, 'moveTo');
+    assert.equal(w.calls.length, 0);
+});
+
+test('pausing after crossing rooms replaces the previous room parking tile with a nearby tile', () => {
+    for (const legacy of [false, true]) {
+        const w = flagWorld();
+        w.moveFlag(20, 20); w.unit.pos = w.position(21, 20, roomName); w.run();
+        const order = w.unit.memory.targetDismantle, previous = { ...order.waitPos };
+        assert.equal(previous.roomName, roomName);
+        if (legacy) delete order.waitPos.roomName;
+        w.newRoom('E41N6'); w.unit.pos = w.position(40, 40, 'E41N6');
+        order.controlState = 'paused'; w.unit.actions.length = 0; w.calls.length = 0;
+        w.run();
+        assert.equal(order.waitPos.roomName, 'E41N6');
+        assert.ok(Math.max(Math.abs(order.waitPos.x - 40), Math.abs(order.waitPos.y - 40)) <= 5);
+        assert.ok(order.waitPos.x !== previous.x || order.waitPos.y !== previous.y);
+        assert.equal(w.calls.length, 0);
+        assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false);
+        assert.equal(w.unit.actions.some(a => a.kind === 'moveTo' && a.pos.roomName !== 'E41N6'), false);
+    }
+});
+
+test('illegal native targets, friendly ownership and adjacent targets are clear flag tiles with no dismantle intent', () => {
+    for (const type of ['controller', 'portal', 'powerBank', 'keeperLair', 'invaderCore', 'unknown-structure']) {
+        const w = flagWorld(); w.remove(w.barrier);
+        w.structure(`banned-${type}`, type, { roomName, x: 11, y: 36 });
+        assert.equal(w.snapshot().hasWork, false, type);
+        w.run();
+        assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false, type);
+    }
+    for (const owner of ['mine', 'whitelist', 'friendly-room', 'own-room']) {
+        const w = flagWorld();
+        if (owner === 'mine') w.barrier.my = true;
+        if (owner === 'whitelist') w.barrier.owner.username = 'NoName_';
+        if (owner === 'friendly-room') w.room.controller.owner = { username: 'NoName_' };
+        if (owner === 'own-room') w.room.controller.my = true;
+        assert.equal(w.snapshot().hasWork, false, owner);
+        w.run();
+        assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false, owner);
+    }
+    const w = flagWorld(); w.moveFlag(12, 36); w.run();
+    assert.equal(w.snapshot().hasWork, false);
+    assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), false);
+});
+
+test('unowned roads and containers are dismantle targets only outside own and allied rooms', () => {
+    for (const type of ['road', 'container']) for (const owner of ['enemy', 'mine', 'whitelist']) {
+        const w = flagWorld(); w.remove(w.barrier);
+        w.structure(`unowned-${type}`, type, { roomName, x: 11, y: 36, owner: null });
+        if (owner === 'mine') w.room.controller.my = true;
+        if (owner === 'whitelist') w.room.controller.owner = { username: 'NoName_' };
+        w.run();
+        assert.equal(w.snapshot().hasWork, owner === 'enemy', `${type} ${owner}`);
+        assert.equal(w.unit.actions.some(a => a.kind === 'dismantle'), owner === 'enemy', `${type} ${owner}`);
+    }
+});
+
+test('safe mode and invulnerability preserve flag work but block dismantle intents', () => {
+    const w = flagWorld();
+    w.barrier.effects = [{ effect: 1001, ticksRemaining: 10 }]; w.run();
+    assert.equal(w.snapshot().hasWork, true);
+    assert.match(w.unit.memory.targetDismantle.lastError, /invulnerable/);
+    w.barrier.effects = []; w.room.controller.safeMode = 100; w.run();
+    assert.equal(w.snapshot().hasWork, true);
+    assert.match(w.unit.memory.targetDismantle.lastError, /safe mode/);
+    assert.equal(w.unit.actions.length, 0);
+});
+
+test('flag targets use native range-one movement and refuse to breach any other tile when no route exists', () => {
+    const w = flagWorld(); w.unit.pos = w.position(20, 20, roomName);
+    w.unit.moveTo = (target, options) => { w.unit.actions.push({ kind: 'moveTo', target: target.id, options }); return -2; };
+    w.run();
+    assert.equal(w.unit.actions.at(-1).target, w.barrier.id);
+    assert.equal(w.unit.actions.at(-1).options.range, 1);
+    assert.match(w.unit.memory.targetDismantle.lastError, /No path to the flag tile/);
+    assert.equal(w.unit.memory.targetDismantle.done, undefined);
+});
+
 test('ordinary units are untouched, while invalid explicit orders are consumed without falling into Builder work', () => {
     const w = world();
     delete w.unit.memory.targetDismantle;

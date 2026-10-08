@@ -134,6 +134,38 @@ test('boost helpers import without Game and native empty plans skip legacy defau
     assert.equal(w.calls.length, 0);
 });
 
+test('paused, completed and cancelled dismantle orders release boost requests and never submit native boost intents', () => {
+    for (const state of ['paused', 'completed', 'cancelled']) {
+        const w = world(), plan = w.plan(3, 'boostDismantle', 2), unit = w.creep('yellow', w.body('work', 2), plan, 'sBuilder');
+        unit.memory.targetDismantle = { targetShard: 'shard3', targetRoom: 'W1N1', targets: [], flagName: 'yellow', controlState: 'active' };
+        const lab = w.lab('dismantle', plan.steps[0].resource, 60); w.configure(lab, 'boostDismantle', 3);
+        assert.equal(w.getRoomBoostRequests(w.home).length, 1);
+        assert.equal(w.getActiveRoomBoostRequests(w.home).length, 1);
+        unit.memory.targetDismantle.controlState = state;
+        assert.equal(w.getRoomBoostRequests(w.home).length, 0, state);
+        assert.equal(w.getActiveRoomBoostRequests(w.home).length, 0, state);
+        assert.equal(w.hasActiveRoomBoost(w.home), false, state);
+        assert.equal(unit.goBoost(), false, state);
+        assert.equal(w.calls.length, 0, state);
+        assert.equal(plan.failed, undefined, state);
+    }
+});
+
+test('same-tick dismantle resume refreshes the boost-only index without enumerating all creeps again', () => {
+    const w = world(), plan = w.plan(3, 'boostDismantle', 2), unit = w.creep('yellow', w.body('work', 2), plan, 'sBuilder');
+    unit.memory.targetDismantle = { targetShard: 'shard3', targetRoom: 'W1N1', targets: [], flagName: 'yellow', controlState: 'paused' };
+    const lab = w.lab('dismantle', plan.steps[0].resource, 60); w.configure(lab, 'boostDismantle', 3);
+    assert.equal(w.getActiveRoomBoostRequests(w.home).length, 0);
+    assert.equal(w.getRoomBoostRequests(w.home).length, 0);
+    assert.equal(w.enumerations(), 1);
+    unit.memory.targetDismantle.controlState = 'active'; w.invalidateBoostRequestIndex();
+    assert.equal(w.getActiveRoomBoostRequests(w.home).length, 1);
+    assert.equal(w.getRoomBoostRequests(w.home).length, 1);
+    assert.equal(w.enumerations(), 1);
+    assert.equal(unit.goBoost(), false);
+    assert.equal(w.intents('boostCreep').length, 1);
+});
+
 for (const tier of [1, 2, 3]) test(`T${tier} plans boost exactly their requested compound and part count, completing only after resolution`, () => {
     const w = world(), plan = w.plan(tier), unit = w.creep('worker', w.body('work', 4), plan);
     const lab = w.lab('output', plan.steps[0].resource, 60); w.configure(lab, 'boostUpgrade', tier);

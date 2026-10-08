@@ -128,6 +128,23 @@ test('same-tick accepted boosts invalidate an earlier idle decision and expire w
     assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 1);
 });
 
+test('idle or cancelled yellow orders release strict Lab ownership and active orders reclaim it in the same tick', () => {
+    for (const state of ['paused', 'cancelled']) {
+        const w = world(), yellow = w.unit('yellow', 'fighter', {}, w.plan('GH'));
+        yellow.memory.targetDismantle = { targetShard: 'test', targetRoom: 'W1N1', targets: [], flagName: 'yellow', controlState: 'active' };
+        w.output.doWork();
+        assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 0);
+        yellow.memory.targetDismantle.controlState = state; w.invalidateBoostRequestIndex();
+        w.output.doWork();
+        assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 1, state);
+        assert.equal(w.getRoomBoostRequests(w.room).length, 0, state);
+        yellow.memory.targetDismantle.controlState = 'active'; w.invalidateBoostRequestIndex();
+        w.output.doWork();
+        assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 1, state);
+        assert.equal(w.hasActiveRoomBoost(w.room), true, state);
+    }
+});
+
 test('accepted reservation ownership releases immediately after cancellation even after its catalog entry is removed', () => {
     const w = world(), task = w.task(); task.plan = undefined;
     w.room.memory.creepConfig.accepted = { combatTaskId: task.id, combatGeneration: 1, combatJob: 'fighter' };
