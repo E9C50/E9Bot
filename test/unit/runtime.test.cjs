@@ -25,6 +25,7 @@ test('the exported main loop mounts once and preserves the complete tick depende
             },
             './runtime/memory': { loadMemory: mark('memory') },
             './shard/controller': { runShardController: mark('shards') },
+            './shard/targetDismantleControl': { runTargetDismantleControl: mark('targetDismantle') },
             './shard/transport': { flushInterShardMemory: mark('shardFlush') },
             './combat/missions': { runCombatTasks: mark('combat') }
         }
@@ -34,7 +35,7 @@ test('the exported main loop mounts once and preserves the complete tick depende
     calls.length = 0;
     loop();
     loop();
-    const tick = ['memory', 'shards', 'rooms', 'combat', 'population', 'creeps', 'powerCreeps', 'teams', 'structures', 'observers', 'visuals', 'stats', 'pixels', 'privateMarket', 'cpuHistory', 'shardFlush'];
+    const tick = ['memory', 'shards', 'rooms', 'combat', 'population', 'targetDismantle', 'creeps', 'powerCreeps', 'teams', 'structures', 'observers', 'visuals', 'stats', 'pixels', 'privateMarket', 'cpuHistory', 'shardFlush'];
     assert.deepEqual(calls, [...tick, ...tick]);
 });
 

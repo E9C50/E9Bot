@@ -132,32 +132,66 @@ export function sourceLink(room: Room, source: Source): StructureLink | undefine
     return undefined
 }
 
-/** A receiving Link must exist; Storage alone cannot drain a Source Link. */
-export function hasSourceLinkTransport(room: Room, source: Source, buffer?: StructureLink | StructureContainer): boolean {
-    const origin = sourceLink(room, source)
+/** Only complete central transport replaces carriers that supply the whole room. */
+export function hasSourceLinkTransport(room: Room, source: Source, _buffer?: StructureLink | StructureContainer): boolean {
+    const origin = sourceLinkWithCenter(room, source)
     if (origin === undefined) return false
-    const index = indexFor(room)
-    const receiver = (target: StructureLink | undefined): boolean => target !== undefined && target.id !== origin.id &&
-        // An adapter-supplied receiver outside the complete Link list cannot share its topology proof.
-        (index.links.some(link => link.id === target.id) ? linkIsActive(index, target) :
-            target.my !== false && (!target.isActive || target.isActive()))
     const storage = room.storage
-    if (storage !== undefined && storage.my !== false && (!storage.isActive || storage.isActive()) && receiver(room.centerLink)) return true
-    return receiver(buffer?.structureType === STRUCTURE_LINK ? buffer as StructureLink : room.controllerLink)
+    return storage === undefined || storage.my !== false && (!storage.isActive || storage.isActive())
 }
 
-/** Used by both the blueprint builder and cleanup; non-source Containers retain their role. */
+/** Only a built, active central receiver can replace the Container's general room supply. */
+function centralReceiver(room: Room): StructureLink | undefined {
+    if (!sourceLinkPolicy.enabled) return undefined
+    const center = room.centerLink
+    if (center === undefined || center.structureType !== STRUCTURE_LINK || center.pos.roomName !== room.name ||
+        'progressTotal' in center) return undefined
+    // A planned site or a stale cached receiver cannot replace an operating Container.
+    const index = indexFor(room)
+    const receiver = index.links.find(link => link.id === center.id)
+    return receiver !== undefined && !('progressTotal' in receiver) && linkIsActive(index, receiver) ? receiver : undefined
+}
+
+/** Controller-only transport must retain the Source Container for spawn and extension supply. */
+export function sourceLinkWithCenter(room: Room, source: Source): StructureLink | undefined {
+    const receiver = centralReceiver(room)
+    if (receiver === undefined) return undefined
+    const origin = sourceLink(room, source)
+    return origin !== undefined && origin.id !== receiver.id && !('progressTotal' in origin) ? origin : undefined
+}
+
+/** Legal recovery seats share the existing Source and Link geometry without replanning the room. */
+export function sourceLinkContainerSeats(room: Room, source: Source): [number, number][] {
+    const link = sourceLink(room, source)
+    if (link === undefined) return []
+    const index = indexFor(room), positions: [number, number][] = []
+    const seat = index.seats.get(`${source.id}/${source.pos.x}/${source.pos.y}/${link.id}`)
+    if (seat !== undefined) positions.push([Math.floor(seat / 50), seat % 50])
+    for (let x = Math.max(1, source.pos.x - 1); x <= Math.min(48, source.pos.x + 1); x++) {
+        for (let y = Math.max(1, source.pos.y - 1); y <= Math.min(48, source.pos.y + 1); y++) {
+            if (Math.max(Math.abs(x - link.pos.x), Math.abs(y - link.pos.y)) > 1 ||
+                !seatIsOpen(room, index, x, y) || positions.some(position => position[0] === x && position[1] === y)) continue
+            positions.push([x, y])
+        }
+    }
+    return positions
+}
+
+/** Cleanup and construction agree: both built, usable Source and central Links must exist. */
 export function redundantSourceContainer(room: Room, x: number, y: number): boolean {
-    if (!sourceLinkPolicy.enabled) return false
+    const receiver = centralReceiver(room)
+    if (receiver === undefined) return false
+    const index = indexFor(room)
     const controllerContainer = room.memory.roomBlueprint?.controllerContainer
     if (controllerContainer?.[0] === x && controllerContainer[1] === y) return false
     // Mature snapshots and manual layouts may not have explicit controller metadata.
     if (room.controller && Math.max(Math.abs(room.controller.pos.x - x), Math.abs(room.controller.pos.y - y)) <= controllerLayoutPolicy.containerRange) return false
     if (room.mineral && Math.max(Math.abs(room.mineral.pos.x - x), Math.abs(room.mineral.pos.y - y)) <= sourceLinkPolicy.containerRange) return false
     let covered = false
-    for (const source of indexFor(room).sources) {
+    for (const source of index.sources) {
         if (Math.max(Math.abs(source.pos.x - x), Math.abs(source.pos.y - y)) > sourceLinkPolicy.containerRange) continue
-        if (sourceLink(room, source) === undefined) return false
+        const origin = sourceLink(room, source)
+        if (origin === undefined || origin.id === receiver.id || 'progressTotal' in origin) return false
         covered = true
     }
     return covered

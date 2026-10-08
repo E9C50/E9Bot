@@ -787,6 +787,7 @@ for (const phase of ['source', 'target']) test(`stationary development harvester
 
 test('development Link miners use a shared Source/Link seat and ignore the obsolete source Container',()=>{
     const w=world(),source=w.source(),container=w.structure('container','container',11,10),link=w.structure('link','link',12,10);
+    w.room.centerLink=w.structure('center','link',30,25);
     const unit=w.creep('miner','harvester',8,10,0,50),behavior=w.roles.harvester({sourceId:source.id});
     unit.body=[{type:'work',hits:100},{type:'carry',hits:100},{type:'move',hits:100}];unit.hits=300;unit.hitsMax=300;
     assert.equal(behavior.prepare(unit),false);const move=w.intents('moveTo')[0];
@@ -942,6 +943,7 @@ test('a no-CARRY development miner continues harvesting for native dropped-energ
 
 test('a no-CARRY development miner yields a usable Link mine and recycles without waiting for its replacement',()=>{
     const w=world(),source=w.source(),container=w.structure('mine','container',11,10),link=w.structure('link','link',12,10);
+    w.room.centerLink=w.structure('center','link',30,25);
     const unit=w.creep('miner','harvester',11,11,0,0),spawn=w.structure('spawn','spawn',20,20,0,300);
     spawn.recycleCreep=creep=>{w.calls.push({method:'recycleCreep',name:creep.name,target:spawn.id});return 0;};
     unit.memory.spawnRoom=w.room.name;unit.memory.ready=true;unit.memory.dontPullMe=true;
@@ -954,6 +956,28 @@ test('a no-CARRY development miner yields a usable Link mine and recycles withou
     unit.pos=w.p(19,20);w.objects.delete(source.id);w.clear();
     assert.equal(behavior.prepare(unit),false);assert.deepEqual(w.calls.map(call=>call.method),['recycleCreep']);
     assert.equal(container.store.energy,0);
+});
+
+test('a controller-only source network keeps harvest available to its Container carrier and spawn pool', () => {
+    const w = world(6), source = w.source(), container = w.structure('mine-container', 'container', 11, 10);
+    const sourceLink = w.structure('source-link', 'link', 12, 10), receiver = w.structure('controller-link', 'link', 24, 25);
+    w.room.controllerLink = receiver;
+    const miner = w.creep('miner', 'harvester', 11, 10, 50, 50);
+    const carrier = w.creep('carrier', 'filler', 12, 11, 0, 50);
+    const spawn = w.structure('spawn', 'spawn', 15, 10, 0, 300);
+    const mining = w.roles.harvester({ sourceId: source.id });
+    const carrying = w.roles.filler({ sourceId: container.id, mineId: source.id });
+    assert.equal(mining.prepare(miner), true); mining.source(miner);
+    assert.equal(w.intents('transfer')[0].target, container.id);
+    assert.equal(w.intents('transfer').some(intent => intent.target === sourceLink.id), false);
+    // Native intents become visible next tick, never to the carrier in the issuing snapshot.
+    container.store.energy = 50; miner.store.energy = 0; w.game.time++; w.clear();
+    carrying.source(carrier);
+    assert.deepEqual(w.intents('withdraw').map(intent => [intent.target, intent.amount]), [[container.id, 50]]);
+    carrier.store.energy = 50; container.store.energy = 0; w.game.time++; w.clear();
+    carrying.target(carrier);
+    assert.equal(w.intents('transfer')[0].target, spawn.id);
+    assert.equal(w.intents('moveTo')[0].target, spawn.id);
 });
 
 test('a no-CARRY miner waits for an occupied container tile instead of mining next to it', () => {

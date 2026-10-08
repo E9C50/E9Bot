@@ -1,7 +1,7 @@
 import { getClosestTarget, getDistance } from "utils"
 import { prepareStationaryMining, runStationaryMining } from 'creep/stationaryMining'
 import { retireSourceLinkMiner } from 'creep/sourceLinkMining'
-import { sourceLink } from 'room/sourceLinks'
+import { sourceLinkWithCenter } from 'room/sourceLinks'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
@@ -21,7 +21,7 @@ export default (data: CreepData): ICreepConfig => ({
         // 如果不在目标位置则移动
         const sourceTarget = source
         if (sourceTarget == undefined) { creep.memory.ready = false; return false }
-        if (creep.memory.boostPlan !== undefined || sourceLink(creep.room, sourceTarget) !== undefined) {
+        if (creep.memory.boostPlan !== undefined || sourceLinkWithCenter(creep.room, sourceTarget) !== undefined) {
             const prepared = prepareStationaryMining(creep, sourceTarget)
             if (prepared !== undefined) return prepared
         }
@@ -42,7 +42,7 @@ export default (data: CreepData): ICreepConfig => ({
         const sourceTarget = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
         if (retireSourceLinkMiner(creep, sourceTarget || undefined)) return true
         if (sourceTarget == undefined) { creep.memory.ready = false; return false }
-        if ((creep.memory.boostPlan !== undefined || sourceLink(creep.room, sourceTarget) !== undefined) && runStationaryMining(creep, sourceTarget)) return true
+        if ((creep.memory.boostPlan !== undefined || sourceLinkWithCenter(creep.room, sourceTarget) !== undefined) && runStationaryMining(creep, sourceTarget)) return true
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() <= 0) {
             creep.memory.working = true
@@ -55,7 +55,7 @@ export default (data: CreepData): ICreepConfig => ({
     target(creep) {
         const sourceTarget = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
         if (retireSourceLinkMiner(creep, sourceTarget || undefined)) return true
-        if (sourceTarget != undefined && sourceLink(creep.room, sourceTarget) !== undefined) return runStationaryMining(creep, sourceTarget)
+        if (sourceTarget != undefined && sourceLinkWithCenter(creep.room, sourceTarget) !== undefined) return runStationaryMining(creep, sourceTarget)
         if (creep.memory.boostPlan !== undefined) {
             if (sourceTarget == undefined) { creep.memory.ready = false; return false }
             if (runStationaryMining(creep, sourceTarget)) return true

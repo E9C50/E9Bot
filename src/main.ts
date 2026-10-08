@@ -16,6 +16,7 @@ import { generatePixel, purchasePrivateServerEnergy, recordCpuHistory } from './
 import { runShardController } from './shard/controller'
 import { flushInterShardMemory } from './shard/transport'
 import { runCombatTasks } from './combat/missions'
+import { runTargetDismantleControl } from './shard/targetDismantleControl'
 
 mountWork()
 
@@ -25,6 +26,7 @@ export const loop = ErrorMapper.wrapLoop(createTickRunner([
     { name: 'rooms', run: roomController },
     { name: 'combat', run: runCombatTasks },
     { name: 'population', run: creepNumberController },
+    { name: 'targetDismantle', run: runTargetDismantleControl },
     { name: 'creeps', run: creepWorkController },
     { name: 'powerCreeps', run: powerSpawnController },
     { name: 'teams', run: teamWorkController },

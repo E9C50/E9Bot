@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
-function world({ remote = false, level = 8, marked = true, x = 10, y = 11, energy = 10, work = 5, carry = 1, workBoost, name = 'miner' } = {}) {
+function world({ remote = false, level = 8, marked = true, center = true, x = 10, y = 11, energy = 10, work = 5, carry = 1, workBoost, name = 'miner' } = {}) {
     const objects = new Map(), actions = [], walls = new Set(), occupants = [];
     class Position {
         constructor(x, y, roomName = 'W1N1') { Object.assign(this, { x, y, roomName }); }
@@ -60,6 +60,7 @@ function world({ remote = false, level = 8, marked = true, x = 10, y = 11, energ
         objects.set(id, value); room.structures.push(value);
         if (type === 'link') room.links.push(value);
         if (type === 'container') room.containers.push(value);
+        if (type === 'link' && center && id !== 'central-link' && room.centerLink === undefined) room.centerLink = structure('central-link', 'link', 30, 25);
         return value;
     }
     // Resolve native intents from the tick's initial Store; issuing an intent never mutates it.
@@ -234,7 +235,9 @@ test('station resolution shares the room index and prepare/run lookup', () => {
     for (let index = 0; index < 5; index++) w.structure(`distant-${index}`, 'link', 30 + index, 30);
     const link = w.structure('source-link', 'link', 11, 11);
     for (let index = 0; index < 19; index++) w.tick();
-    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 19, 'distant Links never need controller quota scans');
+    assert.equal(w.room.links.reduce((sum, value) => sum + value.activeChecks, 0), 38, 'only the Source Link and its central receiver need one quota check per tick');
+    assert.equal(w.room.centerLink.activeChecks, 19);
+    assert.equal(w.room.links.filter(value => value !== link && value !== w.room.centerLink).every(value => value.activeChecks === 0), true);
     assert.equal(link.activeChecks, 19);
 });
 
@@ -265,7 +268,8 @@ test('station caches never retain old source/room objects or inactive links acro
     const w = world(); const oldLink = w.structure('link', 'link', 11, 11);
     assert.equal(w.behavior.prepare(w.creep), true);
     const replacement = { ...oldLink, activeChecks: 0, isActive() { this.activeChecks++; return false; } };
-    w.room.links = [replacement]; w.room.structures = [replacement];
+    const center = { ...w.room.centerLink, activeChecks: 0, isActive() { this.activeChecks++; return true; } };
+    w.room.centerLink = center; w.room.links = [replacement, center]; w.room.structures = [replacement, center];
     const container = w.structure('container', 'container', 10, 11);
     const source = { ...w.source }; w.room.sources = [source]; w.objects.set(source.id, source);
     const room = { ...w.room }; w.creep.room = room;
@@ -472,7 +476,55 @@ for (const invalid of ['enemy','inactive','distant','blocked']) test('zero-CARRY
 
 test('compatible CARRY miners do not scan Link geometry in the incompatibility predicate',()=>{
     let reads=0;
-    const loader=createSourceLoader({globals:{RESOURCE_ENERGY:'energy'},modules:{'room/sourceLinks':{sourceLink(){reads++;throw new Error('unexpected scan');}}}});
+    const loader=createSourceLoader({globals:{RESOURCE_ENERGY:'energy'},modules:{'room/sourceLinks':{sourceLinkWithCenter(){reads++;throw new Error('unexpected scan');}}}});
     assert.equal(loader.load('creep/sourceLinkMining').sourceLinkMinerIncompatible({store:{getCapacity:()=>50}},{}),false);
     assert.equal(reads,0);
+});
+
+for (const remote of [false, true]) for (const central of ['missing', 'inactive', 'controllerOnly', 'site', 'stale', 'sameSource']) {
+    test(`${remote ? 'remote' : 'local'} source-only mining feeds its Container when the central receiver is ${central}`, () => {
+        const w = world({ remote, center: false, energy: 40 });
+        const link = w.structure('source-link', 'link', 11, 11);
+        const container = w.structure('mine-container', 'container', 10, 11);
+        if (central === 'inactive') w.room.centerLink = w.structure('center', 'link', 30, 25, { active: false });
+        else if (central === 'controllerOnly') w.room.controllerLink = w.structure('controller', 'link', 24, 25);
+        else if (central === 'site') w.room.centerLink = { structureType: 'link', pos: w.p(30, 25), progressTotal: 500 };
+        else if (central === 'stale') w.room.centerLink = { id: 'missing', structureType: 'link', pos: w.p(30, 25), isActive: () => true };
+        else if (central === 'sameSource') w.room.centerLink = link;
+        assert.deepEqual(w.tick(), { amount: 10, sent: 40 });
+        assert.equal(container.store.energy, 40, 'the retained Container supplies the room while no central Link can receive harvest');
+        assert.equal(link.store.energy, 0);
+        assert.equal(w.actions.find(action => action.type === 'transfer').target, container);
+    });
+}
+
+test('a source-only zero-CARRY miner moves onto its Container and keeps harvesting instead of retiring', () => {
+    const w = world({ center: false, carry: 0, energy: 0, x: 11, y: 11 });
+    w.structure('source-link', 'link', 12, 12);
+    const container = w.structure('mine-container', 'container', 10, 11);
+    assert.equal(w.behavior.prepare(w.creep), false);
+    assert.deepEqual(w.actions, [{ type: 'move', x: 10, y: 11, roomName: w.room.name, range: 0 }]);
+    w.creep.pos = container.pos; w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); assert.equal(w.behavior.source(w.creep), true);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+    assert.equal(w.creep.memory.sourceLinkRetiring, undefined);
+});
+
+test('a recovered source-only mine switches from its Container to the Source Link when its central receiver becomes active', () => {
+    const w = world({ center: false, energy: 40 });
+    const link = w.structure('source-link', 'link', 11, 11), container = w.structure('container', 'container', 10, 11);
+    assert.deepEqual(w.tick(), { amount: 10, sent: 40 }); assert.equal(container.store.energy, 40);
+    w.room.centerLink = w.structure('center', 'link', 30, 25);
+    w.creep.store.energy = 40;
+    assert.deepEqual(w.tick(), { amount: 10, sent: 40 });
+    assert.equal(link.store.energy, 40); assert.equal(container.store.energy, 40);
+});
+
+for (const remote of [false, true]) test(`${remote ? 'remote' : 'local'} isolated Source Link preserves missing-Container bootstrap construction`, () => {
+    const w = world({ remote, center: false, energy: 50 });
+    w.structure('source-link', 'link', 12, 12);
+    const site = { id: 'recovery-site', structureType: 'container', my: true, pos: w.p(10, 11) };
+    w.room.constructionSites.push(site);
+    assert.equal(w.behavior.prepare(w.creep), true); assert.equal(w.behavior.target(w.creep), true);
+    assert.deepEqual(w.actions.map(action => action.type), ['build']); assert.equal(w.actions[0].target, site);
 });

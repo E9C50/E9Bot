@@ -1,5 +1,5 @@
 import { getHarvestPower } from 'runtime/harvestPower'
-import { sourceLink } from 'room/sourceLinks'
+import { sourceLinkWithCenter } from 'room/sourceLinks'
 import { retireSourceLinkMiner } from './sourceLinkMining'
 
 interface MiningStation {
@@ -85,11 +85,14 @@ function unoccupied(creep: Creep, x: number, y: number): boolean {
 
 /** Keep a seated miner still; moving miners reserve separate source/buffer intersections. */
 function miningPosition(creep: Creep, source: Source, buffer: StructureLink | StructureContainer): { position?: RoomPosition; occupied: boolean } {
-    if (creep.pos.isNearTo(source) && creep.pos.isNearTo(buffer)) return { position: creep.pos, occupied: false }
+    const direct = creep.store.getCapacity(RESOURCE_ENERGY) === 0 && buffer.structureType === STRUCTURE_CONTAINER
+    if (creep.pos.isNearTo(source) && creep.pos.isNearTo(buffer) && (!direct || creep.pos.isEqualTo(buffer)))
+        return { position: creep.pos, occupied: false }
     let selected: RoomPosition | undefined, preferred = Infinity, distance = Infinity
     let hasSeat = false
     for (let x = source.pos.x - 1; x <= source.pos.x + 1; x++) for (let y = source.pos.y - 1; y <= source.pos.y + 1; y++) {
-        if (Math.max(Math.abs(x - buffer.pos.x), Math.abs(y - buffer.pos.y)) > 1 || !walkable(creep, source, x, y)) continue
+        if (Math.max(Math.abs(x - buffer.pos.x), Math.abs(y - buffer.pos.y)) > 1 ||
+            direct && (x !== buffer.pos.x || y !== buffer.pos.y) || !walkable(creep, source, x, y)) continue
         hasSeat = true
         if (!unoccupied(creep, x, y)) continue
         const preference = buffer.structureType == STRUCTURE_CONTAINER && x == buffer.pos.x && y == buffer.pos.y ? 0 : 1
@@ -103,12 +106,12 @@ function miningPosition(creep: Creep, source: Source, buffer: StructureLink | St
 
 function resolveStation(creep: Creep, source: Source): MiningStation | null | undefined {
     if (source.pos.roomName != creep.room.name) return undefined
-    const link = sourceLink(creep.room, source)
+    const link = sourceLinkWithCenter(creep.room, source)
     if (link !== undefined) {
         const seat = miningPosition(creep, source, link)
         if (seat.position === undefined) return null
         reservations.set(seatKey(creep.room, seat.position.x, seat.position.y), creep.name)
-        // A source Link owns this mine; retained shared Containers have another responsibility.
+        // Only complete central transport owns this mine; other Containers retain their supply role.
         return { position: seat.position, link }
     }
     let station: MiningStation | undefined

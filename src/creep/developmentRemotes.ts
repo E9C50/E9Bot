@@ -6,7 +6,7 @@ import { isDevelopingRoom } from './development'
 import { deliverHaulerEnergy, withHaulerTraffic } from './haulerDelivery'
 import { haulerEnergyPickupReserved, pickupAdjacentHaulerEnergy, reserveHaulerEnergyPickup } from './haulerPickup'
 import { retireSourceLinkMiner } from './sourceLinkMining'
-import { sourceLink } from 'room/sourceLinks'
+import { sourceLinkWithCenter } from 'room/sourceLinks'
 import { prepareStationaryMining, runStationaryMining } from './stationaryMining'
 import { isRoomEvacuating } from 'room/evacuationState'
 
@@ -332,7 +332,7 @@ function sourceSite(creep: Creep, source: Source): ConstructionSite | undefined 
 function prepareMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
     const source = Game.getObjectById<Source>(data.developmentRemote.source!.id)
     if (!source) return false
-    if (sourceLink(creep.room, source)) return prepareStationaryMining(creep, source) ?? false
+    if (sourceLinkWithCenter(creep.room, source)) return prepareStationaryMining(creep, source) ?? false
     const station = sourceContainer(creep, source) || sourceSite(creep, source)
     if (station && distance(creep.pos, station.pos) !== 0) { creep.moveTo(station, { range: 0 }); return false }
     if (!creep.pos.isNearTo(source)) { creep.moveTo(source, { range: 1 }); return false }
@@ -342,7 +342,7 @@ function prepareMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
 function runMiner(creep: Creep, data: DevelopmentRemoteData): boolean {
     const source = Game.getObjectById<Source>(data.developmentRemote.source!.id)
     if (!source || !creep.pos.isNearTo(source)) { creep.memory.ready = false; return false }
-    if (sourceLink(creep.room, source)) return runStationaryMining(creep, source)
+    if (sourceLinkWithCenter(creep.room, source)) return runStationaryMining(creep, source)
     const energy = creep.store[RESOURCE_ENERGY], free = creep.store.getFreeCapacity(RESOURCE_ENERGY)
     const container = sourceContainer(creep, source)
     if (container && container.hits <= CONTAINER_DECAY * policy.containerRepairDecayCycles && energy > 0) {

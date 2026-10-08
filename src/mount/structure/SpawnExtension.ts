@@ -7,6 +7,7 @@ import { isDevelopingRoom } from 'creep/development'
 import { combatSpawnAllowed, recordCombatSpawn } from 'combat/spawning'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { hasUsableStorageFiller, isMatureStorageFiller } from 'creep/storageFillerLifecycle'
+import { isTargetDismantleSpawnReserved } from 'shard/targetDismantleControl'
 
 export default class SpawnExtension extends StructureSpawn {
     public init(): void {
@@ -15,7 +16,7 @@ export default class SpawnExtension extends StructureSpawn {
         }
     }
     public doWork(): void {
-        if (this.spawning) return
+        if (this.spawning || isTargetDismantleSpawnReserved(this)) return
 
         const creepSpawnQueue = this.room.memory.creepSpawnQueue || []
 

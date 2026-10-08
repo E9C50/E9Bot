@@ -1,4 +1,4 @@
-import { sourceLink } from 'room/sourceLinks'
+import { sourceLinkWithCenter } from 'room/sourceLinks'
 
 type SourceLinkMinerMemory = CreepMemory & { sourceLinkRetiring?: boolean }
 
@@ -6,7 +6,7 @@ type SourceLinkMinerMemory = CreepMemory & { sourceLinkRetiring?: boolean }
 export function sourceLinkMinerIncompatible(creep: Creep, source: Source): boolean {
     if (creep.store.getCapacity(RESOURCE_ENERGY) !== 0) return false
     const room = source.room || (source.pos.roomName === creep.room.name ? creep.room : Game.rooms?.[source.pos.roomName])
-    return room !== undefined && sourceLink(room, source) !== undefined
+    return room !== undefined && sourceLinkWithCenter(room, source) !== undefined
 }
 
 /** Free the mining seat even when the room temporarily has no usable home Spawn. */

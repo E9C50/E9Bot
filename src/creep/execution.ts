@@ -11,6 +11,7 @@ import { runHaulerRelays, haulerRelayHandled } from './haulerRelay'
 import { idleBuilderIfNoWork } from 'role/support/builderMaintenance'
 import { runRoomEvacuationCreep } from 'room/evacuation'
 import { isRoomEvacuating } from 'room/evacuationState'
+import { runTargetDismantle } from './targetDismantle'
 
 function reportFailure(name: string, error: unknown): void {
     console.log(
@@ -45,19 +46,27 @@ export function creepWorkController(): void {
                 ? empireAtWar
                 : warModes[creep.room.name]
         const automaticRemote = isDevelopmentRemoteData(creep.memory.data)
+        const targetedDismantle = creep.memory.targetDismantle !== undefined
         // Preserve the ordinary war skip and its profiling semantics when there is no cargo task to intercept.
-        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote &&
+        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !targetedDismantle &&
             !isRoomEvacuating(creep.room) && !isRoomEvacuating(creep.memory.spawnRoom)) continue
         const roleStarted = roleProfiling ? Game.cpu.getUsed() : 0
         try {
             if (runRoomEvacuationCreep(creep)) continue
             // Automatic remotes must reach prepare even during war so their safety wrapper can evacuate them.
-            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote) continue
+            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !targetedDismantle) continue
             if (!automaticRemote && retireDevelopmentCreep(creep)) continue
             if (creep.memory.role === 'builder' && idleBuilderIfNoWork(creep)) continue
+            // A paused/cancelled precise task must stop before the normal boost hook can move it.
+            if (targetedDismantle && (creep.memory.boostPlan?.failed ||
+                creep.memory.targetDismantle!.controlState && creep.memory.targetDismantle!.controlState !== 'active')) {
+                runTargetDismantle(creep)
+                continue
+            }
             // Some economy roles deliberately skip their legacy prepare boost hook.
             // Every newly spawned compound-dependent body completes its exact plan before leaving home.
             if (creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.goBoost()) continue
+            if (targetedDismantle && runTargetDismantle(creep)) continue
             const behavior = createRoleBehavior(
                 creep.memory.role,
                 creep.memory.data

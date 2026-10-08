@@ -12,6 +12,8 @@ import { renderHelp } from 'runtime/consoleHelp'
 import { createRoomEvacuation, getRoomEvacuationStatus, cancelRoomEvacuation } from 'room/evacuation'
 import { getRoomResourceAmount, isWarehouseRoom, updateResourceJob } from 'room/resourceNetwork'
 import { ordinaryResourceTarget, resourcePolicy } from 'settings/resourcePolicy'
+import { createTargetDismantleTask, listTargetDismantleTasks, cancelTargetDismantleTask } from 'shard/targetDismantleControl'
+import type { TargetDismantleTaskInput } from 'shard/targetDismantleControl'
 
 export default class ConsoleExtension {
     public haulRelay(): string { return JSON.stringify(getHaulerRelayStatus(), null, 2) }
@@ -32,6 +34,9 @@ export default class ConsoleExtension {
     public shardTaskPause(id: string): string { return setShardTaskState(id, 'paused') }
     public shardTaskResume(id: string): string { return setShardTaskState(id, 'active') }
     public shardTaskCancel(id: string): string { return setShardTaskState(id, 'cancelled') }
+    public shardDismantleTask(id: string, config: TargetDismantleTaskInput): string { return createTargetDismantleTask(id, config) }
+    public shardDismantleTasks(): string { return listTargetDismantleTasks() }
+    public shardDismantleCancel(id: string): string { return cancelTargetDismantleTask(id) }
 
     public cpuProfile(enabled?: boolean, limit?: number): string {
         if (enabled != undefined) runtimePolicy.profiling.enabled = enabled

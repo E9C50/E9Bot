@@ -503,13 +503,15 @@ test('stable mine identity prevents one old fallback endpoint from financing bot
     assert.equal(requestedWork(byRole(configs, 'upgrader')), Math.floor(400 / trip * state.policy.upgrading.incomeShare));
 });
 
-test('an active Source Link can fund a controller Link without pretending a local hauler exists', () => {
+test('a controller-only Source Link cannot fund upgrade income or suppress the room supply hauler', () => {
     const home = room({ capacity: 1300, level: 6 });
     const origin = structure('source-link', 'link', 11, 10, 0);
     const destination = structure('controller-link', 'link', 38, 40, 300);
     home.links = [origin, destination]; home.controllerLink = destination;
     const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
-    assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 8);
+    const configs = state.release();
+    assert.equal(requestedWork(byRole(configs, 'upgrader')), 1);
+    assert.ok(byRole(configs, 'filler').some(config => config.data.mineId === home.sources[0].id));
     origin.isActive = () => false;
     state.game.time++;
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 1);
@@ -667,6 +669,7 @@ test('native Source Link input bypasses Storage distributors without counting th
     home.storage = structure('storage', 'storage', 24, 24, 500);
     home.links = [structure('source-link', 'link', 11, 10, 0), structure('controller-link', 'link', 38, 40, 300)];
     home.controllerLink = home.links[1];
+    home.centerLink = structure('center-link', 'link', 24, 25, 0); home.links.push(home.centerLink);
     const state = makeWorld(home, { creeps: { miner: worker(home) } });
     let configs = state.release();
     assert.equal(requestedWork(byRole(configs, 'upgrader')), Math.floor(10 * state.policy.upgrading.incomeShare));
@@ -1084,6 +1087,8 @@ function linkNetwork(home, controller = true) {
     if (controller) {
         home.controllerLink = structure('controller-link', 'link', 38, 40, 0);
         home.links.push(home.controllerLink);
+        home.centerLink ||= structure('center-link', 'link', 24, 25, 0);
+        home.links.push(home.centerLink);
     }
     return origin;
 }
@@ -1119,7 +1124,7 @@ test('a zero-CARRY miner without a usable Link retains the existing ground-minin
     assert.equal(requestedWork(byRole(configs, 'upgrader')), 8);
 });
 
-test('a drained Source Link with a controller receiver has no dedicated source-hauler production fleet', () => {
+test('a drained Source Link with a built central receiver has no dedicated source-hauler production fleet', () => {
     const home = room({ capacity: 1300, level: 6 });
     linkNetwork(home);
     const state = makeWorld(home, { creeps: { miner: worker(home) }, automaticHauling: false });
@@ -1164,6 +1169,7 @@ test('only native source stock funds a single Link salvage hauler instead of a v
 test('mature Link miners bypass a zero-CARRY fixed name and keep one replacement after predecessor retirement', () => {
     for (const spawning of [false, true]) {
         const home = legacyRoom(); linkNetwork(home, false);
+        home.links.push(home.centerLink);
         const logicalName = `${home.name}_HARVESTER_source0_0`;
         const obsolete = withoutCarry(worker(home, { name: logicalName }));
         obsolete.name = `HARVESTER_${logicalName}`;
@@ -1205,6 +1211,26 @@ test('a mature Source Link with no receiver keeps its ordinary source-container 
     const home = legacyRoom(); linkNetwork(home, false); delete home.centerLink;
     const state = makeWorld(home, { automaticHauling: false });
     assert.equal(byRole(state.release(), 'filler').filter(config => config.data.sourceId === 'source-container-a').length, 2);
+});
+
+for (const controllerOnly of [false, true]) test(`a ${controllerOnly ? 'controller-only' : 'source-only'} network retains its valid zero-CARRY miner and ordinary supply demand`, () => {
+    for (const mature of [false, true]) {
+        const home = mature ? legacyRoom() : room({ capacity: 1300, level: 6 });
+        linkNetwork(home, false);
+        if (controllerOnly) {
+            home.controllerLink = structure('controller-link', 'link', 38, 40, 0);
+            home.links.push(home.controllerLink);
+        }
+        const logicalName = mature ? `${home.name}_HARVESTER_source0_0` : 'existing-source-miner';
+        const miner = withoutCarry(worker(home, { name: logicalName }));
+        miner.name = `HARVESTER_${logicalName}`;
+        const state = makeWorld(home, { creeps: { [miner.name]: miner }, automaticHauling: false });
+        const configs = state.release();
+        assert.equal(state.loader.load('room/sourceLinks').hasSourceLinkTransport(home, home.sources[0], home.controllerLink), false);
+        assert.equal(byRole(configs, 'harvester').find(config => config.data.sourceId === home.sources[0].id).name, logicalName);
+        assert.ok(byRole(configs, 'filler').some(config => mature ? config.data.sourceId === 'source-container-a' : config.data.mineId === home.sources[0].id));
+        if (!mature) assert.equal(requestedWork(byRole(configs, 'upgrader')), 1, 'no live hauling or central transport means no credited upgrade supply');
+    }
 });
 
 test('a shared container serving an unlinked Source still publishes ordinary transportation', () => {

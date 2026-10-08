@@ -4,7 +4,7 @@ import { populationPolicy } from 'settings/population'
 import { addCreepConfig, createCreepName } from './demand'
 import { isDevelopingRoom } from './development'
 import { releaseDevelopmentBaseConfig } from './developmentPopulation'
-import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
+import { sourceLinkWithCenter, hasSourceLinkTransport } from 'room/sourceLinks'
 import { sourceLinkPolicy } from 'settings/sourceLinks'
 import { releaseRepairerCreepConfigs } from './repairerPopulation'
 import { isRoomEvacuating } from 'room/evacuationState'
@@ -97,7 +97,7 @@ export function releaseBaseCreepConfig(): void {
                 source.pos.getFreeSpace().length,
                 populationPolicy.base.maximumHarvestersPerSource
             )
-            const linked = room.links.length > 0 && sourceLink(room, source) !== undefined
+            const linked = room.links.length > 0 && sourceLinkWithCenter(room, source) !== undefined
             for (let i = 0; i < canHarvesterPos; i++) {
                 const creepMemory: HarvesterData = { sourceId: source.id }
                 const baseName = room.name + '_HARVESTER_' + source.id + '_' + i

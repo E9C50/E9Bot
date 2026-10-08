@@ -98,12 +98,13 @@ test('an empty mature logistics fleet spawns its storage carrier before a waitin
     assert.equal(queueApi().buildSpawnQueue(room, {})[0], 'harvester');
 });
 
-function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'empire', teams = {} } = {}) {
+function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'empire', teams = {}, targetDismantle } = {}) {
     const errors = [];
     const game = { creeps, rooms: {}, shard: { name: 'test' }, cpu: { getUsed: () => 0 } };
     const loader = createSourceLoader({
         globals: { Game: game, Memory: { warMode }, console: { log: message => errors.push(message) } },
         modules: {
+            ...(targetDismantle ? { './targetDismantle': { runTargetDismantle: targetDismantle } } : {}),
             // Framework factories run independently of real builder job discovery.
             'role/support/builderMaintenance': { idleBuilderIfNoWork: () => false },
             role: { createRoleBehavior },
@@ -130,6 +131,22 @@ test('new compound-dependent economy units finish boosting before preparing or l
     creep.memory.boostPlan.completed = true;
     w.api.creepWorkController();
     assert.deepEqual(calls, ['boost', 'prepare', 'source']);
+});
+
+test('precise cross-shard workers wait for boosts and consume ready, failed and stopped orders before ordinary builder behavior', () => {
+    for (const state of ['pending', 'ready', 'failed', 'paused', 'cancelled', 'completed']) {
+        const creep = unit('yellow', { role: 'sBuilder' }), calls = [];
+        creep.memory.targetDismantle = { controlState: ['paused', 'cancelled', 'completed'].includes(state) ? state : 'active' };
+        creep.memory.boostPlan = { tier: 3, steps: [{ type: 'boostDismantle', resource: 'XZH2O', parts: 40 }],
+            completed: state === 'ready', failed: state === 'failed' };
+        creep.goBoost = () => { calls.push('boost'); return false; };
+        const w = executionWorld({ yellow: creep }, () => { calls.push('ordinary-builder'); return undefined; }, {
+            warMode: { W1N1: true }, targetDismantle: () => { calls.push('precise-task'); return true; }
+        });
+        w.api.creepWorkController();
+        assert.deepEqual(calls, state === 'pending' ? ['boost'] : ['precise-task'], state);
+        assert.deepEqual(w.errors, []);
+    }
 });
 
 test('duo preparation services both pending boost plans even when the first member must wait', () => {

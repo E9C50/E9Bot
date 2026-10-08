@@ -37,6 +37,7 @@ function world(evacuation = { createRoomEvacuation: failAction, getRoomEvacuatio
         'settings/structures': { structurePolicy: {} },
         'settings/labs': { reactionSource: {} },
         'shard/controller': { createShardTask: failAction, listShardTasks: failAction, listShardPortals: failAction, setShardTaskState: failAction },
+        'shard/targetDismantleControl': { createTargetDismantleTask: failAction, listTargetDismantleTasks: failAction, cancelTargetDismantleTask: failAction },
         'runtime/profiling': { getCpuProfile: failAction, getCpuProfileWindow: failAction, resetCpuProfile: failAction },
         'creep/bodyConsole': { configureBody: failAction, previewBodies: failAction },
         'combat/missions': { createCombatTask: failAction, listCombatTasks: failAction, cancelCombatTask: failAction },
@@ -104,6 +105,7 @@ test('task and body option descriptions cover their actual input interfaces', ()
     const entries = helpSections.flatMap(section => section.entries);
     for (const [file, interfaceName, command] of [
         ['shard/missions.ts', 'ShardTaskInput', 'shardTask'],
+        ['shard/targetDismantleControl.ts', 'TargetDismantleTaskInput', 'shardDismantleTask'],
         ['combat/types.ts', 'CombatTaskOptions', 'combatTask'],
         ['interface/creeps.ts', 'CreepBodyProfile', 'bodyConfig'],
     ]) {

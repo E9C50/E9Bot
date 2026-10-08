@@ -8,6 +8,8 @@ Screeps TypeScript Bot。采用按 tick 编排、按业务领域拆分的控制�
 
 多仓库资源调度、终端 50000 能量底线、T3 常备量及 Lab/Factory 批量生产见 [资源调度与生产](docs/resources.md)。
 
+源 Link 与容器供能切换、外矿 NPC 防守、手动外矿旗及跨 shard 精确拆除指令见 [外矿供能与防守](docs/remotes.md)。
+
 ## 开发与验证
 
 使用 Node.js 18 或以上版本，在项目根目录执行：

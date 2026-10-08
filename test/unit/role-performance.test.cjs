@@ -142,7 +142,7 @@ test('harvester without a usable Source Link selects the closest construction si
     w.list('constructionSites', sites); w.list('links', [w.structure('unrelated-link',{type:'link',x:30})]);
     w.role.target(w.creep);
     assert.equal(w.data.buildTarget, 'first'); assert.deepEqual(w.actions, [{ type: 'build', id: 'first' }]);
-    assert.equal(w.reads.entries.constructionSites, sites.length); assert.equal(w.reads.entries.links,1,'shared Link index reads the candidate once');
+    assert.equal(w.reads.entries.constructionSites, sites.length); assert.equal(w.reads.entries.links || 0,0,'missing central Link bypasses the Source Link candidate scan');
     assert.equal(w.reads.methods, 0);
 });
 
@@ -162,15 +162,16 @@ test('completed cached construction invalidates the room cache before normal Con
     assert.deepEqual(w.actions,[{type:'transfer',id:'container',resource:'energy'}]);
 });
 
-test('a full Source Link retains the cargo and ignores nearby Container fallback even when a second Link has capacity',()=>{
+test('a full Source Link with a central receiver retains cargo and ignores Container fallback even when a second Link has capacity',()=>{
     const w=world('harvester',{sourceId:'source'});w.creep.store.energy=100;
     const first=w.structure('first-link',{type:'link',x:11,y:10,energy:100,my:true,isActive:()=>true});
     const second=w.structure('second-link',{type:'link',x:12,y:10,my:true,isActive:()=>true});
-    w.list('links',[first,second]);w.list('containers',[w.structure('container',{energy:50,hits:30})]);
+    const center=w.structure('center-link',{type:'link',x:30,y:30,my:true,isActive:()=>true});w.room.centerLink=center;
+    w.list('links',[first,second,center]);w.list('containers',[w.structure('container',{energy:50,hits:30})]);
     w.list('constructionSites',[w.site('source-container',10,10)]);
     assert.equal(w.role.prepare(w.creep),true);assert.equal(w.role.target(w.creep),true);assert.deepEqual(w.actions,[]);
     assert.equal(w.creep.store.energy,100);assert.equal(w.creep.memory.working,false);
-    assert.equal(w.reads.entries.links,2,'one room index is shared by preparation and work');
+    assert.equal(w.reads.entries.links,3,'one room index is shared by preparation and work');
     assert.equal(w.reads.lists.containers||0,0);assert.equal(w.reads.lists.constructionSites||0,0);
     first.state.energy=0;w.role.source(w.creep);
     assert.deepEqual(w.actions,[{type:'transfer',id:'first-link',resource:'energy'}]);
@@ -191,11 +192,16 @@ test('harvester selects the lowest current-energy adjacent container in one pass
     assert.equal(w.actions.at(-1).id, 'first'); assert.equal(w.actions.at(-1).type, 'transfer');
 });
 
-test('harvester creates a missing Container below RCL8 and never recreates one beside its valid full Source Link', () => {
+test('harvester keeps creating a missing Container beside an isolated Source Link until a central receiver exists', () => {
     const w = world('harvester', { sourceId: 'source' }); w.role.target(w.creep);
     assert.deepEqual(w.actions, [{ type: 'create', x: 10, y: 10, structureType: 'container' }]);
     w.actions.length = 0; w.room.level = 8; w.role.target(w.creep); assert.deepEqual(w.actions, []);
-    w.room.level = 6; w.creep.store.energy=100; w.list('links', [w.structure('full-link', { type:'link',x:11,y:10,energy:100,my:true,isActive:()=>true })]); w.game.time++; w.role.target(w.creep);
+    w.room.level = 6; w.creep.store.energy=100;
+    const link=w.structure('full-link', { type:'link',x:11,y:10,energy:100,my:true,isActive:()=>true });
+    w.list('links',[link]);w.game.time++;w.role.target(w.creep);
+    assert.deepEqual(w.actions,[{type:'create',x:10,y:10,structureType:'container'}]);w.actions.length=0;
+    const center=w.structure('center-link',{type:'link',x:30,y:30,my:true,isActive:()=>true});w.room.centerLink=center;
+    w.list('links',[link,center]);w.game.time++;w.role.target(w.creep);
     assert.deepEqual(w.actions, []);
 });
 

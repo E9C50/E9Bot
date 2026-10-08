@@ -8,7 +8,7 @@ import { bodyPolicy } from 'settings/bodyPolicy'
 import { rolePolicy } from 'settings/rolePolicy'
 import { interShardPolicy } from 'settings/interShard'
 import type { ShardUnitData } from 'shard/missions'
-import { sourceLink, hasSourceLinkTransport } from 'room/sourceLinks'
+import { sourceLinkWithCenter, hasSourceLinkTransport } from 'room/sourceLinks'
 import { releaseRepairerCreepConfigs } from './repairerPopulation'
 
 function workParts(creep: Creep): number { return creep.getActiveBodyparts(WORK) }
@@ -160,7 +160,7 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
     const affordable = affordableWork(room.energyCapacityAvailable, policy.mining.workPartsPerSource, true, true)
     if (affordable == 0) return supplies
     for (const source of room.sources) {
-        const linked = room.links.length > 0 && sourceLink(room, source) !== undefined
+        const linked = room.links.length > 0 && sourceLinkWithCenter(room, source) !== undefined
         const miners = creeps.filter(creep => creep.memory.role == 'harvester' &&
             (creep.memory.data as HarvesterData).sourceId == source.id && workParts(creep) > 0)
         const productive = linked ? miners.filter(creep => creep.getActiveBodyparts(CARRY) > 0) : miners
