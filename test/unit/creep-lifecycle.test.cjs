@@ -37,6 +37,7 @@ function queueApi() {
     return createSourceLoader({
         globals: { RESOURCE_ENERGY: 'energy' },
         modules: {
+            './bodySelection': { selectCreepBody() { throw Error('isolated priority tests never plan a recovery body'); } },
             'settings/creep': { roleBaseEnum: { HARVESTER: 'harvester', FILLER: 'filler' } },
             role: { isRoleSupported: role => ['harvester', 'filler', 'manager', 'builder'].includes(role) }
         }

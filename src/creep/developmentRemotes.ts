@@ -11,6 +11,7 @@ import { prepareStationaryMining, runStationaryMining } from './stationaryMining
 import { isRoomEvacuating } from 'room/evacuationState'
 import { populationPolicy } from 'settings/population'
 import { remoteCommissioningDecision, releaseRemoteCommissioning } from './remoteCommissioning'
+import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 
 const ROOM_NAME = /^[WE]\d+[NS]\d+$/
 type Kind = 'scout' | 'harvester' | 'hauler' | 'reserver'
@@ -225,22 +226,6 @@ export function canRelayDevelopmentHauler(creep: Creep, data: DevelopmentRemoteD
     const visible = Game.rooms[task.targetRoom]
     return visible === undefined || issue(visible, home) === undefined
 }
-function localEconomyReady(home: Room): boolean {
-    if (home.energyCapacityAvailable < policy.minimumMiningCapacity) return false
-    const sourceIds = new Set<string>(home.sources.map(source => source.id))
-    let miner = false, filler = false
-    for (const name in Game.creeps) {
-        const creep = Game.creeps[name]
-        if (creep.spawning || creep.memory.spawnRoom !== home.name || creep.room.name !== home.name) continue
-        if (creep.memory.role === 'filler' && creep.getActiveBodyparts(CARRY) > 0) filler = true
-        if (creep.memory.role === 'harvester' && creep.getActiveBodyparts(WORK) > 0 && sourceIds.has((creep.memory.data as HarvesterData).sourceId)) {
-            const source = Game.getObjectById<Source>((creep.memory.data as HarvesterData).sourceId)
-            if (source && creep.pos.isNearTo(source)) miner = true
-        }
-        if (miner && filler) return true
-    }
-    return false
-}
 function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant, displayName: string, data: DevelopmentRemoteData,
     body?: CreepMemory['development'], maintenance = false): void {
     const name = addDemand(home, role, displayName, data)
@@ -249,7 +234,7 @@ function publish(addDemand: DemandPublisher, home: Room, role: CreepRoleConstant
     if (config) {
         const priorities = populationPolicy.remote.startupPriorities
         const priority = maintenance ? priorities.maintenance : role === 'reserver' ? priorities.reserver : role === 'rHarvester' ? priorities.harvester :
-            role === 'rFiller' ? priorities.hauler : undefined
+            role === 'rFiller' ? priorities.hauler : role === 'scout' ? priorities.scout : undefined
         if (priority !== undefined) config.spawnPriority = priority
         if (role === 'reserver') config.bodyProfile = { ...config.bodyProfile, boostTier: 0 }
     }
@@ -300,7 +285,8 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
             (state.intel[name]?.blockedUntil || 0) <= Game.time)
         const unknown = available > 0 ? current && unknowns.includes(current) ? current : unknowns[0] : undefined
         state.scoutTarget = unknown
-        for (const targetRoom of localEconomyReady(home) ? state.selectedRooms : []) {
+        const localReady = hasRemoteHomeEconomy(home)
+        for (const targetRoom of localReady ? state.selectedRooms : []) {
             const info = state.intel[targetRoom]
             const plans = info.sources.map(source => {
                 const travelTicks = source.travelTicks || policy.travelTicksPerRoom * 2
@@ -337,7 +323,7 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
                 }, { carryParts, travelTicks, maximumCost }, decision.maintenance)
             }
         }
-        if (unknown) {
+        if (unknown && localReady) {
             const decision = remoteCommissioningDecision(home, unknown, undefined, {
                 kind: 'automatic', reserveRequired: home.controller!.level >= policy.reserveMinimumLevel,
             })

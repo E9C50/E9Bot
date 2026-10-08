@@ -101,7 +101,8 @@ test('force selection publishes exact-tier team configurations and waits for eve
 
 function taskQueue(w) {
     const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: w.game, Memory: w.memory, RESOURCE_ENERGY: 'energy' },
-        modules: { role: { isRoleSupported: () => true } } });
+        modules: { role: { isRoleSupported: () => true },
+            './bodySelection': { selectCreepBody() { throw Error('mature combat priority tests never plan a development recovery body'); } } } });
     w.home.containers = [];
     w.home.storage.id = 'stock';
     w.game.creeps.residentFiller = { room: w.home, getActiveBodyparts: () => 1,

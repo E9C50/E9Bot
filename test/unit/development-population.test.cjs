@@ -1503,7 +1503,7 @@ test('a missing permanent repairer precedes ordinary builders and upgraders whil
     assert.equal(byRole(state.release(), 'repairer')[0].spawnPriority, 3.25, 'the first-worker priority is configurable');
 });
 
-test('the permanent worker priority preserves mining, first-carrier and first-upgrader recovery order', () => {
+test('the permanent worker follows mining and first-carrier recovery but precedes ordinary upgrading', () => {
     const home = room(); home.ramparts = [{ my: true }];
     const state = makeWorld(home, { automaticHauling: false });
     const next = () => home.memory.creepConfig[state.queue()[0]];
@@ -1511,7 +1511,7 @@ test('the permanent worker priority preserves mining, first-carrier and first-up
     const repairer = byRole(configs, 'repairer')[0];
     assert.equal(repairer.spawnPriority, 3.5);
     assert.equal(next().role, 'harvester');
-    assert.ok(byRole(configs, 'upgrader')[0].spawnPriority < repairer.spawnPriority);
+    assert.ok(byRole(configs, 'upgrader')[0].spawnPriority > repairer.spawnPriority);
     const miner = worker(home, { role: 'harvester', work: 5, name: 'productive-mine' });
     state.game.creeps[miner.name] = miner; configs = state.release();
     assert.equal(next().role, 'filler', 'a first native Source carrier still overrides the consumer fleet');
@@ -1520,8 +1520,8 @@ test('the permanent worker priority preserves mining, first-carrier and first-up
     carrier.getActiveBodyparts = part => part === 'carry' ? 40 : part === 'move' ? 20 : 0;
     state.game.creeps[carrier.name] = carrier; state.release();
     const ordered = state.queue().map(name => home.memory.creepConfig[name].role);
-    assert.ok(ordered.indexOf('upgrader') < ordered.indexOf('repairer'),
-        'the first affordable upgrading body remains ahead of the Rampart floor while outstanding production births stay first');
+    assert.ok(ordered.indexOf('repairer') < ordered.indexOf('upgrader'),
+        'a healthy controller does not move its first upgrading birth ahead of recovery and repair');
 });
 
 test('healthy and spawning permanent residents retain normal priority rather than scheduling a second urgent worker', () => {

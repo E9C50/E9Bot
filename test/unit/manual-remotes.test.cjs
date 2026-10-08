@@ -176,18 +176,19 @@ test('known occupied or empty OUT rooms never consume the startup slot ahead of 
     }
 });
 
-test('manual core demand priorities preserve local rescue, Invader guard and combat precedence', () => {
+test('manual core demand priorities follow local rescue and Invader guard before nonessential births', () => {
     const w = world(); w.release();
     const local = w.demand.addCreepConfig(w.home,'harvester','rescue',{sourceId:w.home.sources[0].id});
     const filler = w.demand.addCreepConfig(w.home,'filler','fuel',{sourceId:w.home.sources[0].id});
     const invader = w.demand.addCreepConfig(w.home,'rdefender','invader',{}); w.home.memory.creepConfig[invader].spawnPriority = 2.5;
     const fighter = w.demand.addCreepConfig(w.home,'sBuilder','combat',{}); w.home.memory.creepConfig[fighter].spawnPriority = 3.5;
     const queue = w.loader.load('creep/spawnQueue');
-    assert.deepEqual(Array.from(queue.buildSpawnQueue(w.home)).slice(0,4), [local,filler,invader,fighter]);
-    assert.equal(w.configs('reserver')[0].spawnPriority, 3.75);
+    assert.deepEqual(Array.from(queue.buildSpawnQueue(w.home)).slice(0,3), [local,filler,invader]);
+    assert.ok(queue.buildSpawnQueue(w.home).indexOf(w.published('reserver')[0]) < queue.buildSpawnQueue(w.home).indexOf(fighter));
+    assert.equal(w.configs('reserver')[0].spawnPriority, 2.7);
     w.born('reserver'); w.target.controller.reservation = { username:'me',ticksToEnd:100 }; w.release();
-    assert.equal(w.configs('rHarvester')[0].spawnPriority, 4.25);
-    w.born('rHarvester'); w.release(); assert.equal(w.configs('rFiller')[0].spawnPriority, 4.5);
+    assert.equal(w.configs('rHarvester')[0].spawnPriority, 2.8);
+    w.born('rHarvester'); w.release(); assert.equal(w.configs('rFiller')[0].spawnPriority, 2.9);
 });
 
 test('commissioned mine replacement precedes a new mine and keeps cached sources when vision is lost', () => {
@@ -198,10 +199,10 @@ test('commissioned mine replacement precedes a new mine and keeps cached sources
     assert.ok(w.published('reserver',w.other));
     delete w.game.creeps[miner.name]; delete w.game.rooms[w.target.name]; w.release();
     const replacement = w.published('rHarvester'); assert.ok(replacement);
-    assert.equal(replacement[1].spawnPriority, 3.6);
-    assert.equal(w.published('rFiller')[1].spawnPriority, 3.6);
-    assert.equal(w.published('reserver')[1].spawnPriority, 3.6);
-    assert.equal(w.published('reserver',w.other)[1].spawnPriority, 3.75);
+    assert.equal(replacement[1].spawnPriority, 2.6);
+    assert.equal(w.published('rFiller')[1].spawnPriority, 2.6);
+    assert.equal(w.published('reserver')[1].spawnPriority, 2.6);
+    assert.equal(w.published('reserver',w.other)[1].spawnPriority, 2.7);
     assert.ok(w.home.memory.creepSpawnQueue.indexOf(replacement[0]) <
         w.home.memory.creepSpawnQueue.indexOf(w.published('reserver',w.other)[0]));
 });
@@ -216,4 +217,37 @@ test('independent manual RF, RB and CLAIM instructions continue to publish while
     assert.ok(w.configs('rFiller').some(config => config.data.sourceFlag === `${w.home.name}_RF_S0`));
     assert.ok(w.configs('rBuilder').some(config => config.data.sourceFlag === `${w.home.name}_RB_S0`));
     assert.equal(w.configs('claimer').length, 1);
+});
+
+test('manual OUT reserver and scout births wait for real local mining and source hauling rather than published or spawning bodies', () => {
+    for (const invalidate of [w => { w.game.creeps['local-miner'].spawning = true; },
+        w => { w.game.creeps['local-filler'].spawning = true; },
+        w => { w.game.creeps['local-miner'].pos = new w.loader.globals.RoomPosition(25, 25, w.home.name); },
+        w => { w.game.creeps['local-filler'].memory.data.sourceId = 'unrelated'; }]) {
+        const w = world({ visible: false }); invalidate(w); w.release();
+        assert.deepEqual(w.configs(), [], invalidate.toString());
+        assert.equal(w.home.memory.remoteCommissioning?.current, undefined);
+    }
+    const w = world(); w.home.energyAvailable = 0; w.release();
+    assert.equal(w.configs('reserver').length, 1, 'only productive local coverage is required, not a full energy pool');
+});
+
+test('a stale OUT queue cannot spend another Spawn on remote maintenance after its local carrier dies', () => {
+    const w = world(); w.release();
+    const reserver = w.born('reserver'); w.target.controller.reservation = { username: 'me', ticksToEnd: 100 };
+    w.release(); const miner = w.born('rHarvester'); w.release();
+    const haulerConfig = w.published('rFiller');
+    assert.equal(w.commissioning.remoteSpawnAllowed(w.home, haulerConfig[1]), true);
+    delete w.game.creeps['local-filler'];
+    assert.equal(w.commissioning.remoteSpawnAllowed(w.home, haulerConfig[1]), false);
+    w.home.memory.creepSpawnQueue = [haulerConfig[0]]; w.spawn.doWork(); assert.equal(w.calls.length, 0);
+    w.release(); assert.equal(w.configs('reserver').length, 0);
+    assert.ok(w.game.creeps[reserver.name]); assert.ok(w.game.creeps[miner.name]);
+    assert.equal(miner.memory.data.developmentRemote?.retiring, undefined);
+});
+
+test('mature manual OUT tasks keep their previous local-economy admission behavior', () => {
+    const w = world({ level: 8 }); w.game.creeps = {}; w.release();
+    assert.equal(w.configs('reserver').length, 1);
+    assert.equal(w.commissioning.remoteSpawnAllowed(w.home, w.published('reserver')[1]), true);
 });

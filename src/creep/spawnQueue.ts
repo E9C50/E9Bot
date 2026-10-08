@@ -2,6 +2,9 @@ import { roleBaseEnum } from 'settings/creep'
 import { isRoleSupported } from 'role'
 import { isDevelopingRoom } from './development'
 import { hasUsableStorageFiller } from './storageFillerLifecycle'
+import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
+import { selectCreepBody } from './bodySelection'
+import { developmentPolicy } from 'settings/development'
 
 export function buildSpawnQueue(
     room: Room,
@@ -47,6 +50,43 @@ export function buildSpawnQueue(
                 (config.data as FillerData).sourceId === room.storage!.id
         })
         if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
+    }
+
+    // With production already working, an affordable controller rescue cannot wait
+    // behind a second Source's large miner while the controller is about to downgrade.
+    if (isDevelopingRoom(room) && room.controller!.ticksToDowngrade <= developmentPolicy.controller.constructionDowngradeWarningTicks &&
+        hasRemoteHomeEconomy(room, creeps)) {
+        const recoveryUpgrader = creepSpawnQueue.find(name => {
+            const config = creepConfigCache[name]
+            if (config.role !== roleBaseEnum.UPGRADER || config.spawnPriority !== developmentPolicy.upgrading.downgradeRecoveryPriority) return false
+            const { body } = selectCreepBody(room, config, false)
+            return body.length > 0 && body.reduce((total, part) => total + BODYPART_COST[part], 0) <= room.energyAvailable
+        })
+        if (recoveryUpgrader) return [recoveryUpgrader, ...creepSpawnQueue.filter(name => name !== recoveryUpgrader)]
+    }
+
+    // Recover stored spawn energy before an unaffordable miner blocks the whole queue.
+    // One working Source/carrier pair is enough; extra Storage carriers retain normal priorities.
+    if (isDevelopingRoom(room) && room.storage && room.energyAvailable < room.energyCapacityAvailable &&
+        room.storage.store[RESOURCE_ENERGY] > 0 && hasRemoteHomeEconomy(room, creeps)) {
+        const storageId = room.storage.id
+        const hasStorageCarrier = fillers.some(creep => {
+            const data = creep.memory.data as FillerData
+            return creep.memory.spawnRoom === room.name && data.sourceId === storageId && !data.mineId &&
+                !creep.memory.developmentHauler?.mineId && (creep.spawning ||
+                    creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(MOVE) > 0 &&
+                    !(creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed))
+        })
+        if (!hasStorageCarrier) {
+            const storageCarrier = creepSpawnQueue.find(name => {
+                const config = creepConfigCache[name], data = config.data as FillerData
+                if (config.role !== roleBaseEnum.FILLER || data.sourceId !== storageId || data.mineId || !config.development) return false
+                const { body } = selectCreepBody(room, config, true)
+                const cost = body.reduce((total, part) => total + BODYPART_COST[part], 0)
+                return body.length > 0 && cost <= room.energyAvailable && cost <= room.storage!.store[RESOURCE_ENERGY]
+            })
+            if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
+        }
     }
 
     // Source.id logistics works before containers exist: commission one carrier before adding more miners.

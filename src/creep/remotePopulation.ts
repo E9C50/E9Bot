@@ -3,6 +3,7 @@ import { populationPolicy } from 'settings/population'
 import { addCreepConfig, createCreepName } from './demand'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { getRemoteCommissioningSources, remoteCommissioningDecision } from './remoteCommissioning'
+import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
 export function releaseBootstrapBuilderConfig(): void {
@@ -54,7 +55,8 @@ export function releaseJobsCreepConfig(): void {
         // Keep every commissioned mine maintained, but admit only one new mine at a time.
         const seen = new Set<string>(), remotes: Array<{ flag: Flag; target?: Room;
             sources: Array<{ id: string; x: number; y: number }>; decision: ReturnType<typeof remoteCommissioningDecision> }> = []
-        for (let i = 0; i < populationPolicy.maximumRemoteRooms; i++) {
+        const localReady = hasRemoteHomeEconomy(room)
+        for (let i = 0; localReady && i < populationPolicy.maximumRemoteRooms; i++) {
             const flag = Game.flags[room.name + '_OUT' + i]
             if (!flag || seen.has(flag.pos.roomName) || room.spawns.length === 0) continue
             seen.add(flag.pos.roomName)
@@ -77,6 +79,7 @@ export function releaseJobsCreepConfig(): void {
         if (scouting) {
             const data: ScoutData = { targetFlag: scouting.flag.name }
             const name = addCreepConfig(room, roleBaseEnum.SCOUT, `${room.name}_OUT_SCOUT`, data)
+            if (room.memory.creepConfig[name]) room.memory.creepConfig[name].spawnPriority = populationPolicy.remote.startupPriorities.scout
             if (Game.creeps[name]) Game.creeps[name].memory.data = data
         }
 

@@ -1,4 +1,5 @@
 import { populationPolicy } from 'settings/population'
+import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 
 export interface RemoteCommissioningSource { id: string; x: number; y: number }
 export type RemoteCommissioningPhase = 'scouting' | 'reserving' | 'mining' | 'hauling' | 'ready' | 'waiting'
@@ -279,6 +280,7 @@ export function remoteSpawnAllowed(home: Room, config: CreepMemory): boolean {
         config.role === 'scout' && home.memory.developmentRemotes?.scoutTarget === target
     const registered = manual.includes(target) || automatic || !!record
     if (!registered) return true
+    if (!hasRemoteHomeEconomy(home)) return false
     if (record?.kind === 'manual' && !manual.includes(target) || data.developmentRemote && !automatic) return false
     if (!record) return false
     if (record.maintenance) return true

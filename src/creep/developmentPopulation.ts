@@ -164,6 +164,12 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
         const miners = creeps.filter(creep => creep.memory.role == 'harvester' &&
             (creep.memory.data as HarvesterData).sourceId == source.id && workParts(creep) > 0)
         const productive = linked ? miners.filter(creep => creep.getActiveBodyparts(CARRY) > 0) : miners
+        // A larger replacement improves an operating mine; it must not delay restoring
+        // an empty Source or commissioning remote income. Dying/travelling miners do not qualify.
+        const operatingMine = productive.some(miner => !miner.spawning && miner.room.name === room.name &&
+            (miner.ticksToLive ?? 0) > replacementLead(room, miner, source.pos) &&
+            !(miner.memory.boostPlan?.steps.length && !miner.memory.boostPlan.completed && !miner.memory.boostPlan.failed) &&
+            range(miner.pos, source.pos) <= 1)
         const nearbyWork = productive.filter(creep => !creep.spawning && creep.room.name == room.name &&
             !(creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed) &&
             range(creep.pos, source.pos) <= 1).reduce((total, creep) => total + harvestWorkParts(creep), 0)
@@ -195,7 +201,8 @@ function releaseMining(room: Room, creeps: Creep[]): MiningSupply[] {
                     if (!Game.creeps[createCreepName('harvester', candidate)]) { name = candidate; break }
                 }
                 if (!name) break
-                publish(room, 'harvester', name, { sourceId: source.id }, { workParts: work, stationary: true })
+                publish(room, 'harvester', name, { sourceId: source.id }, { workParts: work, stationary: true },
+                    operatingMine ? policy.mining.expansionPriority : undefined)
                 remaining -= work
             }
             count++
@@ -285,9 +292,14 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         const capacityCarry = Math.max(1, Math.min(policy.hauling.maximumCarryPartsPerCreep,
             Math.floor(room.energyCapacityAvailable / (BODYPART_COST[CARRY] + BODYPART_COST[MOVE]))))
         const count = linked ? 1 : Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(totalCarry / capacityCarry))
+        const sourceHaulers = creeps.some(creep => !creep.spawning && creep.room.name === room.name &&
+            creep.memory.role === 'filler' && energyCarryCapacity(creep) > 0 && creep.getActiveBodyparts(MOVE) > 0 &&
+            !(creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed) &&
+            servesSource(creep, source, container ? [container] : []))
         for (let index = 0; index < count; index++) publish(room, 'filler',
             `${room.name}_DEVELOP_FILLER_${source.id}_${index}`, { sourceId, mineId: source.id },
-            { carryParts: Math.min(capacityCarry, Math.max(1, totalCarry - index * capacityCarry)), travelTicks: trip })
+            { carryParts: Math.min(capacityCarry, Math.max(1, totalCarry - index * capacityCarry)), travelTicks: trip },
+            sourceHaulers ? policy.hauling.expansionPriority : undefined)
     }
     if (room.storage) {
         const trip = distributionTrip
@@ -370,14 +382,23 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const reserve = getDevelopmentSpawnReserve(room, 'upgrader')
     const workPerCreep = Math.max(1, affordableWork(room.energyCapacityAvailable - reserve,
         policy.upgrading.maximumWorkPartsPerCreep, buffer != undefined))
+    const downgradeRecovery = room.controller!.ticksToDowngrade <= policy.controller.constructionDowngradeWarningTicks
     for (let index = 0; remaining > 0 && count < maximum &&
         index < upgrades.length + maximum + policy.replacement.maximumReplacementsPerRoom; index++) {
         const name = `${room.name}_DEVELOP_UPGRADER_${index}`
         if (Game.creeps[createCreepName('upgrader', name)]) continue
         const work = Math.min(workPerCreep, remaining)
+        const emergency = downgradeRecovery && upgrades.length === 0 && count === 0
         publish(room, 'upgrader', name, { sourceId: buffer?.id || energySource.id },
-            { workParts: work, stationary: buffer != undefined },
-            upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
-        remaining -= work; count++
+            emergency ? { workParts: 1, carryParts: 1, stationary: buffer != undefined,
+                maximumCost: BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE] }
+                : { workParts: work, stationary: buffer != undefined },
+            emergency ? policy.upgrading.downgradeRecoveryPriority :
+                upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
+        if (emergency) {
+            const config = room.memory.creepConfig[createCreepName('upgrader', name)]
+            if (config) config.bodyProfile = { boostTier: 0 }
+        }
+        remaining -= emergency ? 1 : work; count++
     }
 }

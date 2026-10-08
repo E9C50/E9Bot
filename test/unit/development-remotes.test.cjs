@@ -36,7 +36,7 @@ function world({ level = 3, capacity = 800, visible = true, unsafe, incomplete =
     home.structures = road ? path.filter(position => position.roomName === home.name).map(pos => ({ structureType: 'road', pos })) : [];
     home.find = function (type) { return type === 'sources' ? this.sources : type === 'structures' ? this.structures : []; };
     const harvester = { spawning: false, room: home, pos: new Position(10, 24, home.name), memory: { role: 'harvester', spawnRoom: home.name, data: { sourceId: homeSource.id } }, getActiveBodyparts: () => 2 };
-    const filler = { spawning: false, room: home, pos: spawn.pos, memory: { role: 'filler', spawnRoom: home.name, data: {} }, getActiveBodyparts: () => 2 };
+    const filler = { spawning: false, room: home, pos: spawn.pos, memory: { role: 'filler', spawnRoom: home.name, data: { sourceId: homeSource.id } }, getActiveBodyparts: () => 2 };
     const game = { time: 100, shard: { name: 'shard1' }, rooms: { [home.name]: home }, creeps: { harvester, filler }, flags: {},
         getObjectById: id => objects.get(id), cpu: { bucket: 5000, tickLimit: 500, getUsed: () => 0 },
         map: { describeExits: () => ({ 7: target.name }), getRoomStatus: () => ({ status: 'normal' }), getRoomTerrain: () => ({ get: () => swamp ? 2 : 0 }),
@@ -111,6 +111,19 @@ test('mining waits for a productive local miner and a local filler rather than j
         assert.equal(w.calls.published.length, 0);
         assert.equal(w.home.memory.developmentRemotes.intel[w.target.name].status, 'safe', 'scouting intel can be kept while local economy recovers');
     }
+});
+
+test('a local recovery pause blocks new automatic births but lets its paid remote miner keep harvesting', () => {
+    const w = world(); w.release(); const data = w.task('harvester');
+    const creep = w.unit(data, w.target, { x: 11, energy: 0 });
+    delete w.game.creeps.filler; w.game.time++; w.calls.published.length = 0; w.home.memory.creepConfig = {}; w.release();
+    assert.equal(w.calls.published.length, 0);
+    const behavior = w.api.withDevelopmentRemoteRole(data, w.behavior);
+    assert.equal(behavior.prepare(creep), true);
+    behavior.target(creep);
+    assert.ok(w.calls.actions.some(action => action.type === 'harvest'));
+    assert.equal(data.developmentRemote.retiring, undefined);
+    assert.equal(w.calls.recycling, 0);
 });
 
 test('route travel is persisted as round-trip ticks with swamp fatigue and roads overriding swamp', () => {
@@ -317,8 +330,10 @@ test('a blocked loaded hauler at home still deposits its cargo into Storage with
     assert.equal(w.calls.delegated, 0);
 });
 
-test('a low-level room scouts without flags but waits for capacity and a real local harvester before mining', () => {
+test('a low-level room waits for local source transport and mining capacity before sending an automatic scout', () => {
     const w = world({ level: 2, capacity: 300, visible: false }); w.release();
+    assert.deepEqual(w.calls.published, []);
+    w.game.time++; w.home.energyCapacityAvailable = 550; w.release();
     assert.deepEqual(w.calls.published.map(call => call.role), ['scout']); assert.deepEqual(w.game.flags, {});
     assert.equal(w.home.memory.creepConfig[w.calls.published[0].name].development.maximumCost, 50);
     const data = w.task('scout'), creep = w.unit(data); w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(creep);
@@ -526,7 +541,7 @@ test('partial automatic Source planning resumes its remaining Source and cannot 
 });
 
 test('the admitted unknown automatic scout passes the native birth guard even outside selectedRooms', () => {
-    const w = world({ level: 2, capacity: 300, visible: false, sequential: true }); w.release();
+    const w = world({ level: 2, capacity: 550, visible: false, sequential: true }); w.release();
     assert.deepEqual(w.calls.published.map(call => call.role), ['scout']);
     assert.equal(w.home.memory.developmentRemotes.selectedRooms.length, 0);
     const config = w.home.memory.creepConfig[w.calls.published[0].name];

@@ -40,6 +40,7 @@ function world() {
             BODYPART_COST: { work: 100, carry: 50, move: 50, claim: 600 },
         },
         modules: {
+            './bodySelection': { selectCreepBody() { throw Error('mature mission priority tests never plan a development recovery body'); } },
             role: { isRoleSupported: () => true },
             utils: { sha1String: value => value },
             './transport': transport, 'shard/transport': transport,

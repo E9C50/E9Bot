@@ -521,6 +521,8 @@ test('a stale automatic remote queue consults the real role isNeed and cannot bl
 
 test('a selected and admitted automatic remote demand can spawn its explicitly affordable development body', () => {
     const w = transitionWorld({ level: 4 });
+    w.unit('local-miner', 'harvester', { x: 11, y: 20 });
+    w.unit('local-carrier', 'filler', { data: { sourceId: w.source.id }, work: 0, carry: 2 });
     w.home.memory.remoteCommissioning = { current: w.remote.name, rooms: { [w.remote.name]: {
         kind: 'automatic', reserveRequired: true, sources: { 'remote-source': { id: 'remote-source', x: 10, y: 20, haulers: 1 } },
         phase: 'mining', maintenance: false, ready: false, admitted: true,

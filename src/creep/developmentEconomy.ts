@@ -4,6 +4,8 @@ import { controllerEnergyBuffer } from './developmentLogistics'
 /** Shared by population planning and both default/custom body selection. */
 export function getDevelopmentSpawnReserve(room: Room, role: CreepRoleConstant): number {
     if (role !== 'upgrader') return 0
+    // Protect the controller without waiting for extra recovery stock in the Spawn.
+    if (room.controller && room.controller.ticksToDowngrade <= developmentPolicy.controller.constructionDowngradeWarningTicks) return 0
     const minimum = BODYPART_COST[WORK] + BODYPART_COST[CARRY] + BODYPART_COST[MOVE]
     const maximum = Math.max(0, room.energyCapacityAvailable - minimum)
     // An established controller supply can support a full-capacity body; a bootstrap

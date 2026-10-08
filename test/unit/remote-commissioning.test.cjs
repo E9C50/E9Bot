@@ -7,6 +7,13 @@ function world({ level = 3, capacity = 800, manual = true } = {}) {
     const combat = createCombatWorld(), game = combat.game;
     game.flags = {};
     const home = combat.room('W1N1', { my: true }); home.controller.level = level; home.energyCapacityAvailable = capacity;
+    const homeSource = { id: 'home-source', pos: combat.position(10, 10, home.name) }; home.sources = [homeSource];
+    home.containers = []; home.links = [];
+    for (const [name, role, parts] of [['local-miner', 'harvester', ['work', 'carry', 'move']], ['local-carrier', 'filler', ['carry', 'move']]]) {
+        const creep = combat.unit(name, parts, { roomName: home.name, x: 10, y: 11 });
+        creep.memory = { role, spawnRoom: home.name, data: { sourceId: homeSource.id } };
+        creep.getActiveBodyparts = type => creep.body.filter(part => part.type === type && part.hits > 0).length;
+    }
     home.memory.developmentRemotes = { candidates: [], selectedRooms: [], intel: {} };
     const loader = createSourceLoader({ globals: { ...combat.loader.globals, Game: game,
         BODYPART_COST: { claim: 600, move: 50 } } });
