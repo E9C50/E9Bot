@@ -9,6 +9,17 @@ export interface ConstructionBudget {
     intents: Map<string, { type: BuildableStructureConstant; position: BlueprintPosition }[]>
 }
 
+let budgetTick = -1, budgetShard = ''
+let sharedBudget: ConstructionBudget | undefined
+/** Layouts and remote lanes must count successful intents before Game exposes their sites. */
+export function getConstructionBudget(): ConstructionBudget {
+    if (!sharedBudget || budgetTick !== Game.time || budgetShard !== (Game.shard?.name || '')) {
+        budgetTick = Game.time; budgetShard = Game.shard?.name || ''
+        sharedBudget = { remaining: Math.max(0, MAX_CONSTRUCTION_SITES - Object.keys(Game.constructionSites || {}).length), intents: new Map() }
+    }
+    return sharedBudget
+}
+
 export function canShareStructureTile(first: StructureConstant, second: StructureConstant): boolean {
     if (first == second || first == STRUCTURE_WALL || second == STRUCTURE_WALL) return false
     if (first == STRUCTURE_RAMPART || second == STRUCTURE_RAMPART) return true

@@ -395,6 +395,17 @@ test('source IDs without current vision use persistent coordinates and full haul
     assert.deepEqual(w.calls.moves.at(-1).pos, { x: 25, y: 25, roomName: w.home.name });
 });
 
+test('loaded automatic remote haulers return along the Storage lane and fall back to Spawn after Storage disappears', () => {
+    const w = world(); w.release(); const data = w.task('hauler');
+    w.home.storage = { id: 'storage', pos: new w.Position(18, 30, w.home.name), store: w.store(0, 10000) };
+    const loaded = w.unit(data, w.target, { working: true, energy: 200 });
+    w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(loaded);
+    assert.deepEqual(w.calls.moves.at(-1).pos, { x: 18, y: 30, roomName: w.home.name });
+    delete w.home.storage; w.game.time++;
+    w.api.withDevelopmentRemoteRole(data, w.behavior).prepare(loaded);
+    assert.deepEqual(w.calls.moves.at(-1).pos, { x: 25, y: 25, roomName: w.home.name });
+});
+
 test('a new hostile reservation immediately withdraws workers before their original role can attack or harvest', () => {
     const w = world(); w.release(); const data = w.task('reserver'); w.game.time++;
     w.target.controller.reservation = { username: 'other', ticksToEnd: 1000 };

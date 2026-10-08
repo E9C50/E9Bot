@@ -4,12 +4,14 @@ import { getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
 import { acquireBuilderEnergy, updateBuilderEnergyPhase } from 'role/support/builderEnergy'
 import { upgradeBuilderAtStablePosition } from 'role/support/builderWorkPosition'
+import { prepareRemoteRoadWork, sourceRemoteRoadWork, targetRemoteRoadWork } from 'role/support/remoteRoadWork'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
         return true
     },
     prepare(creep) {
+        if ((data as RemoteBuilderData).roadHome) return prepareRemoteRoadWork(creep, data as RemoteBuilderData)
         if ((data as RemoteBuilderData).bootstrap) return !creep.spawning
         // if (Game.shard.name == 'shard3') {
         //     const shardMemory = JSON.parse(InterShardMemory.getLocal())
@@ -23,6 +25,7 @@ export default (data: CreepData): ICreepConfig => ({
         return creep.goBoost()
     },
     source(creep) {
+        if ((data as RemoteBuilderData).roadHome) return sourceRemoteRoadWork(creep, data as RemoteBuilderData)
         // 满批或部分载荷等待超时后开始工作，避免一直攒零碎能量。
         creep.memory.dontPullMe = false
         updateBuilderEnergyPhase(creep)
@@ -64,6 +67,7 @@ export default (data: CreepData): ICreepConfig => ({
         return acquiring
     },
     target(creep) {
+        if ((data as RemoteBuilderData).roadHome) return targetRemoteRoadWork(creep, data as RemoteBuilderData)
         creep.memory.dontPullMe = false
         const creepData: RemoteBuilderData = data as RemoteBuilderData
         const targetFlag = Game.flags[creepData.targetFlag]

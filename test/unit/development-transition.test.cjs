@@ -546,17 +546,18 @@ test('population rebuilds manual tasks before automatic remotes and orders the c
         './remotePopulation': { releaseJobsCreepConfig() { calls.push('manual'); home.memory.creepConfig.manual = {}; } },
         './demand': { addCreepConfig: addDemand },
         './developmentRemotes': { releaseDevelopmentRemoteConfigs(publisher) { assert.equal(publisher, addDemand); calls.push('automatic'); assert.ok(home.memory.creepConfig.manual); home.memory.creepConfig.automatic = {}; } },
+        './remoteRoads': { releaseRemoteRoadConfigs(publisher) { assert.equal(publisher, addDemand); assert.ok(home.memory.creepConfig.automatic); calls.push('roads'); } },
         'shard/controller': { releaseShardCreepConfig() { calls.push('shard'); } },
         './warPopulation': { releaseWarCreepConfig() { calls.push('war'); } },
         'combat/missions': { releaseCombatCreepConfigs() { calls.push('combat'); } },
         './spawnQueue': { orderCreepSpawnQueue() { calls.push('queue'); assert.ok(home.memory.creepConfig.automatic); } },
     } });
     loader.load('creep/population').creepNumberController();
-    assert.deepEqual(calls, ['base', 'manual', 'automatic', 'shard', 'war', 'combat', 'queue']);
+    assert.deepEqual(calls, ['base', 'manual', 'automatic', 'roads', 'shard', 'war', 'combat', 'queue']);
     assert.deepEqual(Object.keys(memory.creeps), ['alive']);
     game.time++;
     loader.load('creep/population').creepNumberController();
-    assert.equal(calls.length, 7, 'growth integration keeps the original refresh interval');
+    assert.equal(calls.length, 8, 'growth integration keeps the original refresh interval');
 });
 
 test('healthy growth repairers remain alive for owned Ramparts across missing catalogs and RCL8', () => {

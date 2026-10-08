@@ -336,7 +336,8 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
 
 function goHome(creep: Creep, data: DevelopmentRemoteData): void {
     const target = data.developmentRemote
-    const position = new RoomPosition(target.homePosition.x, target.homePosition.y, target.homeRoom)
+    const position = target.kind === 'hauler' && Game.rooms[target.homeRoom]?.storage?.pos ||
+        new RoomPosition(target.homePosition.x, target.homePosition.y, target.homeRoom)
     if (creep.pos.inRangeTo(position, 1)) { creep.memory.dontPullMe = false; return }
     const code = creep.moveTo(position, { range: 1 })
     // BetterMove may lock a repeatedly stalled mover; withdrawing units must remain swappable.

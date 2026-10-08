@@ -169,7 +169,8 @@ interface ReserverData { targetRoom: string }
 interface ClaimerData { targetFlag: string }
 
 interface RemoteFillerData { sourceFlag: string, targetFlag: string, withdrawTarget?: string }
-interface RemoteBuilderData { sourceFlag: string, targetFlag: string, buildTarget?: string, bootstrap?: boolean }
+interface RemoteBuilderData { sourceFlag: string, targetFlag: string, buildTarget?: string, bootstrap?: boolean,
+    roadHome?: string, targetRoom?: string, roadBuildTarget?: { id: string; roomName: string } }
 interface RemoteHarvesterData { sourceId: string, targetRoom: string, buildTarget?: string }
 
 interface AttackerData { targetFlag: string }

@@ -10,6 +10,7 @@ import { releaseCombatCreepConfigs } from 'combat/missions'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { releaseRoomEvacuationConfigs } from 'room/evacuation'
 import { releaseRemoteInvaderDefenseConfigs } from './remoteInvaderDefense'
+import { releaseRemoteRoadConfigs } from './remoteRoads'
 
 export function creepNumberController(): void {
     if (!Memory.creeps) Memory.creeps = {}
@@ -26,6 +27,7 @@ export function creepNumberController(): void {
     releaseBaseCreepConfig()
     releaseJobsCreepConfig()
     releaseDevelopmentRemoteConfigs(addCreepConfig)
+    releaseRemoteRoadConfigs(addCreepConfig)
     releaseShardCreepConfig()
     releaseWarCreepConfig()
     releaseCombatCreepConfigs()

@@ -19,9 +19,9 @@ function world(level = 6) {
         if(list)room[list].push(object);else room[type === 'powerSpawn' ? 'powerSpawn' : type] = object;
         return object;
     }
-    const game = { time: 100, shard: { name: 'shard1' }, flags: {}, creeps: {}, getObjectById: id => objects.get(id) };
+    const game = { time: 100, shard: { name: 'shard1' }, rooms: { [room.name]: room }, flags: {}, creeps: {}, getObjectById: id => objects.get(id) };
     const loader = createSourceLoader({ globals: { Game: game, RESOURCE_ENERGY: 'energy', STRUCTURE_LINK: 'link',
-        FIND_MY_CREEPS: 'my-creeps', ERR_NOT_IN_RANGE: -9, OK: 0 }, modules: {
+        STRUCTURE_SPAWN: 'spawn', FIND_MY_CREEPS: 'my-creeps', ERR_NOT_IN_RANGE: -9, OK: 0 }, modules: {
             utils: { getClosestTarget: (p, list) => list[0], getDistance: (p,q) => p.roomName === q.roomName ? Math.max(Math.abs(p.x-q.x),Math.abs(p.y-q.y)) : Infinity },
             'role/support/towers': { supportWithTowers() {} },
         } });
@@ -96,6 +96,21 @@ test('manual remote filler uses the same import rules and unloads its real miner
     behavior.target(creep);
     assert.equal(w.calls[0].target,storage.id);
     assert.equal(creep.memory.dontPullMe,false,'mineral imports also yield at depot entrances');
+});
+
+test('OUT haulers aim at home Storage on the return trip while explicit RF flags retain their destination', () => {
+    const w = world(), spawn = w.structure('spawn', 'spawn', 20, 20, 0, 300);
+    const storage = w.structure('storage', 'storage', 30, 30, 0, 10000);
+    const creep = w.unit('out', 10, 10, 100); creep.memory.spawnRoom = w.room.name;
+    creep.room = { name: 'E38N5' }; creep.pos = new w.Position(10, 10, creep.room.name);
+    const behavior = w.remote({ sourceFlag: 'source', targetFlag: spawn.id });
+    behavior.target(creep); assert.deepEqual(w.calls.at(-1).pos, storage.pos);
+    delete w.room.storage; w.calls.length = 0;
+    behavior.target(creep); assert.deepEqual(w.calls.at(-1).pos, spawn.pos);
+    w.room.storage = storage; w.calls.length = 0;
+    w.game.flags.delivery = { pos: new w.Position(15, 15, w.room.name) };
+    w.remote({ sourceFlag: 'source', targetFlag: 'delivery' }).target(creep);
+    assert.deepEqual(w.calls.at(-1).pos, w.game.flags.delivery.pos);
 });
 
 test('worker fallback is limited to the delivery room and uses no path search or global creep scan', () => {

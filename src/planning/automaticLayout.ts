@@ -1,5 +1,5 @@
 import { plannedRoomBlueprint, snapshotRoomBlueprint, synchronizeBlueprintMetadata } from 'planning/blueprint'
-import { buildMissingStructures, ConstructionBudget } from 'planning/construction'
+import { buildMissingStructures, getConstructionBudget } from 'planning/construction'
 import { computeRoomBlueprint } from 'planning/planner63'
 import { constructionPolicy } from 'settings/construction'
 import { roomPolicy } from 'settings/roomPolicy'
@@ -11,14 +11,12 @@ import { PLANNING_STRATEGY_VERSION } from './types'
 
 let tick = -1
 let planningAttempts = 0
-let constructionBudget: ConstructionBudget | undefined
 const deferredMigrationRooms = new Set<string>()
 
 function prepareTick(): void {
     if (tick == Game.time) return
     tick = Game.time
     planningAttempts = 0
-    constructionBudget = undefined
     deferredMigrationRooms.clear()
 }
 
@@ -128,11 +126,7 @@ export function runAutomaticLayout(room: Room): void {
     if (!matureInspection && !fresh && !controllerChanged && !levelChanged && !forced && !noSpawn && state.lastBuildTick != undefined &&
         Game.time - state.lastBuildTick < constructionPolicy.building.interval) return
     cleanupSourceLinkContainers(room)
-    if (constructionBudget == undefined) constructionBudget = {
-        remaining: Math.max(0, MAX_CONSTRUCTION_SITES - Object.keys(Game.constructionSites).length),
-        intents: new Map(),
-    }
-    buildMissingStructures(room, blueprint, constructionBudget)
+    buildMissingStructures(room, blueprint, getConstructionBudget())
     state.lastBuildTick = Game.time
     state.lastLevel = room.controller.level
 }

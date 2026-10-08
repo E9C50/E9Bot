@@ -1,5 +1,6 @@
 import { roomPolicy } from 'settings/roomPolicy'
 import { populationPolicy } from 'settings/population'
+import { remoteRoadPolicy } from 'settings/remoteRoads'
 import { runtimePolicy } from 'settings/runtime'
 import { interShardPolicy } from 'settings/interShard'
 import { combatPolicy } from 'settings/combat'
@@ -243,7 +244,7 @@ export const helpSections: HelpSection[] = [
                 aliases: ['SCOUT'], pattern: /^[we]\d+[ns]\d+_scout$/, details: ['放在 Controller 上时可能签名。删除旗停止直接任务续派，已有 Scout 仍可巡视 OUT。'] },
             { name: '<home>_OUT<i>', signature: `<home>_OUT<i> (i=0..${remoteLast})`, summary: '放外矿房：按数字顺序逐矿完成预订、开采与首次能量回送，再启动下一矿。',
                 aliases: ['OUT'], pattern: /^[we]\d+[ns]\d+_out\d+$/, details: [`起点须自有、有 Spawn；同一目标房重复旗只算一矿。RCL>2 先派预订工，出生容量至少 ${populationPolicy.remote.minimumReserveCapacity}；无视野也发布预订工和跟随当前旗的专用 Scout。`,
-                    `实际预订并抵达 Controller 后派矿工；全部矿工到矿点后派搬运工；所需搬运工部署且每个矿点成功回送能量后才启动下一矿。有工地或道路低于 ${populationPolicy.remote.roadRepairRatio * 100}% 时按需建设。`,
+                    `实际预订并抵达 Controller 后派矿工；全部矿工到矿点后派搬运工；所需搬运工部署且每个矿点成功回送能量后才启动下一矿。搬运阶段开始自动修路，每主房一名修路工维护工地和低于 ${remoteRoadPolicy.repairRatio * 100}% 血量的道路，优先级 ${remoteRoadPolicy.builderPriority}。`,
                     '已运行外矿持续补员，补员先于扩张；紧急 NPC 防守独立派兵。Memory.rooms[home].remoteCommissioning 可查看 current、phase 和 reason。入口被墙封住时须先开口。',
                     '删除旗停止续派并释放启动位，已有 Source ID 导航单位仍可继续。不要使用索引范围之外的 OUT 旗：虽不发布人工任务，仍可能占自动外矿名额。'],
                 examples: ['new RoomPosition(25,25,"E32N2").createFlag("E31N2_OUT0")'] },

@@ -160,7 +160,9 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         const creepData: RemoteFillerData = data as RemoteFillerData
         const targetFlag: Flag = Game.flags[creepData.targetFlag]
         const targetTarget = Game.getObjectById(creepData.targetFlag) as Structure
-        const targetPos = targetFlag?.pos || targetTarget?.pos
+        const configuredPos = targetFlag?.pos || targetTarget?.pos
+        const targetPos = targetTarget?.structureType === STRUCTURE_SPAWN && configuredPos?.roomName === creep.memory.spawnRoom ?
+            Game.rooms[configuredPos.roomName]?.storage?.pos || configuredPos : configuredPos
 
         if (targetPos == undefined) {
             creep.say('❓')

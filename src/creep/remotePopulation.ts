@@ -1,6 +1,6 @@
 import { bodyConfigs, roleAdvEnum, roleBaseEnum } from 'settings/creep'
 import { populationPolicy } from 'settings/population'
-import { addCreepConfig, createCreepName } from './demand'
+import { addCreepConfig } from './demand'
 import { isRoomEvacuating } from 'room/evacuationState'
 import { getRemoteCommissioningSources, remoteCommissioningDecision } from './remoteCommissioning'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
@@ -83,7 +83,6 @@ export function releaseJobsCreepConfig(): void {
             if (Game.creeps[name]) Game.creeps[name].memory.data = data
         }
 
-        let builderPublished = false
         for (const { flag, target, sources, decision } of remotes) {
             const priority = populationPolicy.remote.startupPriorities
             // Reserving depends on a room name, never on Source visibility. The full native body waits for 650 energy.
@@ -100,18 +99,6 @@ export function releaseJobsCreepConfig(): void {
             }
             const mining = decision.maintenance || ['mining', 'hauling', 'ready'].includes(decision.phase)
             const hauling = decision.maintenance || ['hauling', 'ready'].includes(decision.phase)
-            if (hauling && !builderPublished && target?.sources?.length &&
-                (target.constructionSites.length > 0 || target.roads.some(road =>
-                    road.hits < road.hitsMax * populationPolicy.remote.roadRepairRatio))) {
-                const logicalName = `${room.name}_OSBUILDER_${room.name}`
-                const data: RemoteBuilderData = { sourceFlag: target.sources[0].id, targetFlag: target.sources[0].id }
-                const live = Game.creeps[createCreepName(roleAdvEnum.RBUILDER, logicalName)]
-                if (live && room.storage && room.storage.store[RESOURCE_ENERGY] > populationPolicy.remote.builderStorageEnergy)
-                    data.sourceFlag = room.storage.id
-                const name = addCreepConfig(room, roleAdvEnum.RBUILDER, logicalName, data)
-                if (Game.creeps[name]) Game.creeps[name].memory.data = data
-                builderPublished = true
-            }
             for (const source of sources) {
                 if (mining) {
                     const name = addCreepConfig(room, roleAdvEnum.RHARVESTER, `${room.name}_RHARVESTER_${source.id}`, {

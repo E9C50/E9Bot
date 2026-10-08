@@ -46,15 +46,16 @@ export function creepWorkController(): void {
                 ? empireAtWar
                 : warModes[creep.room.name]
         const automaticRemote = isDevelopmentRemoteData(creep.memory.data)
+        const remoteRoadWorker = creep.memory.role === 'rBuilder' && !!(creep.memory.data as RemoteBuilderData)?.roadHome
         const targetedDismantle = creep.memory.targetDismantle !== undefined
         // Preserve the ordinary war skip and its profiling semantics when there is no cargo task to intercept.
-        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !targetedDismantle &&
+        if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !targetedDismantle &&
             !isRoomEvacuating(creep.room) && !isRoomEvacuating(creep.memory.spawnRoom)) continue
         const roleStarted = roleProfiling ? Game.cpu.getUsed() : 0
         try {
             if (runRoomEvacuationCreep(creep)) continue
             // Automatic remotes must reach prepare even during war so their safety wrapper can evacuate them.
-            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !targetedDismantle) continue
+            if (atWar && !warModeRole.includes(creep.memory.role) && !automaticRemote && !remoteRoadWorker && !targetedDismantle) continue
             if (!automaticRemote && retireDevelopmentCreep(creep)) continue
             if (creep.memory.role === 'builder' && idleBuilderIfNoWork(creep)) continue
             // A paused/cancelled precise task must stop before the normal boost hook can move it.

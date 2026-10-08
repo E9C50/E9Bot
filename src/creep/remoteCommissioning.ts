@@ -1,5 +1,6 @@
 import { populationPolicy } from 'settings/population'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
+import { getRemoteRoadWork } from './remoteRoads'
 
 export interface RemoteCommissioningSource { id: string; x: number; y: number }
 export type RemoteCommissioningPhase = 'scouting' | 'reserving' | 'mining' | 'hauling' | 'ready' | 'waiting'
@@ -264,6 +265,8 @@ export function remoteSpawnAllowed(home: Room, config: CreepMemory): boolean {
     }
     // Spawnless newly claimed rooms use their own bootstrap pipeline, even when a Source belonged to an old OUT mine.
     if (config.role === 'rBuilder' && data.bootstrap === true) return true
+    if (config.role === 'rBuilder' && data.roadHome &&
+        (data.roadHome !== home.name || !getRemoteRoadWork(home))) return false
     const state = home.memory.remoteCommissioning, manual = manualTargets(home)
     let target = data.developmentRemote?.targetRoom || data.targetRoom
     const outScout = !!data.targetFlag && new RegExp(`^${home.name}_OUT\\d+$`).test(data.targetFlag)

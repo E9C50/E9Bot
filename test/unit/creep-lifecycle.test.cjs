@@ -122,6 +122,19 @@ function executionWorld(creeps, createRoleBehavior, { warMode = {}, scope = 'emp
     return { api: loader.load('creep/execution'), game, errors };
 }
 
+test('road workers reach their safety prepare during war while ordinary manual builders remain paused', () => {
+    for (const scope of ['empire', 'room']) {
+        const road = unit('road', { role: 'rBuilder' }), manual = unit('manual', { role: 'rBuilder' });
+        road.memory.data.roadHome = 'W2N1';
+        const calls = [], w = executionWorld({ road, manual }, (_, data) => ({
+            prepare() { calls.push(data.name); return false; },
+            source() { throw Error('a retreating road worker must stop before work'); }
+        }), { scope, warMode: { W1N1: true } });
+        w.api.creepWorkController();
+        assert.deepEqual(calls, ['road']); assert.deepEqual(w.errors, []);
+    }
+});
+
 test('new compound-dependent economy units finish boosting before preparing or leaving their home', () => {
     const creep = unit('boosting', { role: 'filler' }), calls = [];
     creep.memory.boostPlan = { tier: 2, steps: [{ type: 'boostCarry', resource: 'KH2O', parts: 4 }] };
