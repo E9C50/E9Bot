@@ -27,7 +27,7 @@ function world() {
             reserveEvacuationIncoming() {} },
         'settings/roomPolicy': { roomPolicy, centerResourceSales: [], centerTerminalResources: [], roomResourceSales: [] },
         'runtime/roomSchedule': { roomWorkDue: () => true },
-        'runtime/cpuRecovery': { cpuRecoveryInterval: () => 1 }
+        'runtime/cpuRecovery': { cpuRecoveryInterval: () => 1, isCpuRecoveryActive: () => false }
     } });
     function add(name, { warehouse = false, storage = {}, terminal = { energy: 50000 },
         storageCapacity = warehouse ? 8000000 : 1000000, terminalCapacity = 300000 } = {}) {

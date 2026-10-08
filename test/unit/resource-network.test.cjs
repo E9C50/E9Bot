@@ -266,9 +266,76 @@ test('full affordable shipments avoid repeated transaction-cost searches during 
     assert.equal(donor.memory.terminalAmount.energy, 60000);
     donor.terminal.cooldown = 0; queries = 0;
     w.processTerminalResource(donor);
-    assert.equal(queries, 5, 'staging and dispatch do not binary-search a full affordable batch');
+    assert.equal(queries, 3, 'dispatch checks capacity and fuel once, then stages the next job after settlement');
     assert.deepEqual(w.sends, [{ from: 'donor', resource: 'H', amount: 100000, target: 'external' }]);
     assert.equal(w.getTerminalResourceAmount(donor, 'energy'), 50000);
+});
+
+test('critical CPU recovery pauses only new balancing while existing sends and boost imports keep working', () => {
+    const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true, cooldown: 0,
+        terminal: { energy: 60000, H: 5000 } }), target = w.room('ordinary');
+    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 0 };
+    warehouse.memory.terminalSendJob.manual = { targetRoom: target.name, resourceType: 'H', amount: 5000 };
+    w.processTerminalResource(warehouse);
+    assert.deepEqual(w.sends, [{ from: warehouse.name, resource: 'H', amount: 5000, target: target.name }]);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'bulk refill remains paused');
+    w.requestRoomResource(target, 'H', 10000);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 5000, 'boost/lab imports bypass the balancing pause');
+});
+
+test('recovery bulk planning retains due work until CPU headroom and bucket recover, avoiding population ticks', () => {
+    const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
+    let used = 0;
+    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 100, getUsed: () => used };
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
+    w.game.time = 2; w.game.cpu.bucket = 100; used = 7;
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'uses sustained limit, not the large burst allowance');
+    w.game.time = 5; used = 0; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'cannot overlap the population refresh');
+    w.game.time = 6; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000, 'deferred work runs on the next eligible tick');
+    assert.ok(Object.keys(warehouse.memory.terminalSendJob).length > 0);
+});
+
+test('recovery automatic balancing uses its longer cadence and resumes the normal interval after recovery', () => {
+    const w = world(30), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
+    w.game.cpu = { bucket: 500, limit: 20, tickLimit: 200, getUsed: () => 0 };
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
+    w.game.time = 151; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 10000);
+    target.storage.store.H = 10000;
+    w.game.time = 180; w.game.cpu.bucket = 1000; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'normal balancing releases fulfilled old promises');
+});
+
+test('waiting for bulk CPU budget still reconciles automatic promises against newly reserved boost resources', () => {
+    const w = world(1), warehouse = w.room('warehouse', { H: 100000 }, { warehouse: true }), target = w.room('ordinary');
+    warehouse.memory.terminalSendJob.old = { targetRoom: target.name, resourceType: 'H', amount: 10000, kind: 'refill' };
+    warehouse.memory.boostNeed.H = 100000;
+    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 0 };
+    w.planResourceDistribution();
+    assert.equal(warehouse.memory.terminalSendJob.old, undefined);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0);
+});
+
+test('critical recovery still creates energy support for an exhausted room without waiting for bulk balancing', () => {
+    const w = world(1), donor = w.room('donor', { energy: 600000, H: 100000 }, { terminal: { energy: 60000 } });
+    const target = w.room('exhausted', { energy: 0 }, { terminal: { energy: 50000 } });
+    w.game.cpu = { bucket: 0, limit: 20, tickLimit: 20, getUsed: () => 18 };
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'H'), 0, 'ordinary mineral planning is still paused');
+    const jobs = Object.keys(donor.memory.terminalSendJob);
+    w.planResourceDistribution();
+    assert.deepEqual(Object.keys(donor.memory.terminalSendJob), jobs);
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'one support pass per tick');
+    w.game.time = 30; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 50000, 'energy support avoids population ticks');
+    w.game.time = 31; w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'energy'), 100000, 'energy rescue retains its thirty-tick cadence');
 });
 
 test('partial shipment searches still find the largest integer allowed by fuel and terminal capacity', () => {

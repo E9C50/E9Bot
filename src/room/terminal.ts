@@ -82,8 +82,10 @@ export function processTerminalResource(room: Room): void {
     const terminal = room.terminal
     if (!terminal || isRoomEvacuating(room)) return
     planResourceDistribution()
-    refreshTerminalDemand(room)
-    if (terminal.cooldown > 0 || terminalUsed(room)) return
+    if (terminal.cooldown > 0 || terminalUsed(room)) {
+        refreshTerminalDemand(room)
+        return
+    }
     const jobs = Object.entries(room.memory.terminalSendJob || {})
         .sort((a, b) => priority(a[1]) - priority(b[1]) ||
             (a[1].createdAt || 0) - (b[1].createdAt || 0) || b[1].amount - a[1].amount)
@@ -107,7 +109,6 @@ export function processTerminalResource(room: Room): void {
         updateResourceJob(room, id, remainder > 0 ? { ...job, amount: remainder, failures: 0, retryAfter: 0 } : undefined)
         recordResourceSend(room, job.targetRoom, job.resourceType, amount, fee)
         if (target?.terminal) reserveEvacuationIncoming(target, amount)
-        refreshTerminalDemand(room)
         break
     }
     refreshTerminalDemand(room)

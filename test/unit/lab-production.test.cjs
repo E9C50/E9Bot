@@ -29,7 +29,7 @@ function world() {
                 ...createSourceLoader().load('settings/resourcePolicy'), t3Resources: ['XUH2O', 'XLHO2'],
             },
             'settings/roomPolicy': { roomPolicy: { labs: { updateInterval: 10, staggerUpdates: false } } },
-            'runtime/cpuRecovery': { cpuRecoveryInterval: (_, normal) => normal, hasPendingRoomBoost: () => false },
+            'runtime/cpuRecovery': { cpuRecoveryInterval: (_, normal) => normal, cpuRecoveryWorkDue: () => true, hasPendingRoomBoost: () => false },
             'runtime/creepIndex': { getRoomProcessors: () => [] },
             'creep/boosting': { getActiveRoomBoostRequests: () => [], usableBoostLabs: () => [] },
             'room/factory': { runFactoryLogistics: () => false },

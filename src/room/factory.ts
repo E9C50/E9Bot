@@ -3,6 +3,7 @@ import { getGlobalResourceAmount, getOutgoingResourceAmount, getTerminalResource
     recordTerminalWithdrawal } from './resourceNetwork'
 import { isRoomEvacuating } from './evacuationState'
 import { getEvacuationIncomingCapacity, reserveEvacuationIncoming } from './evacuation'
+import { cpuRecoveryWorkDue } from 'runtime/cpuRecovery'
 
 type FactoryResource = Parameters<StructureFactory['produce']>[0]
 type Recipe = typeof COMMODITIES[FactoryResource]
@@ -269,6 +270,9 @@ export function planFactoryProduction(factory: StructureFactory): void {
         if (room.memory.productionReserve) delete room.memory.productionReserve.factory
         return
     }
+    // Keep the running batch and its reserved ingredients while recovery defers recipe scans.
+    // Invalid structures above still clear their reservations immediately.
+    if (!cpuRecoveryWorkDue(room.name, 'factoryPlanning')) return
     const stock = planningStock(factory)
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||

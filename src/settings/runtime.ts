@@ -13,6 +13,7 @@ export const runtimePolicy = {
             mineral: 5,
             powerSpawn: 10,
             factory: 25,
+            factoryPlanning: 25,
             labReaction: 5,
             labPlanning: 100,
             market: 250,

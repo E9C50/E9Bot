@@ -1,5 +1,7 @@
 import { basicMinerals, ordinaryRoomResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { isRoomEvacuating } from './evacuationState'
+import { isCpuRecoveryActive } from 'runtime/cpuRecovery'
+import { populationPolicy } from 'settings/population'
 
 type Amounts = Record<string, number>
 export type ResourceJob = RoomMemory['terminalSendJob'][string]
@@ -17,6 +19,8 @@ let terminalWithdrawals = new Map<string, Amounts>()
 let usedTerminals = new Set<string>()
 let planned = false
 let reconciled = false
+let distributionDue = false
+let energySupportPlanned = false
 
 function add(map: Map<string, Amounts>, name: string, resource: string, value: number): void {
     const amounts = map.get(name) || {}
@@ -31,10 +35,12 @@ function eligible(room: Room): boolean {
 }
 function prepare(): void {
     if (tick === Game.time && shard === (Game.shard?.name || '')) return
+    if (shard !== (Game.shard?.name || '') || Game.time < tick) distributionDue = false
     tick = Game.time; shard = Game.shard?.name || ''
     rooms = Object.values(Game.rooms).filter(eligible)
     incoming = new Map(); outgoing = new Map(); localCargo = new Map()
     sent = new Map(); received = new Map(); usedTerminals = new Set(); planned = false; reconciled = false
+    energySupportPlanned = false
     terminalWithdrawals = new Map()
     for (const room of rooms) {
         room.memory.terminalSendJob ||= {}
@@ -227,8 +233,19 @@ function reconcileResourceJobs(): void {
 export function planResourceDistribution(): void {
     prepare()
     reconcileResourceJobs()
-    if (planned || Game.time % resourcePolicy.distributionInterval !== 0) return
+    if (planned) return
+    if (isCpuRecoveryActive()) {
+        const recovery = resourcePolicy.recoveryDistribution
+        if (Game.time % recovery.interval === recovery.phase) distributionDue = true
+        if (!distributionDue) { planRecoveryEnergySupport(); return }
+        // Bulk balancing can wait. Existing sends and explicit/boost imports still run every tick.
+        const budget = Math.min(Game.cpu.limit, Game.cpu.tickLimit)
+        if (Game.cpu.bucket < recovery.minimumBucket || Game.time % populationPolicy.refreshInterval === 0 ||
+            Number.isFinite(budget) && typeof Game.cpu.getUsed === 'function' &&
+            budget - Game.cpu.getUsed() < recovery.minimumHeadroom) { planRecoveryEnergySupport(); return }
+    } else if (Game.time % resourcePolicy.distributionInterval !== 0) return
     planned = true
+    distributionDue = false
     // Re-evaluate automated balancing; explicit console jobs and lab import requests persist.
     for (const room of rooms) for (const id in room.memory.terminalSendJob) {
         const job = room.memory.terminalSendJob[id]
@@ -298,6 +315,20 @@ export function planResourceDistribution(): void {
             }
         }
     }
+    if (!energySupportPlanned) {
+        energySupportPlanned = true
+        planEnergySupport(inventory)
+    }
+}
+
+/** Keep energy rescue on its usual cadence when optional mineral balancing waits. */
+function planRecoveryEnergySupport(): void {
+    if (energySupportPlanned || Game.time % resourcePolicy.distributionInterval !== 1) return
+    energySupportPlanned = true
+    planEnergySupport(planningInventory())
+}
+
+function planEnergySupport(inventory: PlanningInventory): void {
     // Energy support is independent of warehouse classification.
     for (const target of rooms) {
         const stock = inventory.projected(target, 'energy')
