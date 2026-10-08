@@ -115,9 +115,16 @@ function localAmount(room: Room, resource: ResourceConstant): number {
     return (room.storage?.store[resource] || 0) + getTerminalResourceAmount(room, resource) +
         factoryAmount(room.factory, resource) + factoryCargo(room, resource)
 }
+/** Factories preserve raw lab feedstock in warehouses as well as ordinary rooms.
+ * This is a factory spending limit, not a production reservation, so labs can use it. */
+function ingredientKeep(room: Room, resource: ResourceConstant, warehouse = isWarehouseRoom(room)): number {
+    if (resource === RESOURCE_ENERGY) return resourcePolicy.terminalEnergyReserve
+    const minimum = basicMinerals.includes(resource) ? resourcePolicy.basicMineralReserve :
+        resource === RESOURCE_GHODIUM ? resourcePolicy.ghodiumReserve : warehouse ? 0 : ordinaryResourceKeep(resource)
+    return Math.max(minimum, room.memory.boostNeed?.[resource] || 0)
+}
 function availableIngredient(room: Room, resource: ResourceConstant): number {
-    const keep = resource === RESOURCE_ENERGY ? resourcePolicy.terminalEnergyReserve :
-        isWarehouseRoom(room) ? 0 : Math.max(ordinaryResourceKeep(resource), room.memory.boostNeed?.[resource] || 0)
+    const keep = ingredientKeep(room, resource)
     return Math.max(0, localAmount(room, resource) - keep - (room.memory.productionReserve?.lab?.[resource] || 0) -
         getOutgoingResourceAmount(room.name, resource))
 }
@@ -142,8 +149,7 @@ function planningStock(factory: StructureFactory): PlanningStock {
         },
         available(resource) {
             if (!available.has(resource)) {
-                const keep = resource === RESOURCE_ENERGY ? resourcePolicy.terminalEnergyReserve :
-                    warehouse ? 0 : Math.max(ordinaryResourceKeep(resource), room.memory.boostNeed?.[resource] || 0)
+                const keep = ingredientKeep(room, resource, warehouse)
                 available.set(resource, Math.max(0, stock.local(resource) - keep -
                     (room.memory.productionReserve?.lab?.[resource] || 0) - getOutgoingResourceAmount(room.name, resource)))
             }

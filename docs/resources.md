@@ -59,9 +59,11 @@ Lab 优先本房短缺 T3；无短缺时生产全局库存最低且原料可满�
 
 `productionPlan.remaining` 按最终 T3 成功反应的实际产量递减，产物出口不会扩大或重开全局批次；前置反应不扣最终批次。Processer 取料同时限制生产缺口、工人容量与源库存，只在原生取料成功后切换运送状态。
 
-Factory 原实现为空，现在按本房 Storage、Terminal、Factory 和在途工厂货物选品。优先原料足够的商品，较高合法等级优先、同级看全局库存；永久等级与有效 `PWR_OPERATE_FACTORY` 同时检查。无可做商品时仅压缩本房 Mineral，保护基础矿底线、Lab/Boost 预留及既有发送承诺。批量受 20 次、500 tick 与 Factory 容量共同限制；冷却时继续备料和清货。Manager 只处理座位附近的工厂，移动 Processer 补充其他位置的物流，RCL7 的 Factory 也会发布 Processer。
+Factory 原实现为空，现在按本房 Storage、Terminal、Factory 和在途工厂货物选品。优先原料足够的商品，较高合法等级优先、同级看全局库存；永久等级与有效 `PWR_OPERATE_FACTORY` 同时检查。无可做商品时仅压缩本房 Mineral。普通房和仓库的 Factory 都保护 H/O/U/L/K/Z/X 各 10000、G 10000 原矿底线，并另扣 Lab 预留及既有发送承诺，Boost 用料也受保护。这份底线只限制 Factory 消耗，仓库的 Lab 及跨房合成供料仍可使用；不会把备用原矿锁成 Factory 生产预留。已有压缩批次在库存减少时缩减或取消，实际 `produce` 前再次校验，已装入 Factory 的原料也不会绕过底线。批量受 20 次、500 tick 与 Factory 容量共同限制；冷却时继续备料和清货。Manager 只处理座位附近的工厂，移动 Processer 补充其他位置的物流，RCL7 的 Factory 也会发布 Processer。
 
 工厂物流先凑齐下一轮输入，保留厂内可直接使用的多余燃料，容量不足时只清出所需空间；待入厂任务与同 tick 已提交的转移共同预约 Factory 容量。
+
+2026-10-09 00:21（北京时间）只读检查 shard3/E38N6：8M 仓库的本矿为 O，Storage O 为 0、Terminal O 为 362、Factory O 为 0，库存另有 71152 oxidant。旧代码把仓库非能量保留量设为 0，当前 Lab 使用已有 UHO2 合成 XUHO2，未预留 O，因而允许 Factory 把原矿持续压缩。新规则对所有房间统一保护原矿，后续采矿回补的 O 会留作合成备用；不自动解压已有 oxidant。上述为源码修复前现场快照，代码只做 Git 提交，未上传。
 
 ## 现场检查与参考
 
