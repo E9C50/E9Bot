@@ -4,7 +4,8 @@ const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function recoveryWorld() {
     const game = { time: 1, shard: { name: 'shard3' }, cpu: { bucket: 999 } };
-    const loader = createSourceLoader({ globals: { Game: game } });
+    const loader = createSourceLoader({ globals: { Game: game },
+        modules: { 'room/labBoostPriority': { prioritizeLabBoostJobs: () => false } } });
     loader.load('settings/runtime').runtimePolicy.cpuRecovery.enabled = true;
     const api = loader.load('runtime/cpuRecovery');
     return { game, loader, api, policy: loader.load('settings/runtime').runtimePolicy.cpuRecovery };

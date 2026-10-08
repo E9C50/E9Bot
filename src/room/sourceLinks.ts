@@ -1,5 +1,6 @@
 import { sourceLinkPolicy } from 'settings/sourceLinks'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
+import { isStructureActive } from 'runtime/structureActivity'
 
 interface LinkIndex {
     tick: number
@@ -54,7 +55,7 @@ function linkIsActive(index: LinkIndex, link: StructureLink): boolean {
     if (link.my === false) return false
     const previous = index.active.get(link.id)
     if (previous !== undefined) return previous
-    const active = !link.isActive || link.isActive()
+    const active = isStructureActive(link)
     index.active.set(link.id, active)
     return active
 }
@@ -137,7 +138,7 @@ export function hasSourceLinkTransport(room: Room, source: Source, _buffer?: Str
     const origin = sourceLinkWithCenter(room, source)
     if (origin === undefined) return false
     const storage = room.storage
-    return storage === undefined || storage.my !== false && (!storage.isActive || storage.isActive())
+    return storage === undefined || storage.my !== false && isStructureActive(storage)
 }
 
 /** Only a built, active central receiver can replace the Container's general room supply. */

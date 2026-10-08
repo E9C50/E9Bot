@@ -1,5 +1,6 @@
 import { basicMinerals, ordinaryRoomResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { isRoomEvacuating } from './evacuationState'
+import { isStructureActive } from 'runtime/structureActivity'
 
 type Amounts = Record<string, number>
 export type ResourceJob = RoomMemory['terminalSendJob'][string]
@@ -32,7 +33,7 @@ function add(map: Map<string, Amounts>, name: string, resource: string, value: n
 function positive(value: number | undefined): number { return Math.max(0, value || 0) }
 function eligible(room: Room): boolean {
     return (room.controller?.my === true || room.my === true) && !!room.storage && !!room.terminal &&
-        room.terminal.my !== false && (typeof room.terminal.isActive !== 'function' || room.terminal.isActive()) &&
+        room.terminal.my !== false && isStructureActive(room.terminal) &&
         !isRoomEvacuating(room)
 }
 function prepare(): void {

@@ -18,7 +18,7 @@ function world() {
         }); return result;
     }
     const room = { name: 'W1N1', my: true, level: 8, controller: { my: true, level: 8, isPowerEnabled: false },
-        memory: { creepConfig: {}, roomFillJob: {}, boostNeed: {}, roomLabConfig: {
+        memory: { creepConfig: {}, roomFillJob: {}, roomStructure: {}, boostNeed: {}, roomLabConfig: {
             sourceLab1: 'source1', sourceLab2: 'source2', singleLabConfig: {}, labReactionConfig: 'XUH2O', reactionAmount: 1000,
             productionPlan: { target: 'XUH2O', targetAmount: 23000, local: false, remaining: 1000 } },
             productionReserve: { lab: { UH2O: 1000, X: 1000 } } }, labs: [], spawns: [], towers: [], links: [], containers: [], extensions: [], sources: [] };
@@ -35,6 +35,7 @@ function world() {
         'settings/boost': { boostConfig: { boostAttack: ['UH', 'UH2O', 'XUH2O'], boostUpgrade: ['GH', 'GH2O', 'XGH2O'] },
             boostBodyPart: { boostAttack: 'attack', boostUpgrade: 'work' }, roleBoostConfig: { integrate: ['boostAttack'] } },
         'settings/labs': { reactionSource: { XUH2O: ['UH2O', 'X'] } },
+        'settings/room': { roomSignTextList: [] },
         'settings/roomPolicy': { roomPolicy: { labs: { updateInterval: 10, staggerUpdates: false } } },
         'settings/structures': { structurePolicy: { lab: { jobInterval: 10, outputMineralThreshold: 1000, sourceFreeCapacity: 1000 } } },
         'creep/haulerDelivery': { withHaulerTraffic: behavior => behavior, deliverHaulerEnergy: () => false },
@@ -125,6 +126,63 @@ test('same-tick accepted boosts invalidate an earlier idle decision and expire w
     assert.equal(w.calls.length, 0);
     w.game.time++;
     w.output.doWork();
+    assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 1);
+});
+
+test('room Lab initialization and execution reconcile boost queues once per synchronous batch', () => {
+    const w = world();
+    for (let index = 0; index < 7; index++) w.lab('extra' + index);
+    let reconciliations = 0;
+    w.memory.combatTasks = new Proxy({}, { ownKeys(value) { reconciliations++; return Reflect.ownKeys(value); } });
+    w.unit('waiting', 'fighter', {}, w.plan('GH'));
+    w.configure(w.output, 'GH'); w.room.storage.store.GH = 60;
+    w.room.memory.roomFillJob = { labOut: ['source2'], labInMineral: [{ labId: 'source1', resourceType: 'UH2O' }], labInEnergy: ['source1'] };
+    w.loader.load('room/initialization').initializeStructures(w.room);
+    assert.equal(reconciliations, 1, 'ten Lab init hooks share one fresh boost decision');
+    assert.deepEqual(Array.from(w.room.memory.roomFillJob.labOut), []);
+    assert.deepEqual(Array.from(w.room.memory.roomFillJob.labInMineral, job => [job.labId, job.resourceType]), [['output', 'GH']]);
+    assert.deepEqual(Array.from(w.room.memory.roomFillJob.labInEnergy), ['output']);
+    w.loader.load('module/StructureController').structureWorkController();
+    assert.equal(reconciliations, 2, 'ten Lab work hooks use a new decision after creep execution');
+    assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 0);
+});
+
+test('idle Lab batches keep every output reaction and take fresh boost decisions on the next tick', () => {
+    const w = world();
+    w.game.time = 101;
+    for (let index = 0; index < 7; index++) w.lab('extra' + index);
+    let reconciliations = 0;
+    w.memory.combatTasks = new Proxy({}, { ownKeys(value) { reconciliations++; return Reflect.ownKeys(value); } });
+    const initialize = w.loader.load('room/initialization').initializeStructures;
+    const work = w.loader.load('module/StructureController').structureWorkController;
+    initialize(w.room); work();
+    assert.equal(reconciliations, 2);
+    assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 8, 'batching does not reduce reaction throughput');
+    w.game.time++;
+    w.unit('waiting', 'fighter', {}, w.plan());
+    initialize(w.room); work();
+    assert.equal(reconciliations, 4);
+    assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 8, 'the next tick sees fresh live boost demand');
+});
+
+test('a boost accepted after room planning pauses the Lab execution batch in the same tick', () => {
+    const w = world();
+    w.game.time = 101;
+    w.loader.load('room/initialization').initializeStructures(w.room);
+    assert.equal(w.room.memory.labBoostPaused, undefined);
+    w.reserveBoostPlan(w.room, 'accepted', w.plan());
+    w.loader.load('module/StructureController').structureWorkController();
+    assert.equal(w.room.memory.labBoostPaused, true);
+    assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 0);
+});
+
+test('a boost completed during creep execution releases the earlier initialization pause immediately', () => {
+    const w = world(), waiting = w.unit('waiting', 'fighter', {}, w.plan());
+    w.loader.load('room/initialization').initializeStructures(w.room);
+    assert.equal(w.room.memory.labBoostPaused, true);
+    waiting.memory.boostPlan.completed = true;
+    w.loader.load('module/StructureController').structureWorkController();
+    assert.equal(w.room.memory.labBoostPaused, undefined);
     assert.equal(w.calls.filter(c => c[0] === 'reaction').length, 1);
 });
 

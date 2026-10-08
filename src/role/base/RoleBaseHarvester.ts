@@ -32,6 +32,35 @@ function hasLocalCarrier(room: Room): boolean {
     return carriers.get(room.name) || false
 }
 
+interface PendingCarrier {
+    tick: number
+    shard: string
+    configs: RoomMemory['creepConfig']
+    name: string
+}
+const pendingCarriers = new WeakMap<Room, PendingCarrier>()
+
+function isPendingCarrier(room: Room, name: string, config: CreepMemory | undefined): boolean {
+    return config?.role === 'filler' && !Game.creeps[name] && (!config.spawnRoom || config.spawnRoom === room.name)
+}
+
+/** Reuse one positive catalog witness; additions after a miss and changes to its entry remain live. */
+function hasPendingLocalCarrier(room: Room): boolean {
+    const configs = room.memory.creepConfig
+    if (configs === undefined) return false
+    const previous = pendingCarriers.get(room)
+    if (previous?.tick === Game.time && previous.shard === Game.shard.name && previous.configs === configs &&
+        isPendingCarrier(room, previous.name, configs[previous.name])) return true
+    for (const name in configs) {
+        if (!isPendingCarrier(room, name, configs[name])) continue
+        pendingCarriers.set(room, { tick: Game.time, shard: Game.shard.name, configs, name })
+        return true
+    }
+    // A same-tick publication may add a missing carrier. Negative results are not cached.
+    pendingCarriers.delete(room)
+    return false
+}
+
 function emergencyProductionTarget(creep: Creep): StructureSpawn | StructureExtension | undefined {
     // Complete bodies can cost more than the old 300-energy restart threshold.
     // Without a working carrier, keep supplying native spawn capacity before returning to the mine.
@@ -56,13 +85,8 @@ function recoveringLocalCarrier(creep: Creep): boolean {
     if (room.controller?.my !== true || creep.memory.spawnRoom && creep.memory.spawnRoom !== room.name) return false
     if (creep.store.getCapacity(RESOURCE_ENERGY) <= 0 || Number.isFinite(room.energyCapacityAvailable) &&
         room.energyCapacityAvailable > 0 && room.energyAvailable >= room.energyCapacityAvailable) return false
-    let pending = false
-    for (const name in room.memory.creepConfig || {}) {
-        const config = room.memory.creepConfig[name]
-        if (config?.role === 'filler' && !Game.creeps[name] &&
-            (!config.spawnRoom || config.spawnRoom === room.name)) { pending = true; break }
-    }
-    return pending && emergencyProductionTarget(creep) !== undefined
+    if (room.memory.creepConfig === undefined || hasLocalCarrier(room)) return false
+    return hasPendingLocalCarrier(room) && emergencyProductionTarget(creep) !== undefined
 }
 
 /** Use the mine's own harvest to build its container without leaving the Source workstation. */

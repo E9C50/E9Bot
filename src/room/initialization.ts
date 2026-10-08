@@ -1,5 +1,6 @@
 import { roomSignTextList } from 'settings/room'
 import { roomPolicy } from 'settings/roomPolicy'
+import { prioritizeLabBoostJobs } from 'room/labBoostPriority'
 
 function initializeGlobalMemory(): void {
     if (Memory.warMode == undefined) Memory.warMode = {}
@@ -55,7 +56,10 @@ export function initializeRooms(): void {
 export function initializeStructures(room: Room): void {
     const towers = room.towers
     for (const tower of towers) if (typeof tower.init === 'function') tower.init()
-    for (const lab of room.labs) if (typeof lab.init === 'function') lab.init()
+    const labs = room.labs
+    // No spawn or creep boost runs between these hooks; reconcile once for this batch.
+    const labBoostPaused = labs.length > 0 ? prioritizeLabBoostJobs(room) : false
+    for (const lab of labs) if (typeof lab.init === 'function') lab.init(labBoostPaused)
     for (const spawn of room.spawns) if (typeof spawn.init === 'function') spawn.init()
     for (const link of room.links) if (typeof link.init === 'function') link.init()
     const powerSpawn = room.powerSpawn, nuker = room.nuker

@@ -107,8 +107,9 @@ export default class LabExtension extends StructureLab {
         return exists
     }
 
-    public init(): void {
-        if (prioritizeLabBoostJobs(this.room)) return
+    public init(boostPaused?: boolean): void {
+        // A synchronous room batch shares one reconciliation; direct calls remain immediate.
+        if (boostPaused ?? prioritizeLabBoostJobs(this.room)) return
         if (Game.time % structurePolicy.lab.jobInterval != 0) return
         if (this.room.memory.roomFillJob.labOut == undefined) this.room.memory.roomFillJob.labOut = []
         if (this.room.memory.roomFillJob.labInEnergy == undefined) this.room.memory.roomFillJob.labInEnergy = []
@@ -176,8 +177,8 @@ export default class LabExtension extends StructureLab {
         }
     }
 
-    public doWork(): void {
-        if (prioritizeLabBoostJobs(this.room)) return
+    public doWork(boostPaused?: boolean): void {
+        if (boostPaused ?? prioritizeLabBoostJobs(this.room)) return
         const thisLabConfig = this.room.memory.roomLabConfig.singleLabConfig[this.id]
         if (thisLabConfig == undefined || !thisLabConfig.boostMode) {
             this.labReactionWork()

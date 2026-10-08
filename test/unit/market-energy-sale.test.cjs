@@ -73,6 +73,23 @@ test('eleven ordinary rooms share one mineral order query and never sell beyond 
     assert.equal(w.deals.length, 4);
 });
 
+test('unstaged, reserved and already withdrawn mineral stock does not query or rank native market orders', () => {
+    const w = world({ orders: [{ id: 'ops-buy', amount: 3000, remainingAmount: 10000, price: 10, roomName: 'W5N1' }] });
+    const unstaged = w.add('W1N1', { storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000 } });
+    const reserved = w.add('W2N1', { storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 } });
+    const withdrawn = w.add('W3N1', { storage: { energy: 100000, ops: 100000 }, terminal: { energy: 60000, ops: 1000 } });
+    reserved.memory.boostNeed = { ops: 101000 };
+    w.network.recordTerminalWithdrawal(withdrawn, 'ops', 1000);
+    for (const room of [unstaged, reserved, withdrawn]) w.sellResource(room, 'ops', 5000, 0.001, 1000);
+    assert.equal(w.queries(), 0);
+    assert.equal(w.costs(), 0);
+    assert.equal(w.deals.length, 0);
+    delete reserved.memory.boostNeed;
+    w.sellResource(reserved, 'ops', 5000, 0.001, 1000);
+    assert.equal(w.queries(), 1, 'releasing a reservation makes the same-tick sale immediate');
+    assert.equal(w.deals[0].amount, 1000);
+});
+
 test('a rejected mineral order invalidates the shared snapshot so other rooms avoid duplicate deal attempts', () => {
     const w = world(); w.setDealResult(-6);
     for (let index = 0; index < 5; index++) w.sellResource(w.add(`W${index + 1}N1`, {

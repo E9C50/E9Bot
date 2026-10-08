@@ -12,6 +12,7 @@ function createWorld(rooms = {}, memory = {}) {
             console: { log() {} }
         },
         modules: {
+            'room/labBoostPriority': { prioritizeLabBoostJobs: () => false },
             'settings/room': { roomSignTextList: ['first sign', 'second sign'] },
             'settings/roomPolicy': { roomPolicy: { flags: { updateCache: 'updateCache', repairTower: 'repairTower' } } }
         }

@@ -1,6 +1,7 @@
 import { boostBodyPart, boostConfig, roleBoostConfig } from 'settings/boost'
 import { bodyPolicy } from 'settings/bodyPolicy'
 import { combatSpawnAllowed } from 'combat/spawning'
+import { isStructureActive } from 'runtime/structureActivity'
 
 type BoostStep = CreepBoostPlan['steps'][number]
 export interface BoostRequest extends BoostStep { priority: number }
@@ -207,7 +208,7 @@ export function reserveBoostPlan(room: Room, name: string, plan: CreepBoostPlan)
 export function usableBoostLabs(room: Room): StructureLab[] {
     const config = room.memory.roomLabConfig
     return room.labs.filter(lab => lab.id != config?.sourceLab1 && lab.id != config?.sourceLab2 &&
-        lab.my !== false && (typeof lab.isActive != 'function' || lab.isActive()) &&
+        lab.my !== false && isStructureActive(lab) &&
         (typeof Game.getObjectById != 'function' || Game.getObjectById(lab.id) != undefined))
 }
 

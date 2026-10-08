@@ -141,6 +141,35 @@ test('factory candidate scans read the active operate-factory effect once while 
     assert.equal(reads, 1, '25 candidates share one effect read');
 });
 
+test('factory planners lazily share a supplied global inventory without retaining it for later standalone calls', () => {
+    const w = measuredPlanning();
+    let requested = 0;
+    const shared = { globalAmount: resource => resource === 'commodity00' ? 1000 : 0 };
+    const source = () => { requested++; return shared; };
+    w.production.planFactoryProduction(w.factory, source);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'commodity01');
+    assert.equal(requested, 1);
+    assert.equal(w.metrics.globalReads, 0, 'explicit inventory supplies all global rank reads');
+    w.production.planFactoryProduction(w.factory, source);
+    assert.equal(requested, 1, 'stable batches do not ask for any global reader');
+    delete w.room.memory.factoryProduction;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'commodity00', 'a new standalone scope does not reuse the earlier provider');
+    assert.equal(w.metrics.globalReads, 75);
+});
+
+test('one factory planning pass captures Storage once while retaining fresh reserves and ingredients on the next pass', () => {
+    const w = measuredPlanning();
+    let reads = 0;
+    Object.defineProperty(w.room, 'storage', { get() { reads++; return w.storage; } });
+    w.production.planFactoryProduction(w.factory, () => ({ globalAmount: () => 0 }));
+    assert.equal(reads, 2, 'the guard and scoped stock capture do not look up Storage per ingredient');
+    w.storage.store.shared = 0;
+    w.room.memory.productionReserve.lab = { utrium_bar: 100 };
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+});
+
 test('an unavailable shared reagent short-circuits factory candidates while keeping precursor reserves current', () => {
     const w = measuredPlanning(false);
     w.production.planFactoryProduction(w.factory);

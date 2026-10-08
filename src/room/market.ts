@@ -205,6 +205,9 @@ export function sellResource(
     )
         return
 
+    // Storage surplus may still be reserved or unstaged; do not query native market orders until it can sell.
+    const localAvailable = Math.min(sellAmount, getTerminalResourceAmount(room, resourceType), getAvailableResource(room, resourceType))
+    if (localAvailable <= 0) return
     let bestPrice = 0
     let selectedOrder: Order | undefined
     const orders = buyOrders(resourceType)
@@ -231,8 +234,7 @@ export function sellResource(
         }
     }
     if (selectedOrder == undefined || bestPrice <= minPrice) return
-    const available = Math.min(executableAmount(selectedOrder), sellAmount, getTerminalResourceAmount(room, resourceType),
-        getAvailableResource(room, resourceType))
+    const available = Math.min(executableAmount(selectedOrder), localAvailable)
     const amount = affordableSendAmount(room, resourceType, selectedOrder.roomName!, available, getTerminalResourceAmount(room, 'energy'))
     if (amount <= 0) return
     if (dealResource(room, selectedOrder, resourceType, amount)) {

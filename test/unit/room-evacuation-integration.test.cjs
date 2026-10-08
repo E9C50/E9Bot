@@ -35,6 +35,7 @@ test('closing structures run only towers and spawns, and cancellation restores t
     const room = closingRoom(), calls = [], unit = name => ({ doWork: () => calls.push(name) });
     Object.assign(room, { towers: [unit('tower')], spawns: [unit('spawn')], labs: [unit('lab')], links: [unit('link')], powerSpawn: unit('power'), factory: unit('factory') });
     const run = createSourceLoader({ globals: { Game: { rooms: { W1N1: room } } }, modules: {
+        'room/labBoostPriority': { prioritizeLabBoostJobs: () => false },
         'runtime/cpuRecovery': { isCpuRecoveryActive: () => false, cpuRecoveryWorkDue: () => true },
     } }).load('module/StructureController').structureWorkController;
     run(); assert.deepEqual(calls, ['tower', 'spawn']);

@@ -11,6 +11,7 @@ import {
     createResourceInventory, getAvailableResource, getIncomingResourceAmount, getOutgoingResourceAmount,
     getResourceRooms, isWarehouseRoom, requestRoomResource,
 } from 'room/resourceNetwork'
+import type { ResourceInventory } from 'room/resourceNetwork'
 
 const productionBatch = 3000
 type ResourceAmounts = Partial<Record<ResourceConstant, number>>
@@ -28,7 +29,7 @@ function buildReactionPlan(
     incoming: (resource: ResourceConstant) => number,
     remote: (resource: ResourceConstant) => number,
 ): ReactionPlan | undefined {
-    const pool = new Map<ResourceConstant, { local: number; remote: number }>()
+    const pool = new Map<ResourceConstant, { local: number; remote?: number }>()
     const reserve: ResourceAmounts = {}, imports: ResourceAmounts = {}
     let firstReaction: ResourceConstant | undefined
     let firstAmount = 0
@@ -41,13 +42,14 @@ function buildReactionPlan(
             reserve[source] = (reserve[source] || 0) + quantity
             let stock = pool.get(source)
             if (!stock) {
-                stock = { local: local(source) + incoming(source), remote: remote(source) }
+                stock = { local: local(source) + incoming(source) }
                 pool.set(source, stock)
             }
             const useLocal = Math.min(quantity, stock.local)
             stock.local -= useLocal
-            const useRemote = Math.min(quantity - useLocal, stock.remote)
-            stock.remote -= useRemote
+            // Most running batches already have their inputs here; inspect donors only for a shortage.
+            const useRemote = quantity > useLocal ? Math.min(quantity - useLocal, stock.remote ??= remote(source)) : 0
+            if (useRemote > 0) stock.remote! -= useRemote
             imports[source] = (imports[source] || 0) + useRemote
             const missing = quantity - useLocal - useRemote
             if (missing > 0 && !produce(source, missing, nextPath)) return false
@@ -75,7 +77,7 @@ function setLabReaction(room: Room, resource: ResourceConstant | undefined): voi
     if (resource) console.log(`${room.name} notify_Lab合成配置更新：${resource}`)
 }
 
-export function updateLabReactionConfig(room: Room): void {
+export function updateLabReactionConfig(room: Room, getInventory?: () => ResourceInventory): void {
     if (prioritizeLabBoostJobs(room)) return
     const interval = hasPendingRoomBoost(room) ? roomPolicy.labs.updateInterval :
         cpuRecoveryInterval('labPlanning', roomPolicy.labs.updateInterval)
@@ -89,7 +91,7 @@ export function updateLabReactionConfig(room: Room): void {
         return
     }
     const rooms = getResourceRooms()
-    const inventory = createResourceInventory()
+    const inventory = getInventory ? getInventory() : createResourceInventory()
     const warehouse = isWarehouseRoom(room)
     let reactionUnit = typeof LAB_REACTION_AMOUNT === 'number' ? LAB_REACTION_AMOUNT : 5
     if (typeof PWR_OPERATE_LAB !== 'undefined' && typeof POWER_INFO !== 'undefined') {
@@ -142,24 +144,7 @@ export function updateLabReactionConfig(room: Room): void {
         }
         return globalAmounts.get(resource)!
     }
-    const localTargets = warehouse ? [] : t3Resources.filter(resource =>
-        local(resource) + incoming(resource) < resourcePolicy.t3Reserve)
-    localTargets.sort((a, b) => local(a) + incoming(a) - local(b) - incoming(b) || global(a) - global(b))
-    const targets = localTargets.length > 0 ? localTargets : [...t3Resources].sort((a, b) => global(a) - global(b))
-    const previous = config.productionPlan
-    const candidates: NonNullable<ILabConfig['productionPlan']>[] = []
-    if (previous && (previous.remaining ?? previous.targetAmount - local(previous.target) - incoming(previous.target)) > 0 &&
-        (!previous.local || local(previous.target) + incoming(previous.target) < previous.targetAmount) &&
-        (previous.local || localTargets.length === 0)) candidates.push(previous)
-    for (const target of targets) {
-        if (candidates.some(plan => plan.target === target)) continue
-        const current = local(target) + incoming(target)
-        const isLocal = localTargets.includes(target as MineralBoostConstant)
-        const quantity = isLocal ? Math.min(productionBatch, resourcePolicy.t3Reserve - current) : productionBatch
-        const remaining = Math.ceil(quantity / reactionUnit) * reactionUnit
-        candidates.push({ target, targetAmount: current + remaining, local: isLocal, remaining })
-    }
-    for (const candidate of candidates) {
+    const tryCandidate = (candidate: NonNullable<ILabConfig['productionPlan']>): boolean => {
         const current = local(candidate.target) + incoming(candidate.target)
         // Legacy global targets were inflated when exported output lowered local stock.
         let remaining = candidate.remaining ?? Math.min(productionBatch, Math.max(0, candidate.targetAmount - current))
@@ -167,7 +152,7 @@ export function updateLabReactionConfig(room: Room): void {
         remaining = Math.ceil(remaining / reactionUnit) * reactionUnit
         const plan = buildReactionPlan(candidate.target, remaining, reactionUnit,
             local, incoming, remote)
-        if (!plan) continue
+        if (!plan) return false
         config.productionPlan = { ...candidate, remaining,
             targetAmount: !candidate.local && candidate.remaining === undefined ? current + remaining : candidate.targetAmount }
         config.reactionAmount = plan.amount
@@ -180,7 +165,25 @@ export function updateLabReactionConfig(room: Room): void {
                 inventory.roomAmount(room, type) + getIncomingResourceAmount(room.name, type) + plan.imports[type]!)
         }
         setLabReaction(room, plan.reaction)
-        return
+        return true
+    }
+    const previous = config.productionPlan
+    const retainPrevious = previous &&
+        (previous.remaining ?? previous.targetAmount - local(previous.target) - incoming(previous.target)) > 0 &&
+        (!previous.local || local(previous.target) + incoming(previous.target) < previous.targetAmount) &&
+        (previous.local || warehouse || !t3Resources.some(resource => local(resource) + incoming(resource) < resourcePolicy.t3Reserve))
+    // Retention already has first priority. Avoid ranking every compound while this batch can continue.
+    if (retainPrevious && tryCandidate(previous)) return
+    const localTargets = warehouse ? [] : t3Resources.filter(resource =>
+        local(resource) + incoming(resource) < resourcePolicy.t3Reserve)
+    localTargets.sort((a, b) => local(a) + incoming(a) - local(b) - incoming(b) || global(a) - global(b))
+    const targets = localTargets.length > 0 ? localTargets : [...t3Resources].sort((a, b) => global(a) - global(b))
+    for (const target of targets) {
+        const current = local(target) + incoming(target)
+        const isLocal = localTargets.includes(target as MineralBoostConstant)
+        const quantity = isLocal ? Math.min(productionBatch, resourcePolicy.t3Reserve - current) : productionBatch
+        const remaining = Math.ceil(quantity / reactionUnit) * reactionUnit
+        if (tryCandidate({ target, targetAmount: current + remaining, local: isLocal, remaining })) return
     }
     delete config.productionPlan
     if (room.memory.productionReserve) delete room.memory.productionReserve.lab

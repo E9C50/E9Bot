@@ -53,8 +53,72 @@ function world() {
         return room;
     }
     const labs = loader.load('room/labs');
-    return { game, addRoom, update: room => labs.updateLabReactionConfig(room), loader };
+    return { game, addRoom, update: (room, inventory) => labs.updateLabReactionConfig(room, inventory), loader };
 }
+
+test('a retained local batch reads only its target and ready inputs without ranking T3s or inspecting donors', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 19000, UH2O: 1000, X: 1000 });
+    w.addRoom('W2N2', { UH2O: 3000 }, true);
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 20000, local: true, remaining: 1000 };
+    const network = w.loader.load('room/resourceNetwork'), native = network.createResourceInventory();
+    const reads = [], donorReads = [], getAvailable = network.getAvailableResource;
+    network.getAvailableResource = (...args) => { donorReads.push(args[1]); return getAvailable(...args); };
+    w.update(room, () => ({ roomAmount: (target, resource) => { reads.push(resource); return native.roomAmount(target, resource); },
+        globalAmount: () => assert.fail('retained local batches already have priority') }));
+    assert.equal(room.memory.roomLabConfig.labReactionConfig, 'XUH2O');
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 1000);
+    assert.deepEqual(reads, ['XUH2O', 'UH2O', 'X']);
+    assert.deepEqual(donorReads, [], 'local ready inputs do not inspect other rooms');
+});
+
+test('a retained warehouse batch skips global ranking while partial local inputs import only the deficit', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 2000, X: 3000 }, true);
+    const donor = w.addRoom('W2N2', { UH2O: 2000 }, true);
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 3000, local: false, remaining: 3000 };
+    const network = w.loader.load('room/resourceNetwork'), native = network.createResourceInventory();
+    const donorReads = [], getAvailable = network.getAvailableResource;
+    network.getAvailableResource = (...args) => { donorReads.push(args[1]); return getAvailable(...args); };
+    w.update(room, () => ({ roomAmount: (...args) => native.roomAmount(...args),
+        globalAmount: () => assert.fail('retained global batches do not need sorting') }));
+    assert.deepEqual(donorReads, ['UH2O']);
+    assert.equal(room.memory.roomLabConfig.labReactionConfig, 'XUH2O');
+    assert.equal(Object.values(donor.memory.terminalSendJob)[0].amount, 1000);
+});
+
+test('new local T3 shortages preempt a retained global batch and failed retained local batches try alternatives', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 20000, XLHO2: 19000, UH2O: 3000, LHO2: 3000, X: 6000 });
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 23000, local: false, remaining: 3000 };
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XLHO2');
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 1000);
+    w.game.time += 10;
+    room.storage.store.XUH2O = 19000;
+    room.storage.store.UH2O = 0;
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 20000, local: true, remaining: 1000 };
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XLHO2', 'a failed retained recipe still falls through to ready alternatives');
+});
+
+test('an oversized retained batch falls back to a fresh feasible 3000-unit batch of the same compound', () => {
+    const w = world(), room = w.addRoom('W1N1', { UH2O: 3000, X: 3000 }, true);
+    room.memory.roomLabConfig.productionPlan = { target: 'XUH2O', targetAmount: 6000, local: false, remaining: 6000 };
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 3000);
+});
+
+test('several Lab planners sharing inventory still observe a donor commitment made earlier in that loop', () => {
+    const w = world(), first = w.addRoom('W1N1', { XLHO2: 20000, X: 3000 });
+    const second = w.addRoom('W2N1', { XLHO2: 20000, X: 3000 });
+    const donor = w.addRoom('W3N1', { UH2O: 3000 }, true);
+    const inventory = w.loader.load('room/resourceNetwork').createResourceInventory();
+    w.update(first, () => inventory);
+    w.update(second, () => inventory);
+    assert.equal(first.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(second.memory.roomLabConfig.productionPlan, undefined, 'the same 3000 warehouse precursor cannot fund both rooms');
+    assert.equal(Object.values(donor.memory.terminalSendJob).reduce((sum, job) => sum + job.amount, 0), 3000);
+});
 
 test('warehouse factory leaves its raw-mineral backup available to lab synthesis', () => {
     for (const oxygen of [3000, 300000]) {

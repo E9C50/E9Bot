@@ -131,8 +131,9 @@ function availableIngredient(room: Room, resource: ResourceConstant): number {
 }
 
 /** Scope stock to one synchronous planning pass; later calls still observe new reservations and native intents. */
-function planningStock(factory: StructureFactory): PlanningStock {
+function planningStock(factory: StructureFactory, getInventory?: () => ResourceInventory): PlanningStock {
     const room = factory.room, warehouse = isWarehouseRoom(room)
+    const storage = room.storage
     const amounts = new Map<ResourceConstant, number>(), available = new Map<ResourceConstant, number>()
     const globals = new Map<ResourceConstant, number>(), cycles = new Map<Recipe, number>()
     let inventory: ResourceInventory | undefined
@@ -145,7 +146,7 @@ function planningStock(factory: StructureFactory): PlanningStock {
     const stock: PlanningStock = {
         capacity: factory.store.getCapacity() || 0,
         local(resource) {
-            if (!amounts.has(resource)) amounts.set(resource, (room.storage?.store[resource] || 0) +
+            if (!amounts.has(resource)) amounts.set(resource, (storage?.store[resource] || 0) +
                 getTerminalResourceAmount(room, resource) + factoryAmount(factory, resource) + (cargo[resource] || 0))
             return amounts.get(resource)!
         },
@@ -158,7 +159,7 @@ function planningStock(factory: StructureFactory): PlanningStock {
             return available.get(resource)!
         },
         global(resource) {
-            if (!globals.has(resource)) globals.set(resource, (inventory ||= createResourceInventory()).globalAmount(resource))
+            if (!globals.has(resource)) globals.set(resource, (inventory ||= getInventory ? getInventory() : createResourceInventory()).globalAmount(resource))
             return globals.get(resource)!
         },
         cycles(recipe) {
@@ -265,7 +266,7 @@ function updateReserve(factory: StructureFactory, stock?: PlanningStock): void {
 }
 
 /** Select from local stock; labs and undelivered terminal requests are not ingredients. */
-export function planFactoryProduction(factory: StructureFactory): void {
+export function planFactoryProduction(factory: StructureFactory, getInventory?: () => ResourceInventory): void {
     const room = factory.room
     if (isRoomEvacuating(room) || !room.storage || !room.terminal || factory.my === false ||
         (typeof factory.isActive === 'function' && !factory.isActive())) {
@@ -273,7 +274,7 @@ export function planFactoryProduction(factory: StructureFactory): void {
         if (room.memory.productionReserve) delete room.memory.productionReserve.factory
         return
     }
-    const stock = planningStock(factory)
+    const stock = planningStock(factory, getInventory)
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||
         state.mode === 'compression' && !compressionAllowed(room, state.resourceType) ||

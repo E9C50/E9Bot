@@ -39,6 +39,23 @@ test('warehouses require enabled power and actual 8M capacity, not amount of inv
     ordinary.controller.isPowerEnabled = true; assert.equal(w.isWarehouseRoom(ordinary), false);
 });
 
+test('dispatch eligibility shares native terminal activation across imports and balancing, without caching stock', () => {
+    const w = world(31);
+    const donor = w.room('warehouse', { UH2O: 10000 }, { warehouse: true });
+    const receiver = w.room('ordinary');
+    let checks = 0, active = true;
+    for (const room of [donor, receiver]) room.terminal.isActive = () => { checks++; return active; };
+    assert.equal(w.requestRoomResource(receiver, 'UH2O', 3000), 3000);
+    for (let i = 0; i < 20; i++) w.requestRoomResource(receiver, 'UH2O', 3000);
+    w.planResourceDistribution();
+    assert.equal(checks, 2, 'one native activation check per terminal, including queue reconciliation');
+    donor.storage.store.UH2O = 0;
+    assert.equal(w.getAvailableResource(donor, 'UH2O'), 0, 'stock and reservations remain live');
+    active = false; w.game.time++;
+    assert.equal(w.requestRoomResource(receiver, 'UH2O', 4000), 0);
+    assert.equal(checks, 4, 'the next tick rechecks native activation');
+});
+
 test('ordinary rooms receive all ten T3, seven basic minerals, G and 5k ops; T1/T2 have no refill obligation', () => {
     const w = world(), resources = [...w.t3Resources, ...w.basicMinerals, 'G', 'ops'];
     const donor = w.room('warehouse', Object.fromEntries(resources.map(r => [r, 100000])), { warehouse: true });

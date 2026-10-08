@@ -8,6 +8,7 @@ function roomLoader(globals = {}, modules = {}) {
         RESOURCE_ENERGY: 'energy', RESOURCE_GHODIUM: 'G', TOWER_ENERGY_COST: 10, OK: 0,
         STRUCTURE_TOWER: 'tower', STRUCTURE_LAB: 'lab', STRUCTURE_STORAGE: 'storage', STRUCTURE_TERMINAL: 'terminal', LOOK_STRUCTURES: 'structures',
         console: { log() {} }, ...globals }, modules: {
+        'room/labBoostPriority': { prioritizeLabBoostJobs: () => false },
         'settings/roomPolicy': { roomPolicy: { flags: { repairTower: 'repairTower' },
             defense: { minimumRoadDamage: 200, minimumRoadDamageFraction: 0.05, criticalRoadHealthFraction: 0.5 } } },
         'settings/room': { roomSignTextList: [] }, ...modules } });

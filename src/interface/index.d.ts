@@ -18,3 +18,8 @@ interface Structure {
     init(): void
     doWork(): void
 }
+
+interface StructureLab {
+    init(boostPaused?: boolean): void
+    doWork(boostPaused?: boolean): void
+}
