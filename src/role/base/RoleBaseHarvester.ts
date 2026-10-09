@@ -6,6 +6,8 @@ import { sourceHarvestPosition } from 'creep/developmentLogistics'
 import { prepareStationaryMining, runStationaryMining } from 'creep/stationaryMining'
 import { retireSourceLinkMiner } from 'creep/sourceLinkMining'
 import { sourceLinkWithCenter } from 'room/sourceLinks'
+import { isSpawnEnergyCarrier } from 'creep/spawnEnergyCarrier'
+import { controllerLayoutPolicy } from 'settings/controllerLayout'
 
 function sourceBuffers(creep: Creep, source: Source): { link?: StructureLink; container?: StructureContainer } {
     return {
@@ -22,11 +24,9 @@ function hasLocalCarrier(room: Room): boolean {
         carrierTick = Game.time; carrierShard = Game.shard.name; carriers = new Map()
         for (const name in Game.creeps) {
             const creep = Game.creeps[name]
-            if (creep.memory.role !== 'filler' || creep.spawning || creep.ticksToLive === 0 ||
-                creep.memory.spawnRoom && creep.memory.spawnRoom !== creep.room.name ||
-                creep.getActiveBodyparts(CARRY) <= 0 || creep.getActiveBodyparts(MOVE) <= 0 ||
-                creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed) continue
-            carriers.set(creep.room.name, true)
+            if (creep.memory.role !== 'filler') continue
+            const currentRoom = creep.room
+            if (isSpawnEnergyCarrier(currentRoom, creep)) carriers.set(currentRoom.name, true)
         }
     }
     return carriers.get(room.name) || false
@@ -76,7 +76,24 @@ function emergencyProductionTarget(creep: Creep): StructureSpawn | StructureExte
 }
 
 function emergencyLoadReady(creep: Creep, source: Source): boolean {
-    return creep.store[RESOURCE_ENERGY] > 0 && (creep.store.getFreeCapacity(RESOURCE_ENERGY) == 0 || source.energy == 0)
+    return creep.store[RESOURCE_ENERGY] > 0 &&
+        (creep.memory.working || creep.store.getFreeCapacity(RESOURCE_ENERGY) == 0 || source.energy == 0)
+}
+
+/** Move existing home stock into the spawn pool before hauling a new remote mining batch. */
+function recoveryEnergyStock(creep: Creep, delivery: StructureSpawn | StructureExtension): StructureStorage | StructureContainer | undefined {
+    const room = creep.room, storage = room.storage
+    // Central Storage makes subsequent recovery loads short trips around the spawn cluster.
+    if (storage !== undefined && storage.my !== false && storage.store[RESOURCE_ENERGY] > 0) return storage
+    let selected: StructureContainer | undefined, minimumDistance = Infinity
+    for (const container of room.containers) {
+        if (!(container.store[RESOURCE_ENERGY] > 0) || room.controller !== undefined &&
+            getDistance(container.pos, room.controller.pos) <= controllerLayoutPolicy.containerRange) continue
+        const distance = getDistance(creep.pos, container.pos) + getDistance(container.pos, delivery.pos)
+        if (distance < minimumDistance) { selected = container; minimumDistance = distance }
+    }
+    // Terminal reserves and the controller's containers never fund this temporary job.
+    return selected
 }
 
 /** A complete missing carrier must be funded before this mine can resume its fixed workstation. */
@@ -107,7 +124,11 @@ function fullBodyContainerStation(creep: Creep, source: Source, container?: Stru
 
 function prepareDevelopingHarvester(creep: Creep, source: Source): boolean {
     const emergency = emergencyProductionTarget(creep)
-    if (emergency != undefined && emergencyLoadReady(creep, source)) return true
+    if (emergency != undefined && (emergencyLoadReady(creep, source) ||
+        creep.store.getCapacity(RESOURCE_ENERGY) > 0 && recoveryEnergyStock(creep, emergency) !== undefined)) {
+        creep.memory.dontPullMe = false
+        return true
+    }
     const buffers = sourceBuffers(creep, source), target = buffers.link || buffers.container
     if (emergency === undefined && fullBodyContainerStation(creep, source, buffers.container)) {
         const prepared = prepareStationaryMining(creep, source)
@@ -126,8 +147,24 @@ function prepareDevelopingHarvester(creep: Creep, source: Source): boolean {
 function runDevelopingHarvester(creep: Creep, source: Source): boolean {
     const emergency = emergencyProductionTarget(creep)
     if (emergency != undefined && emergencyLoadReady(creep, source)) {
+        // A small receiver can leave part of this native load aboard for the next receiver.
+        creep.memory.dontPullMe = false
+        creep.memory.working = true
         if (creep.transfer(emergency, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) creep.moveTo(emergency, { range: 1 })
+        creep.memory.dontPullMe = false
         return true
+    }
+    if (emergency !== undefined && creep.store.getCapacity(RESOURCE_ENERGY) > 0) {
+        const stock = recoveryEnergyStock(creep, emergency)
+        if (stock !== undefined) {
+            creep.memory.dontPullMe = false
+            creep.memory.working = false
+            const result = creep.withdraw(stock, RESOURCE_ENERGY)
+            if (result === OK) creep.memory.working = true
+            else if (result === ERR_NOT_IN_RANGE) creep.moveTo(stock, { range: 1 })
+            creep.memory.dontPullMe = false
+            return true
+        }
     }
     if (emergency === undefined && buildSourceContainer(creep, source)) return true
     const buffers = sourceBuffers(creep, source)

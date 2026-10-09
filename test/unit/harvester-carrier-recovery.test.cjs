@@ -44,6 +44,15 @@ test('a working local carrier skips catalog scans without disturbing stationary 
     assert.equal(w.calls.stationary, 10); assert.deepEqual(w.calls.transfers, []);
 });
 
+test('healthy mature carriers never query recovery stock or preview pending bodies', () => {
+    const w = world();
+    Object.defineProperty(w.room, 'storage', { get() { assert.fail('healthy mining never reads emergency Storage stock'); } });
+    Object.defineProperty(w.room, 'containers', { get() { assert.fail('healthy mining never scans emergency Containers'); } });
+    for (let tick = 0; tick < 10; tick++) { w.run(); w.game.time++; }
+    assert.equal(w.reads.catalogs, 0); assert.equal(w.reads.entries, 0);
+    assert.equal(w.calls.stationary, 10);
+});
+
 test('prepare and work share one positive pending-carrier witness per room and tick', () => {
     const w = world({ carrier: false });
     w.run();

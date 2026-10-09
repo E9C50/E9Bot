@@ -5,7 +5,10 @@ const nativeBodies = require('../helpers/native-bodies.cjs');
 
 const costs = { work: 100, carry: 50, move: 50, claim: 600, tough: 10, attack: 80, ranged_attack: 150, heal: 250 };
 function world({ available = 500, stock = 5545 } = {}) {
-    const p = (x, y) => ({ x, y, roomName: 'E39N5' });
+    const p = (x, y) => ({ x, y, roomName: 'E39N5', inRangeTo(other, radius) {
+        const position = other.pos || other;
+        return position.roomName === 'E39N5' && Math.max(Math.abs(x - position.x), Math.abs(y - position.y)) <= radius;
+    } });
     const room = { name: 'E39N5', my: true, level: 6,
         controller: { my: true, level: 6, ticksToDowngrade: 116373, pos: p(9, 29) },
         energyCapacityAvailable: 2150, energyAvailable: available,
@@ -70,6 +73,71 @@ test('a funded Storage carrier breaks the live shard1 stall before unaffordable 
         body: ['carry', 'carry', 'carry', 'carry', 'move', 'move', 'move', 'move'] }]);
     assert.equal(w.room.energyAvailable, 100);
     assert.equal(w.queue()[0], 'missingMine', 'once recovery has begun, restoring the empty Source is first again');
+});
+
+test('the last small miner funds a complete Storage distributor first while the Spawn pool is still below its body cost', () => {
+    const w = world({ available: 550, stock: 5045 });
+    delete w.game.creeps[w.carrier.name];
+    w.miner.getActiveBodyparts = part => part === 'work' || part === 'move' ? 2 : part === 'carry' ? 1 : 0;
+    for (const config of Object.values(w.room.memory.creepConfig)) if (config.development) config.development.fullBody = true;
+    for (const energy of [550, 2099]) {
+        w.room.energyAvailable = energy;
+        w.room.memory.creepSpawnQueue = w.queue();
+        assert.equal(w.room.memory.creepSpawnQueue[0], 'storageHaul');
+        w.spawn.doWork();
+        assert.equal(w.births.length, 0, 'one surviving miner must not permit a partial-energy body');
+    }
+    w.room.energyAvailable = 2100;
+    w.spawn.doWork();
+    assert.equal(w.births.length, 1);
+    assert.equal(w.births[0].name, 'storageHaul');
+    assert.equal(w.births[0].cost, 2100);
+    assert.equal(w.births[0].body.length, 42);
+    assert.equal(w.births[0].body.filter(part => part === 'carry').length, 21);
+    assert.equal(w.births[0].body.filter(part => part === 'move').length, 21);
+    assert.equal(w.queue()[0], 'missingMine', 'the committed distributor frees the normal mining queue');
+});
+
+test('unpaid distribution priority reads live full-body funding and body profiles without waiting for a new tick', () => {
+    const w = world({ available: 550, stock: 1549 });
+    delete w.game.creeps[w.carrier.name];
+    for (const config of Object.values(w.room.memory.creepConfig)) if (config.development) config.development.fullBody = true;
+    assert.notEqual(w.queue()[0], 'storageHaul', 'insufficient combined depot and Spawn energy cannot fund the complete distributor');
+    w.room.storage.store.energy = 1550;
+    assert.equal(w.queue()[0], 'storageHaul');
+    w.room.storage.store.energy = 500;
+    assert.notEqual(w.queue()[0], 'storageHaul');
+    w.room.memory.bodyProfiles = { filler: { maximumCost: 500, boostTier: 0 } };
+    assert.equal(w.queue()[0], 'storageHaul', 'an explicit smaller complete profile has its actual cost');
+    delete w.room.memory.bodyProfiles;
+    assert.notEqual(w.queue()[0], 'storageHaul');
+    w.room.storage.store.energy = 5045;
+    w.room.energyAvailable = w.room.energyCapacityAvailable;
+    assert.equal(w.queue()[0], 'storageHaul', 'a funded full Spawn pool still starts its missing distributor first');
+});
+
+test('exactly funded recovery retains its Storage-first birth while energy moves through the last miner', () => {
+    const w = world({ available: 650, stock: 1450 });
+    delete w.game.creeps[w.carrier.name];
+    for (const config of Object.values(w.room.memory.creepConfig)) if (config.development) config.development.fullBody = true;
+    w.miner.store = { energy: 0 };
+    assert.equal(w.queue()[0], 'storageHaul');
+    w.room.storage.store.energy = 1400;
+    w.miner.store.energy = 50;
+    assert.equal(w.queue()[0], 'storageHaul', '50 in transit still belongs to the same 2100-energy birth');
+    w.miner.memory.spawnRoom = 'E39N4';
+    assert.notEqual(w.queue()[0], 'storageHaul', 'foreign cargo cannot pay a home recovery birth');
+    w.miner.memory.spawnRoom = w.room.name;
+    w.miner.store.energy = 0;
+    w.room.energyAvailable = 700;
+    assert.equal(w.queue()[0], 'storageHaul');
+    w.room.storage.store.energy = 0;
+    w.room.energyAvailable = 2100;
+    assert.equal(w.queue()[0], 'storageHaul', 'fully delivered funding remains available after Storage empties');
+    w.room.memory.creepSpawnQueue = w.queue();
+    w.spawn.doWork();
+    assert.equal(w.births[0].name, 'storageHaul');
+    assert.equal(w.births[0].cost, 2100);
 });
 
 test('Storage recovery never displaces the first Source carrier before a local production pair works', () => {

@@ -3,7 +3,7 @@ import { isRoleSupported } from 'role'
 import { isDevelopingRoom } from './development'
 import { hasUsableStorageFiller } from './storageFillerLifecycle'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
-import { selectCreepBody } from './bodySelection'
+import { previewBodySelection, selectCreepBody } from './bodySelection'
 import { developmentPolicy } from 'settings/development'
 
 export function buildSpawnQueue(
@@ -61,6 +61,28 @@ export function buildSpawnQueue(
             return body.length > 0 && body.reduce((total, part) => total + BODYPART_COST[part], 0) <= room.energyAvailable
         })
         if (recoveryUpgrader) return [recoveryUpgrader, ...creepSpawnQueue.filter(name => name !== recoveryUpgrader)]
+    }
+
+    // The last miner can move stored energy while a complete distributor is funded.
+    // Choose that birth before a mine carrier which would only return energy to Storage.
+    // Capacity preview must remain useful before the current Spawn pool can pay for it.
+    if (isDevelopingRoom(room) && fillers.length === 0 && harvesters.length > 0 && room.storage) {
+        const storage = room.storage
+        // Moving one batch from Storage through a miner into an Extension does not
+        // change the funded birth. Count its native cargo while that batch is in transit.
+        const funding = Math.max(0, storage.store[RESOURCE_ENERGY]) + Math.max(0, room.energyAvailable) +
+            harvesters.reduce((total, creep) => total + (!creep.memory.spawnRoom || creep.memory.spawnRoom === room.name
+                ? Math.max(0, creep.store?.[RESOURCE_ENERGY] || 0) : 0), 0)
+        if (funding > 0) {
+            const storageCarrier = creepSpawnQueue.find(name => {
+                const config = creepConfigCache[name], data = config.data as FillerData
+                if (config.role !== roleBaseEnum.FILLER || !config.development || data.sourceId !== storage.id || data.mineId) return false
+                const { body } = previewBodySelection(room, config, 0)
+                const cost = body.reduce((total, part) => total + BODYPART_COST[part], 0)
+                return body.length > 0 && cost <= funding
+            })
+            if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
+        }
     }
 
     // Recover stored spawn energy before an unaffordable miner blocks the whole queue.

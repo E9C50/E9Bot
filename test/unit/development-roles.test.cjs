@@ -895,6 +895,153 @@ test('development miner with no carrier rescues empty spawn production before re
     assert.equal(w.intents('moveTo')[0].target, source.id);
 });
 
+test('a lone small miner funds a complete 2100-energy carrier from central Storage before returning to its original mine', () => {
+    const w = world(6), source = w.source('original-source', 42, 32);
+    const ownContainer = w.structure('own-mine', 'container', 43, 33, 12);
+    const otherContainer = w.structure('other-mine', 'container', 37, 34, 2000);
+    const storage = w.structure('storage', 'storage', 18, 29, 5045, 1000000);
+    const spawn = w.structure('spawn', 'spawn', 17, 27, 300, 300);
+    for (let index = 0; index < 37; index++)
+        w.structure('extension' + index, 'extension', 16 + index % 7, 26 + Math.floor(index / 7), index < 5 ? 50 : 0, 50);
+    const unit = w.creep('miner', 'harvester', 32, 36, 0, 50), data = { sourceId: source.id };
+    unit.memory.spawnRoom = w.room.name; unit.memory.data = data;
+    unit.memory.dontPullMe = true;
+    const moveTo = unit.moveTo;
+    unit.moveTo = (...args) => { const result = moveTo(...args); unit.memory.dontPullMe = true; return result; };
+    unit.memory.development = { fullBody: true, workParts: 5, stationary: true };
+    w.room.memory.creepConfig = { pending: { role: 'filler', spawnRoom: w.room.name, development: { fullBody: true } } };
+    w.room.energyAvailable = 550; w.room.energyCapacityAvailable = 2150;
+    const behavior = w.roles.harvester(data), initialConfig = JSON.stringify(w.room.memory.creepConfig);
+    let elapsed = 0, harvested = 0, supplied = 0;
+    for (; elapsed < 250 && w.room.energyAvailable < 2100; elapsed++) {
+        w.clear();
+        if (behavior.prepare(unit)) behavior[unit.memory.working ? 'target' : 'source'](unit);
+        assert.equal(unit.memory.dontPullMe, false, 'temporary transport remains yieldable after leaving its old mining seat');
+        if (elapsed === 0) assert.equal(w.intents('moveTo')[0].target, storage.id,
+            'central Storage wins over the much closer filled source Container');
+        for (const withdrawal of w.intents('withdraw')) {
+            const target = w.objects.get(withdrawal.target);
+            assert.equal(target, storage, 'all recovery loads come from the central stock');
+            if (!unit.pos.isNearTo(target)) continue;
+            const amount = Math.min(unit.store.getFreeCapacity('energy'), target.store.energy);
+            target.store.energy -= amount; unit.store.energy += amount;
+        }
+        for (const transfer of w.intents('transfer')) {
+            const target = w.objects.get(transfer.target);
+            if (!unit.pos.isNearTo(target)) continue;
+            const amount = Math.min(unit.store.energy, target.store.getFreeCapacity('energy'));
+            target.store.energy += amount; unit.store.energy -= amount; supplied += amount;
+        }
+        harvested += w.intents('harvest').length;
+        const move = w.intents('moveTo').at(-1);
+        if (move && unit.pos.getRangeTo(w.p(move.x, move.y)) > (move.range ?? 1)) unit.pos = w.p(
+            unit.pos.x + Math.sign(move.x - unit.pos.x), unit.pos.y + Math.sign(move.y - unit.pos.y));
+        w.room.energyAvailable = [spawn, ...w.room.extensions].reduce((energy, target) => energy + target.store.energy, 0);
+        w.game.time++;
+    }
+    assert.equal(w.room.energyAvailable, 2100);
+    assert.equal(supplied, 1550); assert.equal(harvested, 0);
+    assert.ok(elapsed < 250, `existing central stock restores the full carrier budget in ${elapsed} ticks`);
+    assert.equal(ownContainer.store.energy, 12); assert.equal(otherContainer.store.energy, 2000);
+    assert.equal(data.sourceId, source.id, 'the temporary transport never replaces permanent mining identity');
+    assert.equal(JSON.stringify(w.room.memory.creepConfig), initialConfig, 'full pending bodies are not downgraded');
+    const distributor = w.creep('storage-carrier', 'filler', 18, 28, 0, 100);
+    distributor.memory.spawnRoom = w.room.name; distributor.memory.data = { sourceId: storage.id };
+    w.game.time++; w.clear();
+    assert.equal(behavior.prepare(unit), false);
+    assert.equal(w.intents('moveTo')[0].x, ownContainer.pos.x, 'an actual distributor releases the miner back to its old station');
+});
+
+test('partial emergency delivery keeps its remaining cargo on the delivery route instead of returning to the mine', () => {
+    const w = world(6), source = w.source('source', 42, 32);
+    w.structure('storage', 'storage', 18, 29, 1000, 1000000);
+    const spawn = w.structure('spawn', 'spawn', 17, 27, 290, 300), extension = w.structure('extension', 'extension', 19, 27, 0, 50);
+    const unit = w.creep('miner', 'harvester', 17, 27, 50, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    unit.memory.dontPullMe = true;
+    const moveTo = unit.moveTo;
+    unit.moveTo = (...args) => { const result = moveTo(...args); unit.memory.dontPullMe = true; return result; };
+    w.room.energyAvailable = 290; w.room.energyCapacityAvailable = 800;
+    assert.equal(behavior.prepare(unit), true); behavior.source(unit);
+    assert.equal(unit.memory.dontPullMe, false);
+    assert.equal(w.intents('transfer')[0].target, spawn.id);
+    spawn.store.energy = 300; unit.store.energy = 40; w.room.energyAvailable = 300;
+    w.game.time++; w.clear();
+    assert.equal(behavior.prepare(unit), true, 'the non-full remainder bypasses source-seat positioning');
+    behavior.target(unit);
+    assert.equal(w.intents('transfer')[0].target, extension.id);
+    assert.equal(w.intents('moveTo')[0].target, extension.id);
+    assert.equal(unit.memory.dontPullMe, false, 'movement cannot re-lock a recovering delivery unit');
+    assert.equal(w.intents('withdraw').length, 0); assert.equal(w.intents('harvest').length, 0);
+});
+
+test('a successful partial stock withdrawal starts delivery and stays yieldable without forcing a return to the Source', () => {
+    const w = world(6), source = w.source('source', 42, 32), storage = w.structure('storage', 'storage', 18, 29, 12, 1000000);
+    w.structure('spawn', 'spawn', 17, 27, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    const unit = w.creep('miner', 'harvester', 18, 28, 0, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    unit.memory.dontPullMe = true;
+    behavior.source(unit);
+    assert.equal(w.intents('withdraw')[0].target, storage.id);
+    assert.equal(unit.memory.dontPullMe, false, 'direct work calls release an obsolete stationary lock');
+    assert.equal(unit.memory.working, true);
+    storage.store.energy = 0; unit.store.energy = 12; w.game.time++; w.clear();
+    assert.equal(behavior.prepare(unit), true);
+    behavior.target(unit);
+    assert.equal(w.intents('transfer')[0].target, 'spawn');
+    assert.equal(w.intents('harvest').length, 0); assert.equal(w.intents('withdraw').length, 0);
+});
+
+test('recovery stock changes between prepare and work are observed before selecting any withdrawal', () => {
+    const w = world(6), source = w.source('source', 42, 32), container = w.structure('own-mine', 'container', 43, 33);
+    const storage = w.structure('storage', 'storage', 18, 29, 50, 1000000);
+    w.structure('spawn', 'spawn', 17, 27, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    const unit = w.creep('miner', 'harvester', 18, 28, 0, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), true);
+    storage.store.energy = 0;
+    behavior.source(unit);
+    assert.equal(w.intents('withdraw').length, 0, 'a prepare-time inventory observation cannot authorize a stale withdrawal');
+    assert.equal(w.intents('harvest')[0].target, source.id);
+    w.game.time++; w.clear();
+    assert.equal(behavior.prepare(unit), false);
+    assert.equal(w.intents('moveTo')[0].x, container.pos.x, 'without stock it resumes the original mining route');
+});
+
+test('stock recovery continues when the only arrived filler is a Storage-bound mine carrier', () => {
+    const w = world(6), source = w.source(), storage = w.structure('storage', 'storage', 18, 29, 1000, 1000000);
+    w.structure('spawn', 'spawn', 17, 27, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    const unit = w.creep('miner', 'harvester', 18, 28, 0, 50), carrier = w.creep('mine-carrier', 'filler', 37, 34, 0, 100);
+    carrier.memory.spawnRoom = w.room.name; carrier.memory.data = { mineId: source.id, sourceId: source.id };
+    const behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), true); behavior.source(unit);
+    assert.equal(w.intents('withdraw')[0].target, storage.id);
+    assert.equal(w.intents('harvest').length, 0);
+});
+
+test('stock recovery excludes controller Containers and Terminal energy, falling back to the assigned Source', () => {
+    const w = world(6), source = w.source(), container = w.structure('own-mine', 'container', 11, 10);
+    const controllerBuffer = w.structure('controller-stock', 'container', 25, 28, 2000);
+    const terminal = w.structure('terminal', 'terminal', 12, 10, 50000, 300000);
+    w.structure('storage', 'storage', 18, 29, 0, 1000000);
+    w.structure('spawn', 'spawn', 20, 20, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    const unit = w.creep('miner', 'harvester', 11, 10, 0, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), true); behavior.source(unit);
+    assert.equal(w.intents('withdraw').length, 0);
+    assert.equal(w.intents('harvest')[0].target, source.id);
+    assert.equal(controllerBuffer.store.energy, 2000); assert.equal(terminal.store.energy, 50000);
+    assert.equal(container.store.energy, 0);
+});
+
+test('a dry Storage permits source Container recovery without draining a closer controller buffer', () => {
+    const w = world(6), source = w.source('source', 42, 32);
+    w.structure('storage', 'storage', 18, 29, 0, 1000000);
+    w.structure('controller-stock', 'container', 25, 28, 2000);
+    const mine = w.structure('available-mine', 'container', 37, 34, 2000);
+    w.structure('spawn', 'spawn', 17, 27, 0, 300); w.room.energyAvailable = 0; w.room.energyCapacityAvailable = 800;
+    const unit = w.creep('miner', 'harvester', 24, 28, 0, 50), behavior = w.roles.harvester({ sourceId: source.id });
+    assert.equal(behavior.prepare(unit), true); behavior.source(unit);
+    assert.equal(w.intents('withdraw')[0].target, mine.id);
+    assert.equal(w.intents('moveTo')[0].target, mine.id);
+});
+
 test('a surviving miner supplies a complete 800-energy carrier after the old 300-energy restart threshold', () => {
     const w = world(3), source = w.source(), container = w.structure('mine', 'container', 11, 10);
     const spawn = w.structure('spawn', 'spawn', 20, 20, 300, 300), unit = w.creep('miner', 'harvester', 11, 10, 100, 100);
@@ -927,6 +1074,8 @@ test('a surviving miner supplies a complete 800-energy carrier after the old 300
     assert.equal(container.store.energy, 0, 'recovery cargo is not stranded at a mine with no carrier');
     assert.ok(elapsed < 800, `miner completes spawn refill in ${elapsed} simulated ticks`);
     unit.pos = container.pos; w.clear(); behavior.source(unit);
+    assert.equal(w.intents('harvest')[0].target, source.id, 'full spawn capacity resumes the original mine immediately');
+    unit.store.energy = 4; w.clear(); behavior.source(unit);
     assert.equal(w.intents('transfer')[0].target, container.id, 'full spawn capacity restores ordinary mining');
 });
 
