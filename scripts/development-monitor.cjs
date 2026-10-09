@@ -10,6 +10,9 @@ async function main() {
     const secondsArgument = process.argv.indexOf('--seconds');
     const windowSeconds = secondsArgument < 0 ? 45 : Number(process.argv[secondsArgument + 1]);
     if (!Number.isInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 300) throw new Error('--seconds must be between 1 and 300');
+    const sampleArgument = process.argv.indexOf('--sample-seconds');
+    const sampleSeconds = sampleArgument < 0 ? 20 : Number(process.argv[sampleArgument + 1]);
+    if (!Number.isInteger(sampleSeconds) || sampleSeconds < 20 || sampleSeconds > 300) throw new Error('--sample-seconds must be between 20 and 300');
     const expression = process.argv.includes('--relay')
         ? 'JSON.stringify({developmentSnapshot:true,snapshotKind:"relay",tick:Game.time,bucket:Game.cpu.bucket,haulRelay:typeof haulRelay==="function"?JSON.parse(haulRelay()):null,upgraders:Object.values(Game.creeps).filter(c=>c.room.name===' + JSON.stringify(logisticsRoom) + '&&c.memory.role==="upgrader").map(c=>({name:c.name,x:c.pos.x,y:c.pos.y,energy:c.store.energy,ttl:c.ticksToLive,dontPull:c.memory.dontPullMe,working:c.memory.working,work:c.body.filter(p=>p.type===WORK).length,activeWORK:c.getActiveBodyparts(WORK)}))})'
         : process.argv.includes('--miners')
@@ -41,7 +44,7 @@ async function main() {
         const finish = () => {
             if (finished) return;
             finished = true; clearTimeout(timer); clearInterval(interval); socket.close();
-            console.log(JSON.stringify({ shard, samples, observedErrors: errors, windowSeconds })); resolve();
+            console.log(JSON.stringify({ shard, samples, observedErrors: errors, windowSeconds, sampleSeconds })); resolve();
         };
         const sample = async () => {
             for (const expression of expressions) {
@@ -56,7 +59,7 @@ async function main() {
             const message = String(event.data);
             if (message.startsWith('auth ok')) {
                 socket.send('gzip off'); socket.send(`subscribe user:${me._id}/console`);
-                sample(); interval = setInterval(sample, 20000); timer = setTimeout(finish, windowSeconds * 1000);
+                sample(); interval = setInterval(sample, sampleSeconds * 1000); timer = setTimeout(finish, windowSeconds * 1000);
             } else if (message.startsWith('auth failed')) {
                 reject(new Error('Official monitor authentication failed')); socket.close();
             } else if (message.startsWith('[')) {

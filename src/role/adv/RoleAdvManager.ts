@@ -78,11 +78,13 @@ export default (data: CreepData): ICreepConfig => ({
                 const carried = creep.store[resource] || 0
                 if (carried <= 0) continue
                 if (terminal) {
-                    const amount = Math.min(carried, terminalGoal(room, resource) - getTerminalResourceAmount(room, resource),
-                        terminalFree())
-                    if (amount > 0) {
-                        if (creep.transfer(terminal, resource, amount) === OK) reserveEvacuationIncoming(room, amount)
-                        return true
+                    const deficit = terminalGoal(room, resource) - getTerminalResourceAmount(room, resource)
+                    if (deficit > 0) {
+                        const amount = Math.min(carried, deficit, terminalFree())
+                        if (amount > 0) {
+                            if (creep.transfer(terminal, resource, amount) === OK) reserveEvacuationIncoming(room, amount)
+                            return true
+                        }
                     }
                 }
                 const amount = Math.min(carried, storage.store.getFreeCapacity())
@@ -93,13 +95,19 @@ export default (data: CreepData): ICreepConfig => ({
 
         const capacity = creep.store.getFreeCapacity()
         const clearTerminal = (): boolean => {
-            if (!terminal || storage.store.getFreeCapacity() <= 0) return false
+            if (!terminal) return false
+            // This synchronous search issues at most one withdrawal. A new search
+            // re-reads capacity; resource amounts and intent debits remain live.
+            let storageFree: number | undefined
             // Free mineral space first when the energy reserve cannot fit in the terminal.
             const resources = Object.keys(terminal.store) as ResourceConstant[]
             resources.sort((a, b) => Number(a === RESOURCE_ENERGY) - Number(b === RESOURCE_ENERGY))
             for (const resource of resources) {
-                const amount = Math.min(getTerminalResourceAmount(room, resource) - terminalGoal(room, resource),
-                    capacity, storage.store.getFreeCapacity())
+                const surplus = getTerminalResourceAmount(room, resource) - terminalGoal(room, resource)
+                if (surplus <= 0) continue
+                storageFree ??= storage.store.getFreeCapacity()
+                if (storageFree <= 0) return false
+                const amount = Math.min(surplus, capacity, storageFree)
                 if (amount > 0) {
                     if (creep.withdraw(terminal, resource, amount) === OK) recordTerminalWithdrawal(room, resource, amount)
                     return true
@@ -133,8 +141,11 @@ export default (data: CreepData): ICreepConfig => ({
         if (clearTerminal()) return true
         if (terminal) {
             for (const resource of Object.keys(room.memory.terminalAmount) as ResourceConstant[]) {
-                const amount = Math.min(terminalGoal(room, resource) - getTerminalResourceAmount(room, resource), capacity,
-                    storage.store[resource] || 0, terminalFree())
+                const deficit = terminalGoal(room, resource) - getTerminalResourceAmount(room, resource)
+                if (deficit <= 0) continue
+                const stock = storage.store[resource] || 0
+                if (stock <= 0) continue
+                const amount = Math.min(deficit, capacity, stock, terminalFree())
                 if (amount > 0) { creep.withdraw(storage, resource, amount); return true }
             }
         }

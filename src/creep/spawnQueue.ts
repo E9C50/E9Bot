@@ -28,16 +28,14 @@ export function buildSpawnQueue(
         return []
     }
 
-    const fillers = Object.values(creeps).filter(
-        (creep) =>
-            creep.room.name == room.name &&
-            creep.memory.role == roleBaseEnum.FILLER
-    )
-    const harvesters = Object.values(creeps).filter(
-        (creep) =>
-            creep.room.name == room.name &&
-            creep.memory.role == roleBaseEnum.HARVESTER
-    )
+    const fillers: Creep[] = [], harvesters: Creep[] = []
+    for (const name in creeps) {
+        const creep = creeps[name], role = creep.memory.role
+        if (role !== roleBaseEnum.FILLER && role !== roleBaseEnum.HARVESTER) continue
+        if (creep.room.name !== room.name) continue
+        if (role === roleBaseEnum.FILLER) fillers.push(creep)
+        else harvesters.push(creep)
+    }
 
     // A full-size manager must not block the carrier needed to refill its spawn energy.
     const noStorageLogistics = fillers.length === 0 || room.controller?.level === 8 &&

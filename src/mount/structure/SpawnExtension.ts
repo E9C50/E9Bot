@@ -30,12 +30,14 @@ export default class SpawnExtension extends StructureSpawn {
     private affordableRecovery(queue: string[]): { index: number; memory: CreepMemory; plan: BodyPlan } | undefined {
         let harvester = false, filler = false
         for (const name in Game.creeps) {
-            const creep = Game.creeps[name]
-            if (!creep.room || creep.room.name !== this.room.name || creep.memory.spawnRoom !== this.room.name) continue
+            const creep = Game.creeps[name], memory = creep.memory
+            if (memory.role !== 'harvester' && memory.role !== 'filler') continue
+            const room = creep.room
+            if (!room || room.name !== this.room.name || memory.spawnRoom !== this.room.name) continue
             if (!creep.spawning && (creep.ticksToLive === 0 ||
-                creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed)) continue
-            if (creep.memory.role === 'harvester' && (creep.spawning || creep.getActiveBodyparts(WORK) > 0)) harvester = true
-            if (creep.memory.role === 'filler' && (creep.spawning ||
+                memory.boostPlan?.steps.length && !memory.boostPlan.completed && !memory.boostPlan.failed)) continue
+            if (memory.role === 'harvester' && (creep.spawning || creep.getActiveBodyparts(WORK) > 0)) harvester = true
+            if (memory.role === 'filler' && (creep.spawning ||
                 creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(MOVE) > 0)) filler = true
             if (harvester && filler) return undefined
         }

@@ -11,13 +11,13 @@ import { isRoomEvacuating } from 'room/evacuationState'
 import { releaseStorageFillerConfig } from './storageFillerPopulation'
 
 /** A zero-CARRY resident cannot hold the only Link-miner birth slot until natural death. */
-function linkedMinerName(room: Room, source: Source, name: string): string {
+function linkedMinerName(room: Room, source: Source, name: string,
+    replacements: (room: Room) => readonly Creep[]): string {
     const current = Game.creeps[createCreepName(roleBaseEnum.HARVESTER, name)]
     if (current && current.getActiveBodyparts(CARRY) > 0) return name
     const prefix = `${name}_LINK_CARRY_`
     // Keep a healthy replacement's demand after its predecessor retires.
-    const replacement = Object.values(Game.creeps).find(creep => creep.memory.spawnRoom === room.name &&
-        creep.memory.role === roleBaseEnum.HARVESTER && (creep.memory.data as HarvesterData).sourceId === source.id &&
+    const replacement = replacements(room).find(creep => (creep.memory.data as HarvesterData).sourceId === source.id &&
         creep.memory.name?.startsWith(prefix) && creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(WORK) > 0)
     if (replacement) return replacement.memory.name
     if (current === undefined) return name
@@ -51,6 +51,22 @@ function localBuilderPublisher(room: Room): (name: string, data: BuilderData) =>
  * 检查房间信息，发布对应Creep需求
  */
 export function releaseBaseCreepConfig(): void {
+    // One synchronous publication may inspect several absent or zero-CARRY miners.
+    // Keep their replacement names, but enumerate the live catalog only when needed.
+    let linkedMiners: Map<string, Creep[]> | undefined
+    const replacements = (room: Room): readonly Creep[] => {
+        if (linkedMiners === undefined) {
+            linkedMiners = new Map()
+            for (const name in Game.creeps) {
+                const creep = Game.creeps[name], memory = creep.memory
+                if (memory.role !== roleBaseEnum.HARVESTER) continue
+                const residents = linkedMiners.get(memory.spawnRoom)
+                if (residents) residents.push(creep)
+                else linkedMiners.set(memory.spawnRoom, [creep])
+            }
+        }
+        return linkedMiners.get(room.name) || []
+    }
     for (const roomName in Game.rooms) {
         const room: Room = Game.rooms[roomName]
         if (!room.my || isRoomEvacuating(room)) continue
@@ -102,7 +118,7 @@ export function releaseBaseCreepConfig(): void {
             for (let i = 0; i < canHarvesterPos; i++) {
                 const creepMemory: HarvesterData = { sourceId: source.id }
                 const baseName = room.name + '_HARVESTER_' + source.id + '_' + i
-                const creepName = linked ? linkedMinerName(room, source, baseName) : baseName
+                const creepName = linked ? linkedMinerName(room, source, baseName, replacements) : baseName
                 addCreepConfig(
                     room,
                     roleBaseEnum.HARVESTER,

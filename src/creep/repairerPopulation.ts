@@ -10,7 +10,9 @@ export function releaseRepairerCreepConfigs(room: Room, developing: boolean): vo
     const minimum = hasOwnedRamparts(room) ? Math.max(0, Math.floor(policy.minimumRampartWorkers)) : 0
     const energy = room.storage?.store[RESOURCE_ENERGY] || 0
     let extra = 0
-    if (!developing && room.storage && energy > policy.minimumStorageEnergy && room.wallsNeedRepair.length > 0) {
+    // Surplus cannot raise a floor already at its ceiling; avoid a full wall-health scan.
+    if (!developing && !(minimum >= populationPolicy.base.maximumRepairers) && room.storage &&
+        energy > policy.minimumStorageEnergy && room.wallsNeedRepair.length > 0) {
         extra = Math.floor(energy / populationPolicy.base.energyPerRepairer) + 1
         if (room.controller && room.controller.level < populationPolicy.base.singleRepairerBelowLevel) extra = 1
         extra = Math.min(extra, populationPolicy.base.maximumRepairers)

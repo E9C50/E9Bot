@@ -82,6 +82,65 @@ test('same-tick terminal transaction fees are deducted before manager can clear 
     assert.deepEqual(w.calls, [], 'the remaining effective 50000 energy must never be withdrawn');
 });
 
+test('idle managers skip capacity and storage-stock queries for already satisfied terminal goals', () => {
+    const terminal = { energy: 50000 }, goals = { energy: 50000 }, storage = { energy: 200000 };
+    for (let index = 0; index < 20; index++) {
+        terminal[`mineral${index}`] = goals[`mineral${index}`] = 1000;
+        storage[`mineral${index}`] = 10000;
+    }
+    const w = world({ terminal, storage, goals, link: 0 });
+    let storageFreeReads = 0, terminalFreeReads = 0, storageStockReads = 0;
+    for (const [stock, location] of [[w.room.storage, 'storage'], [w.room.terminal, 'terminal']]) {
+        stock.store = new Proxy(stock.store, { get(target, key) {
+            if (key === 'getFreeCapacity') {
+                if (location === 'storage') storageFreeReads++;
+                else terminalFreeReads++;
+            } else if (location === 'storage' && typeof target[key] === 'number') storageStockReads++;
+            return target[key];
+        } });
+    }
+    for (let index = 0; index < 25; index++) w.run();
+    assert.deepEqual(w.calls, []);
+    assert.equal(storageFreeReads, 0, 'satisfied goals avoid all 550 storage capacity queries');
+    assert.equal(terminalFreeReads, 0, 'satisfied demands avoid all 525 terminal capacity queries');
+    assert.equal(storageStockReads, 0, 'satisfied demands never read source inventory');
+    w.room.memory.terminalAmount.mineral0 = 2000;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'storage', resource: 'mineral0', amount: 1000 }],
+        'a new goal is serviced immediately, even within the same tick');
+    assert.equal(storageFreeReads, 0, 'an input deficit alone does not need storage receiving capacity');
+    assert.equal(terminalFreeReads, 1);
+    assert.equal(storageStockReads, 1);
+});
+
+test('terminal cleanup rechecks storage capacity and intent debits on each same-tick work call', () => {
+    const w = world({ terminal: { energy: 50000, H: 1000 }, goals: { H: 1000 },
+        storage: { energy: 999900 } });
+    let capacityReads = 0;
+    w.room.storage.store = new Proxy(w.room.storage.store, { get(target, key) {
+        if (key === 'getFreeCapacity') capacityReads++;
+        return target[key];
+    } });
+    w.run();
+    assert.deepEqual(w.calls, []);
+    assert.equal(capacityReads, 0, 'without surplus there is no receiving-capacity check');
+    w.room.memory.terminalAmount.H = 900;
+    w.room.storage.store.energy = 1000000;
+    w.run();
+    assert.deepEqual(w.calls, [], 'a newly full Storage must not reuse earlier capacity');
+    assert.equal(capacityReads, 1, 'even zero capacity is read only for a real surplus');
+    w.room.storage.store.energy = 999950;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'terminal', resource: 'H', amount: 50 }]);
+    assert.equal(capacityReads, 2, 'the next work call immediately reads released receiving capacity');
+    w.calls.length = 0;
+    w.room.memory.terminalAmount.H = 950;
+    w.room.storage.store.energy = 999900;
+    w.run();
+    assert.deepEqual(w.calls, [], 'accepted withdrawals are deducted even while native Terminal stock remains unchanged');
+    assert.equal(capacityReads, 2, 'intent debits remove surplus before any capacity query');
+});
+
 test('terminal cargo already dispatched in this tick is not mistaken for a surplus to withdraw', () => {
     const w = world({ terminal: { energy: 60000, wire: 10000 }, goals: { wire: 3000 },
         terminalDebits: { energy: 10000, wire: 10000 }, storage: { energy: 200000, wire: 5000 } });
