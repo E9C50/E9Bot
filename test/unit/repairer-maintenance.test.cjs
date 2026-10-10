@@ -7,7 +7,7 @@ function world() {
     const game = { time: 1, shard: { name: 'shard3' }, cpu: { bucket: 9 },
         getObjectById: id => objects.get(id) || null };
     const memory = { warMode: {} };
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy',
+    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RESOURCE_ENERGY: 'energy', WORK: 'work',
         STRUCTURE_WALL: 'constructedWall', STRUCTURE_RAMPART: 'rampart', STRUCTURE_STORAGE: 'storage', STRUCTURE_CONTAINER: 'container' }, modules: {
         utils: { getDistance: (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) },
         './RoleBaseUpgrader': () => ({ target(creep) { actions.push({ action: 'upgrade', name: creep.name }); return true; } }),
@@ -96,6 +96,33 @@ test('sufficient bucket preserves every-tick maintenance without critical candid
     const local = w.room(), target = w.barrier('healthy-wall', local), unit = w.unit('worker0', local, target);
     for (w.game.time = 1; w.game.time <= 5; w.game.time++) unit.role.target(unit.creep);
     assert.equal(w.repairs().length, 5); assert.equal(w.reads.get(local.name) || 0, 0);
+});
+
+test('a complete growth repairer spends only its published maintenance budget', () => {
+    const w = world(); w.game.cpu.bucket = 10000;
+    const local = w.room(), target = w.barrier('growth-wall', local), unit = w.unit('growth-repairer', local, target);
+    local.controller = { my: true, level: 6 };
+    local.memory.creepConfig = { [unit.creep.name]: { development: { workParts: 1, fullBody: true } } };
+    unit.creep.memory.role = 'repairer'; unit.creep.memory.development = { fullBody: true };
+    unit.creep.getActiveBodyparts = type => type === 'work' ? 10 : 1;
+    for (w.game.time = 1; w.game.time <= 100; w.game.time++) unit.role.target(unit.creep);
+    assert.equal(w.repairs().length, 10, 'ten native WORK spend 100 energy, leaving the rest of mining income for births');
+    assert.equal(unit.data.repairTarget, target.id);
+});
+
+test('a growth repairer pauses at zero income budget and responds immediately to an attack', () => {
+    const w = world(); w.game.cpu.bucket = 10000;
+    const local = w.room(), target = w.barrier('growth-wall', local), unit = w.unit('growth-repairer', local, target);
+    local.controller = { my: true, level: 6 };
+    local.memory.creepConfig = { [unit.creep.name]: { development: { workParts: 0, fullBody: true } } };
+    unit.creep.memory.role = 'repairer'; unit.creep.memory.development = { fullBody: true };
+    unit.creep.getActiveBodyparts = type => type === 'work' ? 10 : 1;
+    for (w.game.time = 1; w.game.time <= 10; w.game.time++) unit.role.target(unit.creep);
+    assert.equal(w.repairs().length, 0);
+    local.enemies.push({}); unit.role.target(unit.creep);
+    assert.equal(w.repairs().length, 1);
+    local.enemies = []; w.memory.warMode[local.name] = true; unit.role.target(unit.creep);
+    assert.equal(w.repairs().length, 2);
 });
 
 test('known war mode or actual enemies bypass the low-bucket budget immediately', () => {

@@ -303,3 +303,49 @@ test('twelve small arrivals deliver the same 1200 energy in four successful carr
     assert.equal(w.calls.filter(action => action.action === 'withdraw').length, 2);
     assert.equal(w.calls.filter(action => action.action === 'transfer').length, 2);
 });
+
+
+test('Terminal refill preserves one complete birth in Storage even with a full Spawn pool', () => {
+    for (const energy of [0, 2199, 2200]) {
+        const w = world({ terminal: { energy: 8509 }, storage: { energy }, energyCapacity: 2200 });
+        w.room.energyAvailable = 2200;
+        w.run();
+        assert.deepEqual(w.calls, [], 'neither the energy refill branch nor the generic resource loop may spend the birth reserve');
+        assert.equal(w.room.memory.terminalAmount.energy, 50000);
+    }
+});
+
+test('Terminal refill withdraws only Storage energy above the complete birth reserve', () => {
+    const w = world({ terminal: { energy: 8509 }, storage: { energy: 2300 }, energyCapacity: 2200 });
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'storage', resource: 'energy', amount: 100 }]);
+});
+
+test('a depleted Storage receives Link energy before Terminal and preserves that destination across ticks', () => {
+    const w = world({ terminal: { energy: 8509 }, storage: { energy: 2100 }, energyCapacity: 2200, link: 300 });
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'link', resource: 'energy', amount: 300 }]);
+    w.calls.length = 0;
+    w.room.centerLink.store.energy = 0;
+    w.creep.store.energy = 300;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'transfer', id: 'storage', resource: 'energy', amount: 300 }],
+        'the next tick must not reroute the protected Link batch to the still-empty Terminal');
+    w.calls.length = 0;
+    w.creep.store.energy = 0;
+    w.room.storage.store.energy = 2400;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'withdraw', id: 'storage', resource: 'energy', amount: 200 }]);
+    w.calls.length = 0;
+    w.creep.store.energy = 200;
+    w.room.storage.store.energy = 2200;
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'transfer', id: 'terminal', resource: 'energy', amount: 200 }],
+        'once a full birth is held, subsequent surplus continues toward the unchanged Terminal target');
+});
+
+test('Terminal cargo already on the Manager can finish while Storage is below the birth reserve', () => {
+    const w = world({ terminal: { energy: 8509 }, storage: { energy: 0 }, carried: { energy: 600 }, energyCapacity: 2200 });
+    w.run();
+    assert.deepEqual(w.calls, [{ action: 'transfer', id: 'terminal', resource: 'energy', amount: 600 }]);
+});

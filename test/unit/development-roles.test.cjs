@@ -82,6 +82,7 @@ function world(level = 3) {
             BUILD_POWER: 5, CONTAINER_DECAY: 5000, OK: 0, ERR_NOT_IN_RANGE: -9,
         },
         modules: { 'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+            'creep/fillerProductionRecovery': { runFillerProductionRecovery: () => false },
             'runtime/creepIndex': { getRoomProcessors: () => [] }, utils: {
             getDistance: (a, b) => a.getRangeTo(b),
             getClosestTarget: (origin, values) => values.reduce((closest, item) => !closest || origin.getRangeTo(item) < origin.getRangeTo(closest) ? item : closest, undefined)

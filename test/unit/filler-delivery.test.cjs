@@ -24,6 +24,7 @@ function world(level = 6) {
     const room = { name: 'W1N1', memory: { roomFillJob: {}, creepConfig: {} }, controller: { my: true, level, pos: p(25, 25) },
         sources: [], containers: [], links: [], extensions: [], spawns: [], towers: [], labs: [], units: [], droppedResource: [], energyAvailable: 300,
         find: () => room.units };
+    game.rooms = { [room.name]: room }; game.creeps = {};
     function structure(id, type, x, y, energy = 0, capacity = 2000) {
         const value = { id, pos: p(x, y), structureType: type, my: true, store: store(energy, capacity), isActive: () => true };
         objects.set(id, value);
@@ -59,11 +60,14 @@ function world(level = 6) {
         STRUCTURE_NUKER: 'nuker', STRUCTURE_POWER_SPAWN: 'powerSpawn' }, modules: {
         'creep/boosting': { getActiveRoomBoostRequests: () => [] },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
+        'creep/fillerProductionRecovery': { runFillerProductionRecovery: () => false },
         utils: { getDistance: (first, second) => first.getRangeTo(second) },
         'creep/developmentLogistics': { controllerEnergyBuffer: value => value.controller.level < 8 ? value.controllerLink ||
             value.containers.find(container => container.pos.inRangeTo(value.controller.pos, 3)) : undefined },
     } });
-    return { game, room, calls, p, structure, source, drop, creep, behavior: data => loader.load('role/base/RoleBaseFiller').default(data) };
+    return { game, room, calls, p, structure, source, drop, creep,
+        network: () => loader.load('room/resourceNetwork'),
+        behavior: data => loader.load('role/base/RoleBaseFiller').default(data) };
 }
 
 for (const level of [6, 8]) test(`RCL${level} distribution uses partial Storage stock before a larger mine batch or drop`, () => {
@@ -92,6 +96,48 @@ test('RCL8 no-stock fallback still collects loose energy and central Link stock'
     const link = w.structure('central-link', 'link', 19, 20, 800, 800);
     w.behavior({}).source(unit);
     assert.equal(w.calls.find(call => call.method === 'takeFromTarget').target, link.id);
+});
+
+for (const level of [6, 8]) test(`RCL${level} ordinary Terminal fallback protects 50000 energy and withdraws only the surplus`, () => {
+    const w = world(level), terminal = w.structure('terminal', 'terminal', 20, 20, 8509, 300000);
+    const unit = w.creep(0, 1000), data = { sourceId: terminal.id }, behavior = w.behavior(data);
+    behavior.source(unit);
+    assert.equal(w.calls.some(call => ['withdraw', 'takeFromTarget'].includes(call.method)), false);
+    terminal.store.energy = 50040; w.game.time++; w.calls.length = 0;
+    behavior.source(unit);
+    const withdrawal = w.calls.find(call => call.method === 'withdraw');
+    assert.equal(withdrawal.target, terminal.id); assert.equal(withdrawal.amount, 40);
+});
+
+for (const level of [6, 8]) test(`RCL${level} simultaneous Terminal withdrawals share the same 50000 reserve`, () => {
+    const w = world(level), terminal = w.structure('terminal', 'terminal', 20, 20, 50040, 300000);
+    w.behavior({ sourceId: terminal.id }).source(w.creep(0, 1000));
+    w.behavior({ sourceId: terminal.id }).source(w.creep(0, 1000));
+    const withdrawals = w.calls.filter(call => call.method === 'withdraw');
+    assert.equal(withdrawals.length, 1); assert.equal(withdrawals[0].amount, 40);
+    w.game.time++; w.calls.length = 0;
+    w.behavior({ sourceId: terminal.id }).source(w.creep(0, 1000));
+    assert.equal(w.calls.find(call => call.method === 'withdraw').amount, 40, 'the next native snapshot gets a new ledger');
+});
+
+for (const level of [6, 8]) for (const intent of ['send', 'deal-fee', 'manager-withdrawal'])
+    test(`RCL${level} normal Filler honors an earlier ${intent} Terminal debit in the same tick`, () => {
+        const w = world(level), terminal = w.structure('terminal', 'terminal', 20, 20, 50040, 300000), network = w.network();
+        if (intent === 'send') network.recordResourceSend(w.room, 'W2N1', 'energy', 20, 1);
+        else if (intent === 'deal-fee') network.recordResourceDebit(w.room, 'H', 100, 21);
+        else network.recordTerminalWithdrawal(w.room, 'energy', 21);
+        assert.equal(network.getTerminalResourceAmount(w.room, 'energy'), 50019);
+        w.behavior({ sourceId: terminal.id }).source(w.creep(0, 1000));
+        assert.equal(w.calls.find(call => call.method === 'withdraw').amount, 19);
+        assert.equal(network.getTerminalResourceAmount(w.room, 'energy'), 50000, 'Filler debits remain visible to later Manager and market decisions');
+        assert.equal(terminal.store.energy, 50040, 'native Store still awaits intent settlement');
+    });
+
+test('ordinary Filler Terminal withdrawals do not initialize the global resource inventory', () => {
+    const w = world(8), terminal = w.structure('terminal', 'terminal', 20, 20, 50040, 300000);
+    Object.defineProperty(w.game, 'rooms', { get() { assert.fail('normal Filler must use the lightweight intent ledger'); } });
+    w.behavior({ sourceId: terminal.id }).source(w.creep(0, 1000));
+    assert.equal(w.calls.find(call => call.method === 'withdraw').amount, 40);
 });
 
 test('development sends energy to the controller Container when a controller Link also exists', () => {

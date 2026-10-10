@@ -64,6 +64,10 @@ export default (data: CreepData): ICreepConfig => ({
         const room = creep.room
         const storage = room.storage!
         const terminal = room.terminal
+        const memory = creep.memory as CreepMemory & { managerStorageEnergy?: boolean }
+        const birthReserve = Math.max(0, room.energyCapacityAvailable || 0)
+        const storageEnergySurplus = (): number => Math.max(0, (storage.store[RESOURCE_ENERGY] || 0) - birthReserve)
+        if (!(creep.store[RESOURCE_ENERGY] > 0)) delete memory.managerStorageEnergy
         const terminalFree = (): number => terminal ? getEvacuationIncomingCapacity(room) : 0
         if (room.memory.terminalAmount === undefined) room.memory.terminalAmount = {}
         room.memory.terminalAmount[RESOURCE_ENERGY] = terminalGoal(room, RESOURCE_ENERGY)
@@ -77,7 +81,7 @@ export default (data: CreepData): ICreepConfig => ({
             for (const resource of resources) {
                 const carried = creep.store[resource] || 0
                 if (carried <= 0) continue
-                if (terminal) {
+                if (terminal && !(resource === RESOURCE_ENERGY && memory.managerStorageEnergy)) {
                     const deficit = terminalGoal(room, resource) - getTerminalResourceAmount(room, resource)
                     if (deficit > 0) {
                         const amount = Math.min(carried, deficit, terminalFree())
@@ -116,24 +120,32 @@ export default (data: CreepData): ICreepConfig => ({
             return false
         }
 
+        const drainLink = (protectBirthReserve = false): boolean => {
+            if (!room.centerLink) return false
+            const amount = Math.min(room.centerLink.store[RESOURCE_ENERGY] || 0, capacity, storage.store.getFreeCapacity())
+            if (amount <= 0) return false
+            if (creep.withdraw(room.centerLink, RESOURCE_ENERGY, amount) === OK && protectBirthReserve) {
+                // Keep this Link batch headed to Storage on the next tick, even while Terminal is short.
+                memory.managerStorageEnergy = true
+            }
+            return true
+        }
+
         if (terminal) {
             const energyDeficit = terminalGoal(room, RESOURCE_ENERGY) - getTerminalResourceAmount(room, RESOURCE_ENERGY)
             if (energyDeficit > 0) {
+                // Terminal's long-term target cannot consume the next complete replacement birth.
+                // Preserve it even when the Spawn pool is already full.
+                if ((storage.store[RESOURCE_ENERGY] || 0) < birthReserve && drainLink(true)) return true
                 if (terminalFree() < Math.min(capacity, energyDeficit) && clearTerminal()) return true
                 const source = room.centerLink && room.centerLink.store[RESOURCE_ENERGY] > 0 ? room.centerLink : storage
-                const amount = Math.min(energyDeficit, capacity, source.store[RESOURCE_ENERGY] || 0,
+                const stock = source === storage ? storageEnergySurplus() : source.store[RESOURCE_ENERGY] || 0
+                const amount = Math.min(energyDeficit, capacity, stock,
                     terminalFree())
                 if (amount > 0) { creep.withdraw(source, RESOURCE_ENERGY, amount); return true }
             }
         }
 
-        const drainLink = (): boolean => {
-            if (!room.centerLink) return false
-            const amount = Math.min(room.centerLink.store[RESOURCE_ENERGY] || 0, capacity, storage.store.getFreeCapacity())
-            if (amount <= 0) return false
-            creep.withdraw(room.centerLink, RESOURCE_ENERGY, amount)
-            return true
-        }
         // Batch link intake while keeping almost-full links flowing during long terminal jobs.
         if (room.centerLink && room.centerLink.store[RESOURCE_ENERGY] >=
             room.centerLink.store.getCapacity(RESOURCE_ENERGY) * rolePolicy.manager.linkDrainRatio && drainLink()) return true
@@ -143,7 +155,7 @@ export default (data: CreepData): ICreepConfig => ({
             for (const resource of Object.keys(room.memory.terminalAmount) as ResourceConstant[]) {
                 const deficit = terminalGoal(room, resource) - getTerminalResourceAmount(room, resource)
                 if (deficit <= 0) continue
-                const stock = storage.store[resource] || 0
+                const stock = resource === RESOURCE_ENERGY ? storageEnergySurplus() : storage.store[resource] || 0
                 if (stock <= 0) continue
                 const amount = Math.min(deficit, capacity, stock, terminalFree())
                 if (amount > 0) { creep.withdraw(storage, resource, amount); return true }

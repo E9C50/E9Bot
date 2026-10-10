@@ -7,6 +7,8 @@ export function isSpawnEnergyCarrier(room: Room, creep: Creep): boolean {
     if (memory.spawnRoom && memory.spawnRoom !== room.name || creep.room.name !== room.name) return false
     if (creep.getActiveBodyparts(CARRY) <= 0 || creep.getActiveBodyparts(MOVE) <= 0 ||
         memory.boostPlan?.steps.length && !memory.boostPlan.completed && !memory.boostPlan.failed) return false
+    const recovery = (memory as CreepMemory & { productionRecoverySpawn?: { roomName: string; tick: number } }).productionRecoverySpawn
+    if (recovery?.roomName === room.name && recovery.tick <= Game.time && recovery.tick >= Game.time - 1) return true
     return !(isDevelopingRoom(room) && room.storage &&
         ((memory.data as FillerData | undefined)?.mineId || memory.developmentHauler?.mineId))
 }

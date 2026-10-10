@@ -16,7 +16,7 @@ export function developmentWorkAllowed(creep: Creep): boolean {
     if (creep.memory.role === 'upgrader' && !creep.memory.development?.fullBody) return true
     const quota = profile?.workParts
     if (!Number.isFinite(quota)) return true
-    if ((quota as number) <= 0) return !creep.memory.development?.fullBody
+    if ((quota as number) <= 0) return false
     const work = creep.getActiveBodyparts(WORK)
     const allowed = Math.floor(quota as number)
     if (work <= allowed || work === 0) return true

@@ -5,6 +5,9 @@ import { hasUsableStorageFiller } from './storageFillerLifecycle'
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 import { previewBodySelection, selectCreepBody } from './bodySelection'
 import { developmentPolicy } from 'settings/development'
+import { isSpawnEnergyCarrier } from './spawnEnergyCarrier'
+import { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
+export { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
 
 export function buildSpawnQueue(
     room: Room,
@@ -63,47 +66,29 @@ export function buildSpawnQueue(
         if (recoveryUpgrader) return [recoveryUpgrader, ...creepSpawnQueue.filter(name => name !== recoveryUpgrader)]
     }
 
-    // The last miner can move stored energy while a complete distributor is funded.
-    // Choose that birth before a mine carrier which would only return energy to Storage.
-    // Capacity preview must remain useful before the current Spawn pool can pay for it.
-    if (isDevelopingRoom(room) && fillers.length === 0 && harvesters.length > 0 && room.storage) {
+    // Mine carriers may import to Storage without refilling Spawn. Preserve the whole
+    // distributor budget while a miner moves it between Storage, cargo and Extensions.
+    if (isDevelopingRoom(room) && harvesters.length > 0 && room.storage) {
         const storage = room.storage
-        // Moving one batch from Storage through a miner into an Extension does not
-        // change the funded birth. Count its native cargo while that batch is in transit.
-        const funding = Math.max(0, storage.store[RESOURCE_ENERGY]) + Math.max(0, room.energyAvailable) +
-            harvesters.reduce((total, creep) => total + (!creep.memory.spawnRoom || creep.memory.spawnRoom === room.name
-                ? Math.max(0, creep.store?.[RESOURCE_ENERGY] || 0) : 0), 0)
-        if (funding > 0) {
+        const hasDistributor = fillers.some(creep => {
+            const data = creep.memory.data as FillerData
+            return data.sourceId === storage.id && !data.mineId && !creep.memory.developmentHauler?.mineId &&
+                (isSpawnEnergyCarrier(room, creep) || creep.spawning && creep.memory.spawnRoom === room.name)
+        })
+        const temporaryDistributor = fillers.some(creep => {
+            const recovery = creep.memory.productionRecoverySpawn
+            return recovery?.roomName === room.name && recovery.tick >= Game.time - 1 && isSpawnEnergyCarrier(room, creep)
+        })
+        if (!hasDistributor && (temporaryDistributor || fillers.length === 0 || hasRemoteHomeEconomy(room, creeps))) {
+            const funding = Math.max(0, storage.store[RESOURCE_ENERGY]) + Math.max(0, room.energyAvailable) +
+                harvesters.reduce((total, creep) => total + (!creep.memory.spawnRoom || creep.memory.spawnRoom === room.name
+                    ? Math.max(0, creep.store?.[RESOURCE_ENERGY] || 0) : 0), 0)
             const storageCarrier = creepSpawnQueue.find(name => {
                 const config = creepConfigCache[name], data = config.data as FillerData
                 if (config.role !== roleBaseEnum.FILLER || !config.development || data.sourceId !== storage.id || data.mineId) return false
                 const { body } = previewBodySelection(room, config, 0)
                 const cost = body.reduce((total, part) => total + BODYPART_COST[part], 0)
-                return body.length > 0 && cost <= funding
-            })
-            if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
-        }
-    }
-
-    // Recover stored spawn energy before an unaffordable miner blocks the whole queue.
-    // One working Source/carrier pair is enough; extra Storage carriers retain normal priorities.
-    if (isDevelopingRoom(room) && room.storage && room.energyAvailable < room.energyCapacityAvailable &&
-        room.storage.store[RESOURCE_ENERGY] > 0 && hasRemoteHomeEconomy(room, creeps)) {
-        const storageId = room.storage.id
-        const hasStorageCarrier = fillers.some(creep => {
-            const data = creep.memory.data as FillerData
-            return creep.memory.spawnRoom === room.name && data.sourceId === storageId && !data.mineId &&
-                !creep.memory.developmentHauler?.mineId && (creep.spawning ||
-                    creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(MOVE) > 0 &&
-                    !(creep.memory.boostPlan?.steps.length && !creep.memory.boostPlan.completed && !creep.memory.boostPlan.failed))
-        })
-        if (!hasStorageCarrier) {
-            const storageCarrier = creepSpawnQueue.find(name => {
-                const config = creepConfigCache[name], data = config.data as FillerData
-                if (config.role !== roleBaseEnum.FILLER || data.sourceId !== storageId || data.mineId || !config.development) return false
-                const { body } = selectCreepBody(room, config, true)
-                const cost = body.reduce((total, part) => total + BODYPART_COST[part], 0)
-                return body.length > 0 && cost <= room.energyAvailable && cost <= room.storage!.store[RESOURCE_ENERGY]
+                return body.length > 0 && (cost <= funding || temporaryDistributor)
             })
             if (storageCarrier) return [storageCarrier, ...creepSpawnQueue.filter(name => name !== storageCarrier)]
         }
@@ -165,7 +150,7 @@ export function buildSpawnQueue(
         }
     }
 
-    return creepSpawnQueue
+    return prioritizeDevelopmentRecovery(room, creepSpawnQueue, creeps)
 }
 
 export function orderCreepSpawnQueue(): void {

@@ -103,6 +103,8 @@ interface CreepMemory {
     development?: {
         /** Automatic work quotas constrain scheduling, while spawning uses the full capacity body. */
         fullBody?: boolean
+        /** Published full-body successor; the paid-for predecessor keeps working until natural death. */
+        replacement?: { predecessor: string; deadline: number }
         workParts?: number
         carryParts?: number
         travelTicks?: number

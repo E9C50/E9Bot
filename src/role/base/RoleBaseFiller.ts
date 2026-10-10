@@ -8,6 +8,8 @@ import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
 import { controllerLayoutPolicy } from 'settings/controllerLayout'
 import { retireSupersededStorageFiller } from 'creep/storageFillerLifecycle'
 import { boostLabEnergyDeficit, prioritizeLabBoostJobs, recordBoostLabEnergyTransfer } from 'room/labBoostPriority'
+import { runFillerProductionRecovery } from 'creep/fillerProductionRecovery'
+import { availableTerminalEnergy, recordTerminalEnergyWithdrawal } from 'creep/terminalEnergyWithdrawal'
 
 /** A full 33-CARRY load must not be poured into a boost that needs only a few hundred energy. */
 function fillActiveBoostEnergy(creep: Creep): boolean {
@@ -45,7 +47,8 @@ function controllerDeliveryContainer(room: Room): StructureContainer | undefined
 }
 
 function usableEnergySource(target: AnyStoreStructure | Source | null | undefined, excludedId?: string): target is AnyStoreStructure {
-    return target != undefined && 'store' in target && target.id !== excludedId && target.store[RESOURCE_ENERGY] > 0
+    return target != undefined && 'store' in target && target.id !== excludedId &&
+        (target.structureType === 'terminal' ? availableTerminalEnergy(target) : target.store[RESOURCE_ENERGY]) > 0
 }
 
 function isControllerLink(target: AnyStoreStructure | Source | null | undefined, room: Room): boolean {
@@ -162,6 +165,7 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         return !retireSupersededStorageFiller(creep)
     },
     source(creep) {
+        if (runFillerProductionRecovery(creep)) return true
         if (isDevelopingRoom(creep.room)) return runDevelopingFiller(creep, data as FillerData)
         // 如果没有空余容量了，就开始工作
         if (creep.store.getFreeCapacity() == 0) {
@@ -198,7 +202,12 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
 
         // 有可用目标就去拿
         if (usableEnergySource(sourceTarget, buffer?.id)) {
-            creep.takeFromTarget(sourceTarget, RESOURCE_ENERGY)
+            if (sourceTarget.structureType === 'terminal') {
+                const amount = Math.min(creep.store.getFreeCapacity(RESOURCE_ENERGY), availableTerminalEnergy(sourceTarget))
+                const result = creep.withdraw(sourceTarget, RESOURCE_ENERGY, amount)
+                if (result === ERR_NOT_IN_RANGE) creep.moveTo(sourceTarget, { range: 1 })
+                else if (result === OK) recordTerminalEnergyWithdrawal(sourceTarget, amount)
+            } else creep.takeFromTarget(sourceTarget, RESOURCE_ENERGY)
             return true
         }
 
@@ -206,6 +215,7 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         return true
     },
     target(creep) {
+        if (runFillerProductionRecovery(creep)) return true
         if (isDevelopingRoom(creep.room)) return runDevelopingFiller(creep, data as FillerData)
         const creepData: FillerData = data as FillerData
         const fillJobs = creep.room.memory.roomFillJob || (creep.room.memory.roomFillJob = {})

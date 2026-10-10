@@ -16,7 +16,7 @@ function world({ available = 500, stock = 5545 } = {}) {
         sources: [{ id: 'source1', pos: p(42, 32) }, { id: 'source2', pos: p(36, 34) }],
         containers: [{ id: 'source-container', pos: p(43, 33) }], links: [], spawns: [],
         memory: { creepConfig: {}, creepSpawnQueue: [] } };
-    const game = { time: 100, creeps: {}, rooms: { E39N5: room } }, births = [];
+    const game = { time: 100, creeps: {}, rooms: { E39N5: room }, getObjectById: () => null }, births = [];
     const demand = (role, priority, sourceId, development) => ({ role, name: `${role}-${sourceId}`,
         spawnRoom: room.name, data: { sourceId }, spawnPriority: priority, development });
     room.memory.creepConfig = {
@@ -171,10 +171,14 @@ test('foreign-home, disabled, or waiting-for-boost carriers cannot disguise abse
     }
 });
 
-test('no promotion spends nonexistent recovery stock or blocks a full spawn pool', () => {
-    for (const options of [{ stock: 0 }, { stock: 399 }, { available: 300 }, { available: 2150 }]) {
+test('missing distribution waits on combined funding rather than two independently full energy pools', () => {
+    for (const options of [{ stock: 0, available: 399 }, { stock: 100, available: 299 }]) {
         const w = world(options);
         assert.equal(w.queue()[0], 'missingMine');
+    }
+    for (const options of [{ stock: 0 }, { stock: 399 }, { available: 300 }, { available: 2150 }]) {
+        const w = world(options);
+        assert.equal(w.queue()[0], 'storageHaul');
     }
 });
 
@@ -205,5 +209,93 @@ test('downgrade rescue never bypasses restoring the first working mine and sourc
     w.carrier.spawning = true;
     assert.equal(w.queue()[0], 'missingMine');
     w.carrier.spawning = false; w.room.energyAvailable = 199;
-    assert.equal(w.queue()[0], 'missingMine', 'rescue promotion must not publish an unpaid birth ahead of recovery');
+    assert.equal(w.queue()[0], 'storageHaul', 'an unpaid controller rescue does not displace funded Spawn distribution');
+});
+
+function fullRecovery(w) {
+    w.room.energyCapacityAvailable = 2200;
+    for (const config of Object.values(w.room.memory.creepConfig)) if (config.development) config.development.fullBody = true;
+    w.room.memory.creepConfig.manager = { role: 'manager', spawnRoom: w.room.name, data: {}, spawnPriority: 0,
+        development: { fullBody: true, stationary: true } };
+}
+
+test('a live mine carrier cannot hide a missing complete distributor while split funding moves into Spawn', () => {
+    const w = world({ available: 2000, stock: 200 }); fullRecovery(w);
+    w.room.memory.creepSpawnQueue = w.queue();
+    assert.equal(w.room.memory.creepSpawnQueue[0], 'storageHaul');
+    w.spawn.doWork(); assert.equal(w.births.length, 0, '2000 cannot shrink the complete 2200-energy distributor');
+    w.room.energyAvailable = 2200; w.room.storage.store.energy = 0;
+    assert.equal(w.queue()[0], 'storageHaul');
+    w.spawn.doWork(); assert.deepEqual(w.births.map(({ name, cost, body }) => ({ name, cost, parts: body.length })),
+        [{ name: 'storageHaul', cost: 2200, parts: 44 }]);
+});
+
+test('missing production and its full-body successor precede a payable Manager even in a stale queue', () => {
+    for (const replacement of [false, true]) {
+        const w = world({ available: 2200, stock: 0 }); fullRecovery(w);
+        w.unit('storageResident', 'filler', { sourceId: 'storage' }, ['carry', 'move']);
+        if (replacement) w.room.memory.creepConfig.missingMine.development.replacement = { predecessor: 'liveMiner', deadline: 250 };
+        assert.equal(w.queue()[0], 'missingMine');
+        w.room.memory.creepSpawnQueue = ['manager', 'missingMine'];
+        w.spawn.doWork();
+        assert.equal(w.births[0].name, 'missingMine'); assert.equal(w.births[0].cost, 2100);
+        assert.equal(w.births[0].body.length, 29);
+        assert.deepEqual(Array.from(w.room.memory.creepSpawnQueue), ['manager']);
+    }
+});
+
+test('healthy expansion retains Manager priority and published handovers are ordered by deadline', () => {
+    const w = world({ available: 2200, stock: 0 }); fullRecovery(w);
+    w.unit('storageResident', 'filler', { sourceId: 'storage' }, ['carry', 'move']);
+    delete w.room.memory.creepConfig.missingMine;
+    assert.equal(w.queue()[0], 'manager', 'healthy mining expansion keeps its existing 3.1 priority');
+    w.room.memory.creepConfig.largerMine.development.replacement = { predecessor: 'liveMiner', deadline: 250 };
+    w.room.memory.creepConfig.largerHaul.development.replacement = { predecessor: 'liveCarrier', deadline: 200 };
+    assert.deepEqual(w.queue().slice(0, 3), ['largerHaul', 'largerMine', 'manager']);
+});
+
+test('Spawn fallback distinguishes mine imports from complete Storage distribution', () => {
+    const w = world({ available: 2200, stock: 0 }); fullRecovery(w);
+    assert.equal(w.spawn.affordableRecovery(['manager', 'storageHaul']).memory,
+        w.room.memory.creepConfig.storageHaul);
+    w.unit('storageResident', 'filler', { sourceId: 'storage' }, ['carry', 'move']);
+    assert.equal(w.spawn.affordableRecovery(['manager', 'storageHaul']), undefined);
+    w.room.memory.creepConfig.storageHaul.development.replacement = { predecessor: 'storageResident', deadline: 200 };
+    assert.equal(w.spawn.affordableRecovery(['manager', 'storageHaul']).memory,
+        w.room.memory.creepConfig.storageHaul, 'a living predecessor cannot mask its published handover');
+});
+
+test('a fresh temporary Spawn provider keeps the dedicated complete distributor before optional births', () => {
+    const w = world({ available: 300, stock: 0 }); fullRecovery(w);
+    w.carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time };
+    assert.equal(w.queue()[0], 'storageHaul');
+    w.room.memory.creepSpawnQueue = w.queue(); w.spawn.doWork();
+    assert.equal(w.births.length, 0, 'temporary production cannot authorize a partial body');
+    w.carrier.memory.productionRecoverySpawn.tick = w.game.time - 2;
+    assert.equal(w.queue()[0], 'missingMine', 'expired recovery work no longer reserves the distributor birth');
+});
+
+
+test('one restored mine keeps its expiring carrier handover before spending a birth on the second empty Source', () => {
+    const w = world({ available: 2200, stock: 0 }); fullRecovery(w);
+    w.unit('storageResident', 'filler', { sourceId: 'storage' }, ['carry', 'move']);
+    w.carrier.ticksToLive = 250;
+    w.room.memory.creepConfig.largerHaul.development.replacement = { predecessor: w.carrier.name, deadline: 350 };
+    assert.deepEqual(w.queue().slice(0, 3), ['largerHaul', 'missingMine', 'manager']);
+    w.room.memory.creepSpawnQueue = ['manager', 'missingMine', 'largerHaul'];
+    w.spawn.doWork();
+    assert.equal(w.births[0].name, 'largerHaul', 'the stale Manager head cannot bring second-mine expansion ahead of handover');
+    assert.equal(w.births[0].cost, 2200);
+});
+
+test('complete loss of usable local miners still restores mining before a published carrier handover', () => {
+    for (const disable of [w => { delete w.game.creeps[w.miner.name]; },
+        w => { w.miner.getActiveBodyparts = () => 0; },
+        w => { w.miner.memory.spawnRoom = 'E39N4'; }]) {
+        const w = world({ available: 2200, stock: 0 }); fullRecovery(w);
+        w.unit('storageResident', 'filler', { sourceId: 'storage' }, ['carry', 'move']);
+        w.room.memory.creepConfig.largerHaul.development.replacement = { predecessor: w.carrier.name, deadline: 350 };
+        disable(w);
+        assert.equal(w.queue()[0], 'missingMine');
+    }
 });

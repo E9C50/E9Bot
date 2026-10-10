@@ -77,7 +77,9 @@ test('an empty second Source precedes the full-body replacement of a working sma
 
 test('healthy production improvements follow remote commissioning and keep ordinary upgrades last', () => {
     const state = world({ sources: 1 });
-    inhabit(state); inhabit(state, { role: 'filler', work: 0, carry: 2 });
+    // The paid-for small miner's eight energy/tick really reaches the room, so
+    // upkeep still leaves a useful ordinary upgrader to compare with expansion.
+    inhabit(state); inhabit(state, { role: 'filler', work: 0, carry: 5 });
     const configs = state.publish();
     const miners = configs.filter(config => config.role === 'harvester');
     const carriers = configs.filter(config => config.role === 'filler');
@@ -134,14 +136,16 @@ test('dying, travelling, spawning or boost-preparing miners cannot demote recove
     }
 });
 
-test('miner improvements lose expansion priority exactly at the spawn-and-travel handover boundary', () => {
-    for (const ttl of [58, 59]) {
+test('miner improvements lose expansion priority exactly at the full-body spawn-and-travel handover boundary', () => {
+    for (const ttl of [67, 68]) {
         const state = world({ sources: 1 });
         inhabit(state, { ttl });
         const configs = configsForSource(state.publish(), 'harvester', state.home.sources[0]);
         const miner = configs.find(config => !state.game.creeps[state.demand.createCreepName(config.role, config.name)]);
-        // Six paid-for parts need 18 spawn ticks, ten tiles need 20 travel ticks, plus the 20-tick margin.
-        assert.equal(miner.spawnPriority, ttl === 58 ? 1 : 3.1);
+        // The complete successor has nine parts (27 ticks), rather than the
+        // incumbent's six; ten tiles add 20 travel ticks and the margin adds 20.
+        assert.equal(miner.spawnPriority, ttl === 67 ? 1 : 3.1);
+        assert.equal(miner.development.fullBody, true);
     }
 });
 
@@ -156,6 +160,7 @@ test('a linked miner without CARRY cannot postpone the replacement that restores
 
 test('a healthy controller plans a full-capacity upgrader without an additional spawn reserve', () => {
     const state = world({ sources: 1, downgrade: 2001 });
+    inhabit(state, { work: 5 }); inhabit(state, { role: 'filler', work: 0, carry: 6 });
     const config = state.publish().find(config => config.role === 'upgrader');
     assert.equal(config.spawnPriority, 5);
     assert.equal(config.development.maximumCost, undefined);
@@ -223,6 +228,9 @@ test('a paid-for ordinary upgrader retains its WORK quota instead of receiving a
 
 test('population refresh preserves a newly spawned full-body upgrader\'s average WORK budget', () => {
     const state = world({ capacity: 5600, sources: 1 });
+    // Ten arrived energy/tick covers complete mining/hauling replacements,
+    // maintenance and this worker's upkeep, leaving one WORK of real spending.
+    inhabit(state, { work: 5 }); inhabit(state, { role: 'filler', work: 0, carry: 6 });
     const existing = inhabit(state, { role: 'upgrader', work: 12, carry: 3, name: 'full-upgrader' });
     existing.memory.development = { fullBody: true, workParts: 1 };
     for (let refresh = 0; refresh < 3; refresh++) {

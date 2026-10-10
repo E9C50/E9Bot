@@ -8,7 +8,7 @@ function world(roleName, data = {}) {
     const game = { time:1, shard:{name:'shard3'}, rooms:{}, getObjectById(id) { reads.lookups.push(id); return objects.get(id) || null; } };
     const memory = { warMode: {} };
     const lists = { wallsNeedRepair: [], constructionSites: [], links: [], containers: [], extensions: [], spawns: [] };
-    const room = { name: 'W1N1', level: 6, memory: { roomFillJob: {}, fastUpgrade:false }, sources:[], structures:[],
+    const room = { name: 'W1N1', level: 6, memory: { roomFillJob: {}, fastUpgrade:false }, sources:[], structures:[], enemies:[],
         getTerrain:()=>({get:()=>0}),
         find(type){if(type==='minerals') return [];throw new Error('unexpected native scan '+type);},
         lookForAt(type,x,y){return (type==='structures'?room.structures:[creep]).filter(value=>value.pos.x===x&&value.pos.y===y);},
@@ -54,6 +54,7 @@ function world(roleName, data = {}) {
         WORK:'work',HARVEST_POWER:2,CONTAINER_DECAY:5000,CREEP_LIFE_TIME:1500, ERR_NOT_IN_RANGE: -9 }, modules: {
         'creep/boosting': { getActiveRoomBoostRequests: () => [] },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
+        'creep/fillerProductionRecovery': { runFillerProductionRecovery: () => false },
         utils: { getDistance: distance, getClosestTarget() { throw new Error('Candidate filtering and closest selection must be one pass'); } },
         './RoleBaseUpgrader': () => ({ target() { actions.push({ type: 'upgrade' }); return true; } }),
     } });
@@ -210,7 +211,7 @@ test('filler chooses available Storage before resolving a cached source, loose e
     w.list('containers', [w.structure('empty', { energy: 0 }), w.structure('container', { energy: 50, x: 12 })]);
     w.list('links', [w.structure('link', { type: 'link', energy: 50, x: 8 })]);
     w.room.storage = w.structure('storage', { type: 'storage', energy: 1, x: 30, y: 30 });
-    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50, x: 10, y: 8 });
+    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50050, x: 10, y: 8 });
     w.creep.pickupDroppedResource = () => { throw new Error('Usable Storage must precede loose-energy collection'); };
     assert.equal(w.role.source(w.creep), true); assert.equal(w.data.sourceId, 'storage');
     assert.deepEqual(w.actions, [{ type: 'take', id: 'storage', resource: 'energy' }]);
@@ -224,7 +225,7 @@ test('without Storage filler source selection scans each fallback list once and 
     const w = world('filler', { sourceId: 'gone' });
     w.list('containers', [w.structure('empty', { energy: 0 }), w.structure('container', { energy: 50, x: 12 })]);
     w.list('links', [w.structure('link', { type: 'link', energy: 50, x: 8 })]);
-    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50, x: 10, y: 8 });
+    w.room.terminal = w.structure('terminal', { type: 'terminal', energy: 50050, x: 10, y: 8 });
     assert.equal(w.role.source(w.creep), true); assert.equal(w.data.sourceId, 'container');
     assert.deepEqual(w.actions, [{ type: 'take', id: 'container', resource: 'energy' }]);
     assert.equal(w.reads.lists.containers, 1); assert.equal(w.reads.lists.links, 1);

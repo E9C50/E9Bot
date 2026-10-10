@@ -11,6 +11,8 @@ import { isMatureStorageFiller } from 'creep/storageFillerLifecycle'
 import { needsEmergencyBody } from 'creep/spawnEnergyPolicy'
 import { isTargetDismantleSpawnReserved } from 'shard/targetDismantleControl'
 import { remoteSpawnAllowed } from 'creep/remoteCommissioning'
+import { isSpawnEnergyCarrier } from 'creep/spawnEnergyCarrier'
+import { developmentReplacementDeadline, prioritizeDevelopmentRecovery } from 'creep/developmentRecoveryPriority'
 
 export default class SpawnExtension extends StructureSpawn {
     private availableConfig(name: string): CreepMemory | undefined {
@@ -32,19 +34,31 @@ export default class SpawnExtension extends StructureSpawn {
         for (const name in Game.creeps) {
             const creep = Game.creeps[name], memory = creep.memory
             if (memory.role !== 'harvester' && memory.role !== 'filler') continue
-            const room = creep.room
-            if (!room || room.name !== this.room.name || memory.spawnRoom !== this.room.name) continue
-            if (!creep.spawning && (creep.ticksToLive === 0 ||
-                memory.boostPlan?.steps.length && !memory.boostPlan.completed && !memory.boostPlan.failed)) continue
-            if (memory.role === 'harvester' && (creep.spawning || creep.getActiveBodyparts(WORK) > 0)) harvester = true
-            if (memory.role === 'filler' && (creep.spawning ||
-                creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(MOVE) > 0)) filler = true
-            if (harvester && filler) return undefined
+            if (memory.spawnRoom !== this.room.name) continue
+            if (memory.role === 'filler' && !creep.spawning) {
+                const data = memory.data as FillerData
+                const dedicated = !isDevelopingRoom(this.room) || !this.room.storage ||
+                    data.sourceId === this.room.storage.id && !data.mineId && !memory.developmentHauler?.mineId
+                if (dedicated && isSpawnEnergyCarrier(this.room, creep)) filler = true
+            } else {
+                const room = creep.room
+                if (!room || room.name !== this.room.name) continue
+                if (!creep.spawning && (creep.ticksToLive === 0 ||
+                    memory.boostPlan?.steps.length && !memory.boostPlan.completed && !memory.boostPlan.failed)) continue
+                if (memory.role === 'harvester' && (creep.spawning || creep.getActiveBodyparts(WORK) > 0)) harvester = true
+                if (memory.role === 'filler' && !(isDevelopingRoom(this.room) && this.room.storage &&
+                    ((memory.data as FillerData).mineId || memory.developmentHauler?.mineId))) filler = true
+            }
+            if (harvester && filler) break
         }
         for (let index = 1; index < queue.length; index++) {
             const requested = this.room.memory.creepConfig?.[queue[index]]
             if (!requested || requested.role !== 'harvester' && requested.role !== 'filler' ||
-                requested.role === 'harvester' && harvester || requested.role === 'filler' && filler) continue
+                requested.role === 'harvester' && harvester && developmentReplacementDeadline(requested) === undefined ||
+                requested.role === 'filler' && filler && developmentReplacementDeadline(requested) === undefined ||
+                requested.role === 'filler' && isDevelopingRoom(this.room) && this.room.storage &&
+                    ((requested.data as FillerData).mineId || requested.developmentHauler?.mineId) &&
+                    developmentReplacementDeadline(requested) === undefined) continue
             const memory = this.availableConfig(queue[index])
             if (!memory) continue
             const plan = selectCreepBody(this.room, memory, false)
@@ -62,7 +76,11 @@ export default class SpawnExtension extends StructureSpawn {
     public doWork(): void {
         if (this.spawning || isTargetDismantleSpawnReserved(this)) return
 
-        const creepSpawnQueue = this.room.memory.creepSpawnQueue || []
+        let creepSpawnQueue = this.room.memory.creepSpawnQueue || []
+        if (this.room.memory.creepConfig?.[creepSpawnQueue[0]]?.role === 'manager') {
+            creepSpawnQueue = prioritizeDevelopmentRecovery(this.room, creepSpawnQueue)
+            this.room.memory.creepSpawnQueue = creepSpawnQueue
+        }
 
         // 需求刷新间隔内可能出现旧队列，跳过过期/已存在/未实现的配置。
         while (creepSpawnQueue.length > 0) {

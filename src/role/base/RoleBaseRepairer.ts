@@ -2,6 +2,7 @@ import { getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
 import { repairCycleTarget, resetRepairCycle } from 'role/support/repairTarget'
 import { hasOwnedRamparts } from 'room/repairTargets'
+import { developmentWorkAllowed } from 'creep/development'
 
 function maintenanceTurn(creep: Creep): boolean {
     const interval = Math.max(1, Math.floor(rolePolicy.repairer.cpuMaintenance.interval))
@@ -125,7 +126,7 @@ export default (data: CreepData): ICreepConfig => ({
 
         // 过去维修
         if (getDistance(creep.pos, repairTarget.pos) <= 3) {
-            creep.repair(repairTarget)
+            if (Memory.warMode?.[creep.room.name] || creep.room.enemies.length > 0 || developmentWorkAllowed(creep)) creep.repair(repairTarget)
         } else {
             creep.moveTo(repairTarget)
         }

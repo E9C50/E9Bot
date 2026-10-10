@@ -1,6 +1,7 @@
 import { basicMinerals, ordinaryRoomResourceKeep, ordinaryResourceTarget, resourcePolicy, t3Resources } from 'settings/resourcePolicy'
 import { isRoomEvacuating } from './evacuationState'
 import { isStructureActive } from 'runtime/structureActivity'
+import { committedTerminalEnergy, recordTerminalEnergyWithdrawal } from 'creep/terminalEnergyWithdrawal'
 
 type Amounts = Record<string, number>
 export type ResourceJob = RoomMemory['terminalSendJob'][string]
@@ -124,12 +125,17 @@ export function createResourceInventory(): ResourceInventory {
 /** Terminal intents settle later; logistics must not withdraw already dispatched cargo or fees. */
 export function getTerminalResourceAmount(room: Room, resource: ResourceConstant): number {
     prepare()
+    if (resource === 'energy') return Math.max(0, positive(room.terminal?.store[resource]) -
+        (room.terminal ? committedTerminalEnergy(room.terminal) : 0))
     return Math.max(0, positive(room.terminal?.store[resource]) - positive(sent.get(room.name)?.[resource]) -
         positive(terminalWithdrawals.get(room.name)?.[resource]))
 }
 export function recordTerminalWithdrawal(room: Room, resource: ResourceConstant, amount: number): void {
     prepare()
-    if (Number.isFinite(amount) && amount > 0) add(terminalWithdrawals, room.name, resource, amount)
+    if (Number.isFinite(amount) && amount > 0) {
+        if (resource === 'energy' && room.terminal) recordTerminalEnergyWithdrawal(room.terminal, amount)
+        else add(terminalWithdrawals, room.name, resource, amount)
+    }
 }
 export function getIncomingResourceAmount(roomName: string, resource: ResourceConstant): number {
     prepare(); return positive(incoming.get(roomName)?.[resource])
@@ -247,6 +253,7 @@ export function recordResourceSend(room: Room, target: string, resource: Resourc
 export function recordResourceDebit(room: Room, resource: ResourceConstant, amount: number, fee: number): void {
     prepare(); markTerminalUsed(room)
     add(sent, room.name, resource, amount); add(sent, room.name, 'energy', fee)
+    if (room.terminal) recordTerminalEnergyWithdrawal(room.terminal, (resource === 'energy' ? amount : 0) + fee)
     if (roomNames.has(room.name)) {
         globalChanges[resource] = (globalChanges[resource] || 0) - amount
         globalChanges.energy = (globalChanges.energy || 0) - fee

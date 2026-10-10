@@ -1,6 +1,7 @@
 import { developmentPolicy } from 'settings/development'
 import { haulerDeliveryPolicy } from 'settings/haulerDelivery'
 import { haulerEnergyPickupReserved, reserveHaulerEnergyPickup } from './haulerPickup'
+import { availableTerminalEnergy, recordTerminalEnergyWithdrawal } from './terminalEnergyWithdrawal'
 
 export interface DevelopmentHaulerState {
     shard: string
@@ -64,8 +65,9 @@ function energyBatch(creep: Creep, data: FillerData, mine: Source | undefined, e
         if (!mine && !pickup && creep.room.controller &&
             ((target as AnyStoreStructure).structureType === STRUCTURE_CONTAINER || (target as AnyStoreStructure).structureType === STRUCTURE_LINK) &&
             target.pos.inRangeTo(creep.room.controller.pos, haulerDeliveryPolicy.controllerRange)) return
-        const stock = pickup ? (target as Resource).amount : (target as AnyStoreStructure).store[RESOURCE_ENERGY]
-        const available = stock - (pickup ? haulerEnergyPickupReserved(target as Resource) : ledger.get(target.id) || 0)
+        const stock = pickup ? (target as Resource).amount : target === creep.room.terminal ? availableTerminalEnergy(target as AnyStoreStructure) :
+            (target as AnyStoreStructure).store[RESOURCE_ENERGY]
+        const available = stock - (pickup ? haulerEnergyPickupReserved(target as Resource) : target === creep.room.terminal ? 0 : ledger.get(target.id) || 0)
         // Native pickup cannot request a smaller remainder already promised to another carrier.
         if (pickup && Math.min(free, stock) > available) return
         const amount = Math.min(free, available)
@@ -138,6 +140,7 @@ export function loadDevelopmentHauler(creep: Creep, data: FillerData, excludedId
         if (result === ERR_NOT_IN_RANGE) creep.moveTo(batch.target, { range: 1 })
         else if (result === OK) {
             if (batch.pickup) reserveHaulerEnergyPickup(creep, batch.target as Resource, batch.amount)
+            else if (batch.target === creep.room.terminal) recordTerminalEnergyWithdrawal(batch.target as AnyStoreStructure, batch.amount)
             else {
                 const ledger = reservations()
                 ledger.set(batch.target.id, (ledger.get(batch.target.id) || 0) + batch.amount)
