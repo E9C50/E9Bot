@@ -8,6 +8,7 @@ import { developmentPolicy } from 'settings/development'
 import { isSpawnEnergyCarrier } from './spawnEnergyCarrier'
 import { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
 import { prioritizeDevelopmentConsumers } from './developmentConsumerPriority'
+import { populationPolicy } from 'settings/population'
 export { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
 
 export function buildSpawnQueue(
@@ -22,11 +23,20 @@ export function buildSpawnQueue(
                 creeps[creepName] == undefined &&
                 isRoleSupported(creepConfigCache[creepName].role)
         )
-        .sort(
-            (a, b) =>
-                creepConfigCache[a].spawnPriority -
-                creepConfigCache[b].spawnPriority
-        )
+
+    // Demand is rebuilt in OUT flag order. Preserve the age of a pending birth so
+    // repeated OUT0 replacements cannot overtake equally important OUT1/OUT2 work.
+    const waitingSince = room.memory.creepSpawnWaitingSince || {}
+    const pending = new Set(creepSpawnQueue.filter(name =>
+        creepConfigCache[name].spawnPriority === populationPolicy.remote.startupPriorities.maintenance))
+    for (const name in waitingSince) if (!pending.has(name)) delete waitingSince[name]
+    for (const name of pending) {
+        if (!Number.isFinite(waitingSince[name]) || waitingSince[name] > Game.time) waitingSince[name] = Game.time
+    }
+    if (pending.size > 0) room.memory.creepSpawnWaitingSince = waitingSince
+    else delete room.memory.creepSpawnWaitingSince
+    creepSpawnQueue.sort((a, b) => creepConfigCache[a].spawnPriority - creepConfigCache[b].spawnPriority ||
+        (pending.has(a) && pending.has(b) ? waitingSince[a] - waitingSince[b] : 0))
 
     if (creepSpawnQueue == undefined || creepSpawnQueue.length == 0) {
         return []

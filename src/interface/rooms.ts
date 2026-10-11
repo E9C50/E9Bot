@@ -93,6 +93,8 @@ interface RoomMemory {
     roomSignText?: string
     npcTarget?: string
     creepSpawnQueue: string[]
+    /** Pending maintained remotes retain their first queued tick; priority still takes precedence. */
+    creepSpawnWaitingSince?: Record<string, number>
 
     // roomCustom: RoomCustomMemory
     roomPosition: IRoomPositionList

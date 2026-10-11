@@ -1,13 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 const costs = { work: 100, carry: 50, move: 50, claim: 600 };
 const position = (x, y, roomName) => ({ x, y, roomName });
 const approximately = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
 
 function world({ automatic = false, sources = 1, reserveRequired = true, trip = 100 } = {}) {
-    const home = { name: 'W1N1', energyCapacityAvailable: 2200, controller: { level: 6, owner: { username: 'ours' } },
+    const home = { name: 'W1N1', energyCapacityAvailable: 2200, controller: { my: true, level: 6, owner: { username: 'ours' } },
         memory: { creepConfig: {}, remoteCommissioning: { rooms: {} },
             developmentRemotes: { selectedRooms: automatic ? ['W1N2'] : [], intel: {} } } };
     const remote = { name: 'W1N2', containers: [], links: [], controller: { reservation: { username: 'ours', ticksToEnd: 2000 } }, enemies: [] };
@@ -40,19 +41,17 @@ function world({ automatic = false, sources = 1, reserveRequired = true, trip = 
         objects.set(source.id, source); record.sources[source.id] = { id: source.id, x: source.pos.x, y: source.pos.y, haulersSeen: {} };
         intel.sources.push({ id: source.id, x: source.pos.x, y: source.pos.y, travelTicks: trip }); mines.push(source);
     }
-    const loader = createSourceLoader({ globals: { Game: game, WORK: 'work', CARRY: 'carry', MOVE: 'move', RESOURCE_ENERGY: 'energy',
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: game, WORK: 'work', CARRY: 'carry', MOVE: 'move', RESOURCE_ENERGY: 'energy',
         HARVEST_POWER: 2, CARRY_CAPACITY: 50, ENERGY_REGEN_TIME: 300, CREEP_LIFE_TIME: 1500, CREEP_CLAIM_LIFE_TIME: 600,
         BODYPART_COST: costs, BOOSTS: { move: { XZHO2: { fatigue: 4 } } } },
-        modules: { './bodySelection': { previewBodySelection(room, config, tier) {
+        modules: { ...nativeBodies.modules, './bodySelection': { previewBodySelection(room, config, tier) {
             assert.equal(tier, 0, 'accounting cannot prepare or reserve boosts');
             previews.push({ role: config.role, data: config.data });
             const limit = config.bodyProfile?.maximumCost;
             if (limit === 200) return { body: ['work', 'carry', 'move'] };
             if (config.role === 'rHarvester') return { body: [...Array(13).fill('work'), ...Array(13).fill('carry'), ...Array(3).fill('move')] };
             if (config.role === 'rFiller') return { body: [...Array(22).fill('carry'), ...Array(22).fill('move')] };
-            const target = game.rooms[config.data.targetRoom];
-            const claims = target.controller.reservation.ticksToEnd < 1000 ? 2 : 1;
-            return { body: [...Array(claims).fill('claim'), ...Array(claims).fill('move')] };
+            return loader.load('creep/bodySelection').previewBodySelection(room, config, tier);
         } } } });
     const economy = loader.load('creep/developmentRemoteEconomy').getDevelopmentRemoteEconomy;
     return { home, remote, game, objects, creeps, mines, record, intel, worker, previews, loader,
@@ -65,7 +64,7 @@ test('manual OUT income reaches the development budget even with no automatic se
     const w = world({ sources: 2 }); w.fleet();
     const result = w.economy();
     assert.equal(result.income, 20);
-    approximately(result.upkeep, (2100 + 2200) * 2 / 1500 + 650 / 600);
+    approximately(result.upkeep, (2100 + 2200) * 2 / 1500 + 1300 / 600);
     assert.deepEqual(w.previews.map(value => value.role).sort(), ['rFiller', 'rHarvester', 'reserver'],
         'equivalent bodies from multiple mines reuse a price preview');
 });
@@ -125,7 +124,7 @@ test('overlapping replacement carriers form one fleet slot, including reciprocal
     second.memory.development = { fullBody: true, replacement: { predecessor: miner.name, deadline: 200 } };
     const result = w.economy();
     assert.equal(result.income, 10);
-    approximately(result.upkeep, (2100 + 2200) / 1500 + 650 / 600);
+    approximately(result.upkeep, (2100 + 2200) / 1500 + 1300 / 600);
 });
 
 test('several genuinely necessary small miners and hauling slots retain their fleet upkeep', () => {
@@ -133,7 +132,7 @@ test('several genuinely necessary small miners and hauling slots retain their fl
     w.worker('rHarvester', source, { name: 'miner1', work: 2 }); w.worker('rHarvester', source, { name: 'miner2', work: 2 });
     w.worker('rFiller', source, { name: 'hauler1', carry: 10, move: 10 }); w.worker('rFiller', source, { name: 'hauler2', carry: 10, move: 10 });
     const result = w.economy(); assert.equal(result.income, 8);
-    approximately(result.upkeep, (2100 + 2200) * 2 / 1500 + 650 / 600);
+    approximately(result.upkeep, (2100 + 2200) * 2 / 1500 + 1300 / 600);
 });
 
 test('expired predecessor memory does not merge distinct reused hauling slots', () => {
@@ -141,13 +140,13 @@ test('expired predecessor memory does not merge distinct reused hauling slots', 
     const other = w.worker('rFiller', source, { name: 'other', carry: 10, move: 10 });
     hauler.memory.development = { replacement: { predecessor: other.name, deadline: 50 } };
     const result = w.economy();
-    approximately(result.upkeep, (2100 + 2200 * 2) / 1500 + 650 / 600);
+    approximately(result.upkeep, (2100 + 2200 * 2) / 1500 + 1300 / 600);
 });
 
 test('only operating Sources incur fleet cost, and necessary reservation is charged once at CLAIM lifetime', () => {
     const w = world({ sources: 2 }); w.worker('rHarvester', w.mines[0]); w.worker('rFiller', w.mines[0]);
     w.worker('rHarvester', w.mines[1]);
-    const first = w.economy(); approximately(first.upkeep, 4300 / 1500 + 650 / 600);
+    const first = w.economy(); approximately(first.upkeep, 4300 / 1500 + 1300 / 600);
     w.remote.controller.reservation.ticksToEnd = 500;
     approximately(w.economy().upkeep, 4300 / 1500 + 1300 / 600);
     w.record.reserveRequired = false;
@@ -176,5 +175,19 @@ test('profile changes are reflected without cross-publication price caching', ()
     const w = world(); const [fleet] = w.fleet();
     const first = w.economy(); fleet.miner.memory.bodyProfile = { maximumCost: 200 };
     const second = w.economy(); assert.ok(second.upkeep < first.upkeep);
-    approximately(second.upkeep, (200 + 2200) / 1500 + 650 / 600);
+    approximately(second.upkeep, (200 + 2200) / 1500 + 1300 / 600);
+});
+
+test('automatic reservation fallback prices the native capacity body after its reserver is gone', () => {
+    for (const [capacity, cost] of [[650, 650], [1299, 650], [1300, 1300], [2200, 1300]]) {
+        for (const reserved of [false, true]) {
+            const w = world({ automatic: true }); w.fleet();
+            w.home.energyCapacityAvailable = capacity;
+            if (!reserved) delete w.remote.controller.reservation;
+            w.record.reserveRequired = false;
+            const baseline = w.economy().upkeep;
+            w.record.reserveRequired = true;
+            approximately(w.economy().upkeep - baseline, cost / 600);
+        }
+    }
 });

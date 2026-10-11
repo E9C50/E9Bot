@@ -114,10 +114,7 @@ export function getDevelopmentRemoteEconomy(home: Room, creeps: Creep[]): Develo
         const source = role === 'rHarvester' ? sources.get((data as RemoteHarvesterData).sourceId)?.source : undefined
         const seated = source && [...(source.room.containers || []), ...(source.room.links || [])]
             .some(buffer => distance(source.pos, buffer.pos) <= 2)
-        const reserve = role === 'reserver' ? Game.rooms[(data as ReserverData).targetRoom]?.controller?.reservation : undefined
-        const urgent = role === 'reserver' && (!!(data as ReserverData).reserveFlag || reserve?.username === home.controller?.owner?.username &&
-            reserve !== undefined && reserve.ticksToEnd < bodyPolicy.economy.reservationUrgencyTicks)
-        const key = JSON.stringify([role, preference, physical, preference.stationary ?? profile?.stationary ?? seated, urgent])
+        const key = JSON.stringify([role, preference, physical, preference.stationary ?? profile?.stationary ?? seated])
         let value = prices.get(key)
         if (value === undefined) {
             const config = { ...memory, role, data, spawnRoom: home.name } as CreepMemory
@@ -164,7 +161,7 @@ export function getDevelopmentRemoteEconomy(home: Room, creeps: Creep[]): Develo
         const reservers = members.filter(creep => creep.memory.role === 'reserver' &&
             ((creep.memory.data as RemoteData)?.developmentRemote?.targetRoom || (creep.memory.data as ReserverData)?.targetRoom) === targetRoom)
         const fallback = { role: 'reserver', bodyProfile: { boostTier: 0, terrain: 'plain' },
-            ...(record?.kind === 'automatic' ? { development: { maximumCost: policy.minimumReserveCapacity } } : {}) } as CreepMemory
+            ...(record?.kind === 'automatic' ? { development: { fullBody: true } } : {}) } as CreepMemory
         const reserveCost = reservers.length ? Math.max(...reservers.map(creep => price('reserver', creep.memory.data, creep.memory))) :
             price('reserver', { targetRoom }, fallback)
         const claimLifetime = typeof CREEP_CLAIM_LIFE_TIME === 'number' ? CREEP_CLAIM_LIFE_TIME : 600

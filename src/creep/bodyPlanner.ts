@@ -214,16 +214,11 @@ function carryBody(role: CreepRoleConstant, profile: CreepBodyProfile, terrain: 
     return []
 }
 
-function claimBody(room: Room, config: CreepMemory, terrain: CreepBodyTerrain,
+function claimBody(config: CreepMemory, terrain: CreepBodyTerrain,
     tier: CreepBoostTier, budget: number): BodyPartConstant[] {
-    let desired = config.role === 'cAttacker' ? bodyPolicy.combat.maximumControllerAttackParts : 1
-    if (config.role === 'reserver') {
-        const target = Game.rooms[(config.data as ReserverData).targetRoom]
-        const reservation = target?.controller?.reservation
-        // Continuous flags build a reservation buffer; ordinary remotes use two CLAIM only when urgent.
-        if ((config.data as ReserverData).reserveFlag || reservation && reservation.username === room.controller?.owner?.username &&
-            reservation.ticksToEnd < bodyPolicy.economy.reservationUrgencyTicks) desired = bodyPolicy.economy.maximumReserverClaimParts
-    }
+    // One CLAIM only offsets reservation decay; build a buffer even before the target is visible.
+    const desired = config.role === 'reserver' ? bodyPolicy.economy.maximumReserverClaimParts :
+        config.role === 'cAttacker' ? bodyPolicy.combat.maximumControllerAttackParts : 1
     for (let claim = desired; claim > 0; claim--) {
         const candidate = addMovement({ [CLAIM]: claim }, terrain, tier, false, false)
         if (fits(candidate, budget)) return candidate
@@ -316,7 +311,7 @@ function generate(room: Room, config: CreepMemory, profile: CreepBodyProfile, ti
     else if (['harvester', 'rHarvester', 'builder', 'upgrader', 'repairer', 'rBuilder', 'sBuilder'].includes(role))
         body = workerBody(room, config, profile, terrain, tier, budget)
     else if (['filler', 'rFiller', 'sHauler', 'manager', 'processer'].includes(role)) body = carryBody(role, profile, terrain, tier, budget)
-    else if (['claimer', 'sClaimer', 'reserver', 'cAttacker'].includes(role)) body = claimBody(room, config, terrain, tier, budget)
+    else if (['claimer', 'sClaimer', 'reserver', 'cAttacker'].includes(role)) body = claimBody(config, terrain, tier, budget)
     else if (['attacker', 'healer', 'dismantler', 'integrate', 'defender', 'rdefender'].includes(role)) body = combatBody(config, profile, terrain, tier, budget)
     const boostPlan: CreepBoostPlan = { tier, steps: [] }
     if (tier > 0 && body.length > 0) {

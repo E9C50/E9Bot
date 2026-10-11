@@ -434,18 +434,53 @@ test('mobile remote builders carry useful loads instead of relying on 39WORK/1CA
     }
 });
 
-test('scouts and claimers stay minimal; reservers add only the safe urgent second CLAIM', () => {
+test('scouts and claimers stay minimal while controller attackers obey their CLAIM limit', () => {
     const w = world();
     for (const role of ['scout', 'sScout']) assert.deepEqual(Array.from(w.planCreepBody(w.room, config(role)).body), ['move']);
-    for (const role of ['claimer', 'sClaimer', 'reserver']) {
+    for (const role of ['claimer', 'sClaimer']) {
         assert.deepEqual(Array.from(w.planCreepBody(w.room, config(role, {}, { targetRoom: 'W2N1' })).body), ['claim', 'move']);
     }
-    const target = { controller: { reservation: { username: 'me', ticksToEnd: 500 } } };
-    w.game.rooms.W2N1 = target;
-    assert.equal(count(w.planCreepBody(w.room, config('reserver', {}, { targetRoom: 'W2N1' })).body, 'claim'), 2);
-    target.controller.reservation.username = 'other';
-    assert.equal(count(w.planCreepBody(w.room, config('reserver', {}, { targetRoom: 'W2N1' })).body, 'claim'), 1);
     assert.ok(count(w.planCreepBody(w.room, config('cAttacker')).body, 'claim') <= 19);
+});
+
+test('reservers build a reservation buffer even when their remote is unseen, unreserved or already healthy', () => {
+    const w = world({ capacity: 1800, available: 650 });
+    const targetRoom = 'W2N1';
+    const assignments = [
+        { targetRoom },
+        { targetRoom, developmentRemote: { targetRoom, homeRoom: w.room.name, kind: 'reserver' } },
+        { targetRoom, reserveFlag: 'W1N1_RESERVE0' },
+    ];
+    const targets = [
+        undefined,
+        { controller: {} },
+        { controller: { reservation: { username: 'me', ticksToEnd: 1 } } },
+        { controller: { reservation: { username: 'me', ticksToEnd: 4800 } } },
+        { controller: { reservation: { username: 'other', ticksToEnd: 500 } } },
+    ];
+    for (const target of targets) {
+        if (target) w.game.rooms[targetRoom] = target;
+        else delete w.game.rooms[targetRoom];
+        for (const data of assignments) {
+            const plan = w.planCreepBody(w.room, config('reserver', { boostTier: 0, terrain: 'plain' }, data));
+            assert.deepEqual(Array.from(plan.body), ['claim', 'claim', 'move', 'move']);
+            assert.equal(cost(plan.body), 1300, 'normal planning waits for the capacity-sized body');
+        }
+    }
+});
+
+test('reservers fall back to one complete CLAIM body below 1300 capacity and respect explicit cost limits', () => {
+    const w = world();
+    const cfg = config('reserver', { boostTier: 0, terrain: 'plain' }, { targetRoom: 'W2N1' });
+    for (const [capacity, claims] of [[0, 0], [649, 0], [650, 1], [1299, 1], [1300, 2], [1800, 2]]) {
+        w.room.energyCapacityAvailable = capacity;
+        const plan = w.planCreepBody(w.room, cfg);
+        assert.equal(count(plan.body, 'claim'), claims, `capacity ${capacity}`);
+        assert.equal(count(plan.body, 'move'), claims, 'every CLAIM has full-speed movement');
+        assert.equal(cost(plan.body), claims * 650);
+    }
+    const limited = w.planCreepBody(w.room, { ...cfg, bodyProfile: { ...cfg.bodyProfile, maximumCost: 650 } });
+    assert.deepEqual(Array.from(limited.body), ['claim', 'move']);
 });
 
 test('combat bodies retain full-speed movement, front armour and tail healing', () => {

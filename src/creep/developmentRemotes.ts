@@ -320,7 +320,7 @@ export function releaseDevelopmentRemoteConfigs(addDemand: DemandPublisher): voi
             if (home.controller!.level >= policy.reserveMinimumLevel && home.energyCapacityAvailable >= policy.minimumReserveCapacity)
                 publish(addDemand, home, 'reserver', `${home.name}_DEVELOPMENT_RESERVER_${targetRoom}`, {
                     developmentRemote: { homeRoom: home.name, targetRoom, kind: 'reserver', homePosition }, targetRoom,
-                }, { maximumCost: policy.minimumReserveCapacity }, decision.maintenance)
+                }, { fullBody: true }, decision.maintenance)
             const mine = decision.maintenance || ['mining', 'hauling', 'ready'].includes(decision.phase)
             const haul = decision.maintenance || ['hauling', 'ready'].includes(decision.phase)
             for (const { source, travelTicks, maximumCost, haulers, carryParts } of plans) {

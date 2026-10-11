@@ -142,6 +142,18 @@ test('an unseen admitted OUT keeps a complete native reserver and an independent
     assert.equal(w.calls[0].memory.boostPlan.tier, 0);
 });
 
+test('a successful maintained remote birth immediately clears its old waiting age', () => {
+    const w = world(); w.release();
+    const [name] = w.published('reserver');
+    w.home.memory.creepSpawnQueue = [name];
+    w.home.memory.creepSpawnWaitingSince = { [name]: 50 };
+    w.home.energyAvailable = 650;
+    w.spawn.doWork();
+    assert.equal(w.calls.length, 1);
+    assert.equal(w.home.memory.creepSpawnWaitingSince, undefined,
+        'spawnCreep OK precedes Game.creeps visibility of the new unit');
+});
+
 test('a room below reserver capacity keeps room growth unblocked instead of queueing an impossible 650 body', () => {
     const w = world({ capacity: 550 }); w.release();
     assert.equal(w.configs('reserver').length, 0);

@@ -121,6 +121,11 @@ export default class SpawnExtension extends StructureSpawn {
                 recordCombatSpawn(creepMemory, plan)
                 reserveBoostPlan(this.room, creepName, plan.boostPlan)
                 creepSpawnQueue.splice(queueIndex, 1)
+                const waitingSince = this.room.memory.creepSpawnWaitingSince
+                if (waitingSince) {
+                    delete waitingSince[creepName]
+                    if (Object.keys(waitingSince).length === 0) delete this.room.memory.creepSpawnWaitingSince
+                }
             }
         }
     }

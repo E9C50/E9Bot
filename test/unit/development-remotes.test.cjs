@@ -135,7 +135,27 @@ test('route travel is persisted as round-trip ticks with swamp fatigue and roads
         w.game.time++; w.calls.published.length = 0; w.target.controller.reservation = { username: 'me', ticksToEnd: 1000 }; w.release();
         assert.equal(w.calls.paths, 2, 'a reservation change adjusts output without searching the same route again');
         assert.equal(source.energyPerTick, 10);
-        assert.equal(w.home.memory.creepConfig[w.calls.published.find(call => call.role === 'reserver').name].development.maximumCost, 650);
+        assert.equal(w.home.memory.creepConfig[w.calls.published.find(call => call.role === 'reserver').name].development.fullBody, true);
+    }
+});
+
+test('automatic reserver publication uses native capacity bodies instead of a 650-energy ceiling', () => {
+    for (const [capacity, claims] of [[650, 1], [1299, 1], [1300, 2], [1800, 2]]) {
+        const w = world({ capacity }); w.release();
+        const call = w.calls.published.find(call => call.role === 'reserver');
+        assert.ok(call, `capacity ${capacity} publishes a reserver`);
+        const config = w.home.memory.creepConfig[call.name];
+        const selection = w.loader.load('creep/bodySelection');
+        delete w.game.rooms[w.target.name];
+        w.home.energyAvailable = capacity;
+        const plan = selection.selectCreepBody(w.home, config, false);
+        assert.equal(plan.body.filter(part => part === 'claim').length, claims, `capacity ${capacity}`);
+        assert.equal(plan.body.filter(part => part === 'move').length, claims);
+        if (capacity >= 1300) {
+            w.home.energyAvailable = 650;
+            assert.equal(selection.selectCreepBody(w.home, config, false).body.length, 0,
+                'a running home waits for the complete double-CLAIM reserver');
+        }
     }
 });
 
