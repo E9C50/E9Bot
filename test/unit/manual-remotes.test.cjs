@@ -142,7 +142,7 @@ test('an unseen admitted OUT keeps a complete native reserver and an independent
     assert.equal(w.calls[0].memory.boostPlan.tier, 0);
 });
 
-test('a successful maintained remote birth immediately clears its old waiting age', () => {
+test('a successful remote birth immediately clears its old waiting age', () => {
     const w = world(); w.release();
     const [name] = w.published('reserver');
     w.home.memory.creepSpawnQueue = [name];
