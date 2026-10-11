@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
 function world(level = 6) {
-    const objects = new Map(), calls = [];
+    const objects = new Map(), calls = [], boosts = [];
     class Position {
         constructor(x, y, roomName = 'W1N1') { Object.assign(this, { x, y, roomName }); }
         getRangeTo(value) { const pos = value.pos || value; return pos.roomName === this.roomName ? Math.max(Math.abs(pos.x - this.x), Math.abs(pos.y - this.y)) : Infinity; }
@@ -23,7 +23,7 @@ function world(level = 6) {
     const game = { time: 100, shard: { name: 'shard3' }, getObjectById: id => objects.get(id) || null };
     const room = { name: 'W1N1', memory: { roomFillJob: {}, creepConfig: {} }, controller: { my: true, level, pos: p(25, 25) },
         sources: [], containers: [], links: [], extensions: [], spawns: [], towers: [], labs: [], units: [], droppedResource: [], energyAvailable: 300,
-        find: () => room.units };
+        enemies: [], find: () => room.units };
     game.rooms = { [room.name]: room }; game.creeps = {};
     function structure(id, type, x, y, energy = 0, capacity = 2000) {
         const value = { id, pos: p(x, y), structureType: type, my: true, store: store(energy, capacity), isActive: () => true };
@@ -57,15 +57,15 @@ function world(level = 6) {
     const loader = createSourceLoader({ globals: { Game: game, RoomPosition: Position, RESOURCE_ENERGY: 'energy', OK: 0, ERR_NOT_IN_RANGE: -9,
         FIND_MY_CREEPS: 'my-creeps', STRUCTURE_LINK: 'link', STRUCTURE_CONTAINER: 'container', STRUCTURE_STORAGE: 'storage',
         STRUCTURE_EXTENSION: 'extension', STRUCTURE_SPAWN: 'spawn', STRUCTURE_TOWER: 'tower', STRUCTURE_LAB: 'lab',
-        STRUCTURE_NUKER: 'nuker', STRUCTURE_POWER_SPAWN: 'powerSpawn' }, modules: {
-        'creep/boosting': { getActiveRoomBoostRequests: () => [] },
+        STRUCTURE_NUKER: 'nuker', STRUCTURE_POWER_SPAWN: 'powerSpawn', LAB_BOOST_MINERAL: 30, LAB_BOOST_ENERGY: 20 }, modules: {
+        'creep/boosting': { getActiveRoomBoostRequests: () => boosts },
         'runtime/creepIndex': { getRoomProcessors: () => [] },
         'creep/fillerProductionRecovery': { runFillerProductionRecovery: () => false },
         utils: { getDistance: (first, second) => first.getRangeTo(second) },
         'creep/developmentLogistics': { controllerEnergyBuffer: value => value.controller.level < 8 ? value.controllerLink ||
             value.containers.find(container => container.pos.inRangeTo(value.controller.pos, 3)) : undefined },
     } });
-    return { game, room, calls, p, structure, source, drop, creep,
+    return { game, room, calls, boosts, p, structure, source, drop, creep,
         network: () => loader.load('room/resourceNetwork'),
         behavior: data => loader.load('role/base/RoleBaseFiller').default(data) };
 }
@@ -146,6 +146,113 @@ test('development sends energy to the controller Container when a controller Lin
     w.behavior({}).target(w.creep(100));
     assert.equal(w.calls.find(call => call.method === 'transfer').target, buffer.id);
     assert.equal(w.calls.some(call => call.target === 'controller-link'), false);
+});
+
+function starvedControllerWorld({ energy = 300, stock = 10001, bufferEnergy = 0 } = {}) {
+    const w = world(), storage = w.structure('stock', 'storage', 20, 21, stock, 1000000);
+    const buffer = w.structure('controller-buffer', 'container', 25, 28, bufferEnergy);
+    const spawn = w.structure('spawn', 'spawn', 10, 10, 0, 300), unit = w.creep(800, 850, 20, 20);
+    w.room.energyAvailable = energy;
+    w.room.energyCapacityAvailable = 1800;
+    return { ...w, storage, buffer, spawn, unit, behavior: w.behavior({ sourceId: storage.id }) };
+}
+
+test('a dry controller receives one batch after a new birth without repeated production recalls', () => {
+    const w = starvedControllerWorld({ energy: 1800 });
+    w.spawn.store.energy = 300;
+    let received = 0;
+    for (let tick = 0; tick < 10; tick++) {
+        // The next birth empties the production pool while this carrier is travelling.
+        if (tick === 1) { w.room.energyAvailable = 255; w.spawn.store.energy = 0; }
+        if (tick === 2) w.room.energyAvailable = 300;
+        w.calls.length = 0;
+        w.behavior.target(w.unit);
+        const transfer = w.calls.find(call => call.method === 'transfer');
+        assert.equal(transfer.target, tick === 1 ? w.spawn.id : w.buffer.id, `delivery at tick ${tick}`);
+        const moving = w.calls.find(call => call.method === 'moveTo');
+        if (moving) {
+            const target = moving.target === w.buffer.id ? w.buffer : w.spawn;
+            w.unit.pos = w.p(w.unit.pos.x + Math.sign(target.pos.x - w.unit.pos.x),
+                w.unit.pos.y + Math.sign(target.pos.y - w.unit.pos.y));
+        } else {
+            const amount = Math.min(w.unit.store.energy, w.buffer.store.getFreeCapacity());
+            w.unit.store.energy -= amount; w.buffer.store.energy += amount; received += amount;
+        }
+        w.game.time++;
+    }
+    assert.equal(received, 800, 'the funded controller batch reaches its native Container despite a continuing production deficit');
+    assert.equal(w.room.energyAvailable, 300);
+    assert.equal(w.spawn.store.energy, 0);
+    // A nonempty Container releases the special priority immediately.
+    w.unit.store.energy = 100; w.calls.length = 0;
+    w.behavior.target(w.unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, w.spawn.id);
+});
+
+test('controller starvation relief starts exactly at the existing 300 energy production safety floor', () => {
+    for (const [energy, target] of [[299, 'spawn'], [300, 'controller-buffer']]) {
+        const w = starvedControllerWorld({ energy });
+        w.behavior.target(w.unit);
+        assert.equal(w.calls.find(call => call.method === 'transfer').target, target);
+    }
+});
+
+test('controller starvation relief uses only Storage above the existing 10000 recovery reserve', () => {
+    for (const [stock, target] of [[0, 'spawn'], [10000, 'spawn'], [10001, 'controller-buffer']]) {
+        const w = starvedControllerWorld({ stock });
+        w.structure('terminal', 'terminal', 20, 22, 50000, 300000);
+        w.behavior.target(w.unit);
+        assert.equal(w.calls.find(call => call.method === 'transfer').target, target);
+    }
+    const w = starvedControllerWorld(); delete w.room.storage;
+    w.structure('terminal', 'terminal', 20, 22, 100000, 300000);
+    w.behavior.target(w.unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, w.spawn.id);
+});
+
+test('local hostiles keep production priority while the controller Container is dry', () => {
+    const w = starvedControllerWorld(); w.room.enemies.push({});
+    w.behavior.target(w.unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, w.spawn.id);
+});
+
+test('a tower below the existing safety floor precedes dry-controller relief and a safe tower does not', () => {
+    for (const [energy, target] of [[499, 'tower'], [500, 'controller-buffer']]) {
+        const w = starvedControllerWorld(); w.structure('tower', 'tower', 20, 22, energy, 1000);
+        w.behavior.target(w.unit);
+        assert.equal(w.calls.find(call => call.method === 'transfer').target, target);
+    }
+});
+
+test('active boosts still precede dry-controller relief, towers and production', () => {
+    const w = starvedControllerWorld(), lab = w.structure('boost-lab', 'lab', 20, 21, 0, 2000);
+    w.structure('tower', 'tower', 20, 22, 499, 1000);
+    lab.store.GH = 60;
+    w.room.memory.roomLabConfig = { singleLabConfig: { [lab.id]: { boostMode: true, resourceType: 'GH' } } };
+    w.boosts.push({ resource: 'GH', parts: 2 });
+    w.behavior.target(w.unit);
+    const transfer = w.calls.find(call => call.method === 'transfer');
+    assert.equal(transfer.target, lab.id); assert.equal(transfer.amount, 40);
+    assert.equal(w.calls.some(call => call.target === w.buffer.id), false);
+});
+
+test('a nonempty controller Container retains production-first priority and the existing refill threshold', () => {
+    const w = starvedControllerWorld({ bufferEnergy: 1 });
+    w.behavior.target(w.unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, w.spawn.id);
+    w.spawn.store.energy = 300;
+    for (const [energy, target] of [[1499, w.buffer.id], [1500, undefined]]) {
+        w.buffer.store.energy = energy; w.calls.length = 0; w.game.time++;
+        w.behavior.target(w.unit);
+        assert.equal(w.calls.find(call => call.method === 'transfer')?.target, target);
+    }
+});
+
+test('dry-controller relief uses existing structure lists without native room searches', () => {
+    const w = starvedControllerWorld();
+    w.room.find = () => { throw new Error('a known controller Container must not trigger another native room search'); };
+    w.behavior.target(w.unit);
+    assert.equal(w.calls.find(call => call.method === 'transfer').target, w.buffer.id);
 });
 
 test('a Link-only controller does not block direct delivery to a hungry upgrader', () => {

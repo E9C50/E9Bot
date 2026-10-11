@@ -93,14 +93,25 @@ function developingTransfer(creep: Creep, target: AnyStoreStructure | Creep): bo
     return true
 }
 
-function developingFillTarget(creep: Creep, buffer: StructureContainer | undefined): AnyStoreStructure | Creep | undefined {
-    const production = closestExtension(creep)
-    if (production != undefined) return production
+function developingTowerTarget(creep: Creep): StructureTower | undefined {
     let tower: StructureTower | undefined
     for (const candidate of creep.room.towers) {
         if (candidate.my === false || candidate.store[RESOURCE_ENERGY] >= developmentPolicy.logistics.minimumTowerEnergy) continue
         if (tower == undefined || getDistance(creep.pos, candidate.pos) < getDistance(creep.pos, tower.pos)) tower = candidate
     }
+    return tower
+}
+
+function developingFillTarget(creep: Creep, buffer: StructureContainer | undefined): AnyStoreStructure | Creep | undefined {
+    // Repeated births must not recall a paid delivery forever while the controller
+    // is dry. Once a batch arrives, ordinary production priority resumes.
+    if (buffer != undefined && buffer.store[RESOURCE_ENERGY] === 0 &&
+        (creep.room.storage?.store[RESOURCE_ENERGY] || 0) > developmentPolicy.upgrading.storageReserve &&
+        creep.room.energyAvailable >= developmentPolicy.logistics.emergencySpawnEnergy && !creep.room.enemies?.length)
+        return developingTowerTarget(creep) || buffer
+    const production = closestExtension(creep)
+    if (production != undefined) return production
+    const tower = developingTowerTarget(creep)
     if (tower != undefined) return tower
     if (buffer != undefined && buffer.store[RESOURCE_ENERGY] < (buffer.store.getCapacity(RESOURCE_ENERGY) || 0) * developmentPolicy.logistics.controllerRefillRatio) return buffer
     if (buffer == undefined) {
