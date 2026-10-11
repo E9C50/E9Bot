@@ -1,4 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
+import { getFindPathAvoidRooms, getFindPathAvoidRoomsSignature } from 'settings/settings'
 import { ShardMission, ShardUnitData } from './missions'
 import { getKnownPortals, getPortalIntelStatus } from './portalIntel'
 import { isPortalRouteKnown, planPortalRoute } from './routePlanner'
@@ -71,10 +72,12 @@ export function updateMissionRouting(mission: ShardMission, force = false): void
     const blocked = new Set(mission.blockedPortals.map((entry) => routeSignature([entry.hop])))
     const portals = getKnownPortals([task.sourceShard, task.targetShard]).filter((hop) => !blocked.has(routeSignature([hop])))
     // Changing the selection policy must also migrate ready routes persisted before deployment.
-    const signature = `${interShardPolicy.portalRouting.strategy ?? 'totalCost'}:${portalSignature(portals)}`
+    const signature = `${interShardPolicy.portalRouting.strategy ?? 'totalCost'}:${portalSignature(portals)}:${getFindPathAvoidRoomsSignature()}`
     const changed = signature != mission.routing?.portalSignature
-    const outboundKnown = task.route.length > 0 && (!task.autoRoute || isPortalRouteKnown(task.route, portals))
-    const returnKnown = !!task.returnRoute?.length && (!task.autoReturn || isPortalRouteKnown(task.returnRoute, portals))
+    const blockedEndpoint = [[task.sourceShard, task.sourceRoom], [task.targetShard, task.targetRoom]].find(([shard, room]) =>
+        getFindPathAvoidRooms(shard).includes(room))
+    const outboundKnown = !blockedEndpoint && task.route.length > 0 && (!task.autoRoute || isPortalRouteKnown(task.route, portals))
+    const returnKnown = !blockedEndpoint && !!task.returnRoute?.length && (!task.autoReturn || isPortalRouteKnown(task.returnRoute, portals))
     let cost = mission.routing?.cost
     let returnCost = mission.routing?.returnCost
     let deferred: 'bucket' | 'budget' | undefined
@@ -106,7 +109,7 @@ export function updateMissionRouting(mission: ShardMission, force = false): void
         nextAttemptTick: Game.time + (deferred == 'budget' ? 1 : interShardPolicy.portalRouting.retryInterval),
         cost, returnCost,
         portalSignature: deferred == undefined && !incompletePlan ? (lowBucket ? `lowBucket:${signature}` : signature) : mission.routing?.portalSignature,
-        message: ready ? undefined : (deferred == 'bucket' ? 'CPU 余量不足，暂缓自动规划' : deferred == 'budget' ? '本 tick 路线规划预算已用完，等待下一 tick' : !task.route.length ? '等待 Observer 发现连通目标的 Portal 路线' : '等待 Observer 发现可用返程路线') +
+        message: ready ? undefined : blockedEndpoint ? `路线端点被寻路黑名单禁止：${blockedEndpoint[0]}/${blockedEndpoint[1]}` : (deferred == 'bucket' ? 'CPU 余量不足，暂缓自动规划' : deferred == 'budget' ? '本 tick 路线规划预算已用完，等待下一 tick' : !task.route.length ? '等待 Observer 发现连通目标的 Portal 路线' : '等待 Observer 发现可用返程路线') +
             (intel.observers == 0 ? '；当前 shard 没有可用 Observer' : ''),
     }
 }

@@ -16,7 +16,7 @@ function world(overrides = {}) {
     const statuses = new Map();
     const noPaths = new Set();
     const routeOverrides = new Map();
-    const avoided = [];
+    const avoidedByShard = { shard0: [], shard1: [], shard2: [], shard3: [] };
     const cpu = { used: 0, nativeCost: 0, tickLimit: 100, bucket: 10000, getUsed() { return this.used; } };
     const game = { time: 1, shard: { name: 'shard3' }, cpu, map: {
         getRoomStatus: room => ({ status: statuses.get(room) || 'normal' }),
@@ -46,14 +46,20 @@ function world(overrides = {}) {
         },
     } };
     const loader = createSourceLoader({ globals: { Game: game, Date: class extends Date { static now() { return clock.now; } } },
-        modules: { 'settings/settings': { findPathAvoidRooms: avoided } } });
+        modules: { 'settings/settings': {
+            findPathAvoidRooms: avoidedByShard,
+            getFindPathAvoidRooms: (shardName = game.shard.name) => avoidedByShard[shardName] || [],
+            getFindPathAvoidRoomsSignature: () => JSON.stringify(Object.keys(avoidedByShard).sort()
+                .map(shardName => [shardName, [...avoidedByShard[shardName]].sort()])),
+        } } });
     const policy = loader.load('settings/interShard').interShardPolicy;
     Object.assign(policy.portalExploration, overrides);
     const api = loader.load('shard/explorationRoutes');
     const portal = (shard, roomName, destinationShard, destinationRoom, extra = {}) => ({
         id: `portal-${++id}`, shard, roomName, x: 10 + id, y: 10, destinationShard, destinationRoom, observedAt: clock.now, ...extra,
     });
-    return { ...api, policy, game, clock, cpu, calls, statuses, noPaths, routeOverrides, avoided, portal };
+    return { ...api, policy, game, clock, cpu, calls, statuses, noPaths, routeOverrides, avoidedByShard,
+        get avoided() { return avoidedByShard[game.shard.name] ||= []; }, portal };
 }
 
 test('lightweight scout door selection uses nearest observed geometry without native map queries', () => {
@@ -204,6 +210,45 @@ test('portal selection respects closed entrance rooms and configured avoid rooms
     w.avoided.push('E2S0');
     assert.equal(w.planExplorationEntry('shard3', 'E0S0', 'shard1', 'E0S0', [closed, avoided, reachable])[0].roomName, 'E3S0');
     assert.deepEqual(w.calls.map(call => call.to), ['E3S0']);
+});
+
+test('portal entrances and local crossroads use only the current shard blacklist in both planning modes', () => {
+    for (const candidateOnly of [false, true]) {
+        const w = world(); w.game.shard.name = 'shard1';
+        w.avoidedByShard.shard3.push('E10S10');
+        const portal = w.portal('shard1', 'E10S10', 'shard2', 'E0S0');
+        assert.equal(w.selectExplorationPortal('shard1', 'E9S9', 'shard2', 'E0S0', [portal], [], { candidateOnly }).roomName, 'E10S10');
+        assert.equal(w.getExplorationRooms('E9S9', [], [], { candidateOnly, nearestOnly: true })[0], 'E10S10');
+        w.avoidedByShard.shard1.push('E10S10');
+        assert.equal(w.selectExplorationPortal('shard1', 'E9S9', 'shard2', 'E0S0', [portal], [], { candidateOnly }), undefined);
+        assert.notEqual(w.getExplorationRooms('E9S9', [], [], { candidateOnly, nearestOnly: true })[0], 'E10S10');
+    }
+});
+
+test('portal landing blacklists belong to the destination shard and change immediately without remote map queries', () => {
+    for (const candidateOnly of [false, true]) {
+        const w = world(); w.game.shard.name = 'shard1';
+        const portal = w.portal('shard1', 'E1S0', 'shard2', 'E39N4');
+        w.avoidedByShard.shard3.push('E39N4');
+        const options = { candidateOnly };
+        assert.equal(w.selectExplorationPortal('shard1', 'E0S0', 'shard2', 'E0S0', [portal], [], options).destinationRoom, 'E39N4');
+        const paid = w.calls.length;
+        w.avoidedByShard.shard2.push('E39N4');
+        assert.equal(w.selectExplorationPortal('shard1', 'E0S0', 'shard2', 'E0S0', [portal], [], options), undefined);
+        assert.equal(w.calls.length, paid, 'reject the remote landing without looking it up through this shard map');
+        w.avoidedByShard.shard2.length = 0;
+        assert.equal(w.selectExplorationPortal('shard1', 'E0S0', 'shard2', 'E0S0', [portal], [], options).destinationRoom, 'E39N4');
+        assert.equal(w.calls.length, paid, 'restoring a landing keeps the already proven local walk');
+    }
+});
+
+test('a blocked freshest portal destination cannot revive an older allowed destination at the same entrance', () => {
+    const w = world();
+    const old = w.portal('shard3', 'E1S0', 'shard1', 'E0S0', { observedAt: w.clock.now - 1 });
+    const newer = { ...old, id: 'new', destinationShard: 'shard2', destinationRoom: 'E39N4', observedAt: w.clock.now };
+    w.avoidedByShard.shard2.push('E39N4');
+    assert.equal(w.selectExplorationPortal('shard3', 'E0S0', 'shard1', 'E0S0', [old, newer]), undefined);
+    assert.equal(w.calls.length, 0);
 });
 
 test('record filters reject expired, future, stale, missing-endpoint and invalid-coordinate portals', async t => {

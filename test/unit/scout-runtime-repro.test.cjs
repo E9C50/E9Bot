@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 
-function movementWorld(searchResult) {
+function movementWorld(searchResult, { shardName = 'shard1', realSettings = false } = {}) {
     const moves = [], moveCalls = [], searches = [], roomReads = new Map();
     class Position {
         constructor(x, y, roomName) { Object.assign(this, { x, y, roomName }); }
@@ -39,8 +39,8 @@ function movementWorld(searchResult) {
         } };
         return rooms[name];
     }
-    const game = { time: 1, rooms: { E0S0: room('E0S0') }, creeps: {}, cpu: { getUsed: () => 0 }, getObjectById: () => null,
-        map: { findRoute: (from, to) => [{ exit: 3, room: to }], describeExits: () => ({}), getRoomStatus: () => ({ status: 'normal' }) } };
+    const game = { time: 1, shard: { name: shardName }, rooms: { E0S0: room('E0S0') }, creeps: {}, cpu: { getUsed: () => 0 }, getObjectById: () => null,
+        map: { findRoute: (from, to, options) => options?.routeCallback?.(to, from) === Infinity ? -2 : [{ exit: 3, room: to }], describeExits: () => ({}), getRoomStatus: () => ({ status: 'normal' }) } };
     const creep = new Creep(game.rooms.E0S0); game.creeps.scout = creep;
     const loader = createSourceLoader({ globals: {
         Game: game, Memory: {}, Creep, PowerCreep, RoomPosition: Position,
@@ -57,7 +57,7 @@ function movementWorld(searchResult) {
         FIND_STRUCTURES: 'structures', FIND_SOURCES: 'sources', FIND_MINERALS: 'minerals', FIND_DEPOSITS: 'deposits',
         STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_PORTAL: 'portal', STRUCTURE_WALL: 'constructedWall',
         STRUCTURE_ROAD: 'road', STRUCTURE_RAMPART: 'rampart', LOOK_CREEPS: 'creep', LOOK_POWER_CREEPS: 'powerCreep',
-    }, modules: { 'settings/settings': { findPathAvoidRooms: [], observersFindPathIdList: [] },
+    }, modules: { ...(realSettings ? {} : { 'settings/settings': { getFindPathAvoidRooms: () => [], observersFindPathIdList: [] } }),
         'runtime/observerScheduling': { scheduleObservation: () => 0 } } });
     loader.load('utils/BetterMove');
     const target = new Position(25, 25, 'E1S0');
@@ -72,6 +72,23 @@ function movementWorld(searchResult) {
 
 const point = (x, roomName = 'E0S0') => ({ x, y: 25, roomName });
 const landingPath = () => Array.from({ length: 6 }, (_, x) => point(x, 'E1S0'));
+
+test('real BetterMove isolates configured and runtime avoid rooms by shard', () => {
+    const path = () => ({ incomplete: false, path: [point(48), point(49), point(0, 'E39N4')] });
+    const first = movementWorld(path, { shardName: 'shard1', realSettings: true });
+    const third = movementWorld(path, { shardName: 'shard3', realSettings: true });
+    assert.deepEqual(Object.keys(third.loader.globals.BetterMove.getAvoidRoomsMap()).sort(),
+        ['E39N4', 'E38N1', 'E39N1', 'E32N2', 'E33N5'].sort());
+    assert.deepEqual(Object.keys(first.loader.globals.BetterMove.getAvoidRoomsMap()), []);
+    assert.equal(first.creep.moveTo(new first.Position(25, 25, 'E39N4'), { range: 20 }), 0,
+        'shard1 can enter the same room name that only shard3 avoids');
+    assert.equal(third.creep.moveTo(new third.Position(25, 25, 'E39N4'), { range: 20 }), -2);
+    assert.equal(first.searches.length, 1);
+    assert.equal(third.searches.length, 0, 'a prohibited destination is rejected before tile pathfinding');
+    assert.equal(first.loader.globals.BetterMove.addAvoidRooms('W8N8'), 0);
+    assert.equal(third.loader.globals.BetterMove.getAvoidRoomsMap().W8N8, undefined,
+        'runtime avoidance belongs to the heap of the current shard');
+});
 
 test('real BetterMove replans an exhausted incomplete path at the border instead of moving with an undefined direction', () => {
     const world = movementWorld((from, goal, options, attempt) => attempt === 1

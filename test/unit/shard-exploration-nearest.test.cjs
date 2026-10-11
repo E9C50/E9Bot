@@ -12,6 +12,7 @@ function roomName(x, y) { return `${x < 0 ? 'W' + (-x - 1) : 'E' + x}${y < 0 ? '
 function world() {
     const clock = { now: 1000000 }, calls = [], moves = [], noPaths = new Set();
     const avoided = ['E0S10', 'E10S0'];
+    const avoidedByShard = { shard0: [], shard1: [], shard2: avoided, shard3: [] };
     const closed = new Set(Array.from({ length: 5 }, (_, i) => `E${i + 8}S15`));
     const local = { version: 1, transfers: {}, acks: {}, reports: {}, scoutProofs: {} };
     const progress = { revision: 'nearest-1', goalShard: 'shard1', goalRoom: 'E1S1', stage: 'outbound',
@@ -49,7 +50,12 @@ function world() {
         RoomPosition: Position, FIND_HOSTILE_CREEPS: 'hostile-creeps', FIND_HOSTILE_STRUCTURES: 'hostile-structures', ATTACK: 'attack',
         RANGED_ATTACK: 'ranged_attack', STRUCTURE_TOWER: 'tower', RESOURCE_ENERGY: 'energy', TOWER_ENERGY_COST: 10,
         OK: 0, ERR_NO_PATH: -2, ERR_TIRED: -11 }, modules: {
-        'settings/settings': { findPathAvoidRooms: avoided },
+        'settings/settings': {
+            findPathAvoidRooms: avoidedByShard,
+            getFindPathAvoidRooms: (shardName = game.shard.name) => avoidedByShard[shardName] || [],
+            getFindPathAvoidRoomsSignature: () => JSON.stringify(Object.keys(avoidedByShard).sort()
+                .map(shardName => [shardName, [...avoidedByShard[shardName]].sort()])),
+        },
         './transport': { getLocalShardState: () => local, readRemoteShardState: () => command, markShardStateDirty() {},
             flushInterShardMemory: () => true, getShardTransportError: () => undefined, cancelCreepTransfers() {} },
         './portalIntel': { runPortalDiscovery() {}, getKnownPortals: () => [], forgetPortal() {} },
@@ -66,7 +72,7 @@ function world() {
     }
     function run() { assert.equal(role.prepare(creep), true); role.source(creep); }
     place('E14S14');
-    return { game, clock, data, progress, local, calls, moves, noPaths, avoided, closed, rooms, place, run };
+    return { game, clock, data, progress, local, calls, moves, noPaths, avoided, avoidedByShard, closed, rooms, place, run };
 }
 
 test('real explorer chooses the nearest reachable unvisited crossroad from its current room after each arrival', () => {
@@ -102,4 +108,23 @@ test('real explorer skips the nearest crossroad when the native route from the c
     assert.deepEqual(w.moves, ['E10S10', 'E10S20']);
     assert.ok(w.calls.some(call => call.from === 'E10S10' && call.to === 'E20S10'));
     assert.equal(w.data.done, undefined);
+});
+
+test('a shard3 blacklist does not hide the same nearest crossroad after the real explorer lands on shard2', () => {
+    const w = world();
+    w.avoidedByShard.shard3.push('E10S10');
+    w.run();
+    assert.deepEqual(w.moves, ['E10S10']);
+    assert.equal(w.game.shard.name, 'shard2');
+    assert.ok(w.calls.some(call => call.to === 'E10S10'), 'the current shard still pays for a reachable local route');
+    assert.equal(w.data.done, undefined);
+});
+
+test('the real explorer obeys its current shard blacklist while another shard permits the same crossroad', () => {
+    const w = world();
+    w.avoidedByShard.shard2.push('E10S10');
+    w.run();
+    assert.deepEqual(w.moves, ['E10S20']);
+    assert.equal(w.avoidedByShard.shard3.includes('E10S10'), false);
+    assert.equal(w.calls.some(call => call.to === 'E10S10'), false);
 });

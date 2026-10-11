@@ -29,7 +29,7 @@ function world({ work = 5, carry = 1, energy = 0, sourceEnergy = 3000, boost, re
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory, Creep, PowerCreep, RoomPosition,
         PathFinder: { CostMatrix: class {} }, OBSTACLE_OBJECT_TYPES: [], WORK: 'work', RESOURCE_ENERGY: 'energy',
         HARVEST_POWER: 2, CREEP_LIFE_TIME: 1500, BOOSTS: { work: { XUHO2: { harvest: 7 } } }, OK: 0 },
-        modules: { 'settings/settings': { findPathAvoidRooms: [], observersFindPathIdList: [] },
+        modules: { 'settings/settings': { getFindPathAvoidRooms: () => [], observersFindPathIdList: [] },
             'runtime/observerScheduling': { scheduleObservation: () => 0 } } });
     loader.load('utils/BetterMove');
     const helper = loader.load('runtime/harvestPower');

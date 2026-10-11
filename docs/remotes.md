@@ -44,6 +44,8 @@ new RoomPosition(25, 25, 'E41N5').createFlag('E41N6_OUT0')
 
 上例将 `E41N5` 设为 `E41N6` 的手动外矿。主房须自有且有 Spawn；旗所在房间就是目标，不用把旗放在 Source 上。同一主房按 `OUT0`、`OUT1` 的数字顺序逐矿启动，指向同一房间的重复旗只算一处外矿。手动外矿的启动链先于自动外矿。
 
+OUT 旗可以放在墙上或边界；专用 Scout 进入目标房间可达内区取得视野，不会追逐旗子具体格子。普通 SCOUT 标点仍按指定位置移动。目标房若被寻路避让表禁止进入，预订与侦察都会被阻挡；可用 `BetterMove.getAvoidRoomsMap()` 查询当前 shard 的运行时避让表。持久默认配置在 `src/settings/settings.ts` 的 `findPathAvoidRooms`，按 `shard0`、`shard1`、`shard2`、`shard3` 分别设置房间数组；同名房不会互相影响。原有五房配置仅属于 shard3。跨 shard 路线按 Portal 入口和落点各自所在 shard 检查，配置变更使旧缓存失效。
+
 每处新外矿依次完成以下阶段，完成后才发布下一处外矿的出生需求：
 
 1. 侦察并预订：RCL3 起先派完整预订工，最低出生容量为 650 能量；目标无视野时也能发布预订工，并由专用 Scout 跟随当前 OUT 旗。须看到自己的预订且预订工已抵达 Controller，才进入开采。RCL2 跳过预订阶段；RCL3 容量不足 650 时等待容量提升。

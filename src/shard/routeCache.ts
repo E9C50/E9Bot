@@ -1,5 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
-import { findPathAvoidRooms } from 'settings/settings'
+import { getFindPathAvoidRooms, getFindPathAvoidRoomsSignature } from 'settings/settings'
 import { getKnownPortals } from './portalIntel'
 import { isPortalRouteKnown, PortalRoutePlanningOptions } from './routePlanner'
 import type { PortalRecord } from './portalTypes'
@@ -28,7 +28,7 @@ export interface PortalRouteCacheMemory {
 function cacheKey(sourceShard: string, sourceRoom: string, targetShard: string, targetRoom: string): string {
     const policy = interShardPolicy.portalRouting
     return JSON.stringify([sourceShard, sourceRoom, targetShard, targetRoom, policy.strategy ?? 'totalCost',
-        [...new Set(findPathAvoidRooms)].sort(), policy.maximumHops, policy.maximumNodes, policy.roomCost, policy.portalCost])
+        getFindPathAvoidRoomsSignature(), policy.maximumHops, policy.maximumNodes, policy.roomCost, policy.portalCost])
 }
 
 /** Observation timestamps do not change a route; endpoints and policy changes do. */
@@ -70,7 +70,8 @@ function prune(memory: PortalRouteCacheMemory, now: number): void {
 function validRoute(sourceShard: string, sourceRoom: string, targetShard: string, targetRoom: string,
     route: readonly PortalHop[], portals: readonly PortalRecord[]): boolean {
     return typeof sourceShard === 'string' && !!sourceShard && typeof targetShard === 'string' && !!targetShard &&
-        sourceShard !== targetShard && coordinates(sourceRoom) !== undefined && coordinates(targetRoom) !== undefined && Array.isArray(route) &&
+        sourceShard !== targetShard && coordinates(sourceRoom) !== undefined && coordinates(targetRoom) !== undefined &&
+        !getFindPathAvoidRooms(sourceShard).includes(sourceRoom) && !getFindPathAvoidRooms(targetShard).includes(targetRoom) && Array.isArray(route) &&
         route.length > 0 && route.length <= interShardPolicy.portalRouting.maximumHops &&
         isPortalTravelData({ missionId: 'route-cache', originShard: sourceShard, route, hopIndex: 0 }) &&
         route.every(hop => hop.shard !== hop.destinationShard) && route[route.length - 1].destinationShard === targetShard &&
@@ -116,7 +117,7 @@ export function getCachedPortalRoute(sourceShard: string, sourceRoom: string, ta
         return undefined
     }
     const policy = { ...interShardPolicy.portalRouting, ...options }, cpu = Game.cpu
-    const started = cpu?.getUsed?.(), avoided = new Set(findPathAvoidRooms), statuses = new Map<string, boolean>()
+    const started = cpu?.getUsed?.(), avoided = new Set(getFindPathAvoidRooms()), statuses = new Map<string, boolean>()
     const withinBudget = (): boolean => {
         if (started === undefined) return true
         const used = cpu.getUsed(), limit = cpu.tickLimit ?? cpu.limit

@@ -22,7 +22,12 @@ export default (data: CreepData): ICreepConfig => ({
         // A dedicated OUT scout belongs to this one remote; other OUT flags must wait for admission.
         if (/^[WE]\d+[NS]\d+_OUT\d+$/.test(creepData.targetFlag)) {
             creep.memory.dontPullMe = false
-            if (targetFlag && !creep.pos.inRangeTo(targetFlag.pos, 1)) creep.moveTo(targetFlag, { range: 1 })
+            // OUT marks a room, including flags on impassable border walls.
+            // Stay inside that room to retain vision without occupying an exit.
+            if (targetFlag) {
+                const interior = new RoomPosition(25, 25, targetFlag.pos.roomName)
+                if (!creep.pos.inRangeTo(interior, 20)) creep.moveTo(interior, { range: 20, reusePath: 20 })
+            }
             return true
         }
 

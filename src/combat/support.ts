@@ -1,6 +1,6 @@
 import { combatPolicy } from 'settings/combat'
 import { roomPolicy } from 'settings/roomPolicy'
-import { creepWhiteList, findPathAvoidRooms } from 'settings/settings'
+import { creepWhiteList, getFindPathAvoidRooms } from 'settings/settings'
 import { scoutMovementOptions } from 'shard/scoutMovement'
 import { combatPower, combatRange, combatSnapshot, incomingDamage, isCombatHostile, isInvulnerable } from './intelligence'
 import type { CombatSnapshot } from './intelligence'
@@ -52,7 +52,7 @@ function route(from: string, to: string): string[] | undefined {
     const key = `${from}/${to}`, previous = routes.get(key)
     if (previous && previous.tick + (combatPolicy.lootRouteCacheTicks ?? 100) > Game.time) return previous.rooms
     const result = Game.map.findRoute(from, to, { routeCallback(roomName) {
-        if (roomName !== from && roomName !== to && findPathAvoidRooms.includes(roomName)) return Infinity
+        if (roomName !== from && roomName !== to && getFindPathAvoidRooms().includes(roomName)) return Infinity
         const visible = Game.rooms[roomName]
         if (roomName !== from && roomName !== to && visible && unsafe(visible, combatSnapshot(visible), true)) return Infinity
         return 1

@@ -9,7 +9,7 @@ const returning = [{ shard: 'shard1', roomName: 'W3N3', x: 20, y: 20, destinatio
 function world() {
     const clock = { now: 1000000, cpu: 0, nativeCpu: 0 };
     const memory = {}, avoid = [], statuses = new Map(), calls = { native: [], statuses: [], plans: [] };
-    const intel = { portals: [] };
+    const intel = { portals: [] }, avoidByShard = { shard0: avoid };
     let nativeResult;
     const game = { time: 10, shard: { name: 'shard0' }, cpu: { bucket: 10000, tickLimit: 100, getUsed: () => clock.cpu },
         map: {
@@ -23,7 +23,10 @@ function world() {
     };
     const loader = createSourceLoader({ globals: { Game: game, Memory: memory,
         Date: class extends Date { static now() { return clock.now; } }, ERR_NO_PATH: -2 }, modules: {
-        'settings/settings': { findPathAvoidRooms: avoid },
+        'settings/settings': { findPathAvoidRooms: avoidByShard,
+            getFindPathAvoidRooms: (shard = game.shard.name) => avoidByShard[shard] || [],
+            getFindPathAvoidRoomsSignature: () => JSON.stringify(Object.keys(avoidByShard).sort()
+                .map(shard => [shard, [...new Set(avoidByShard[shard])].sort()])) },
         './portalIntel': { getKnownPortals: () => intel.portals, getPortalIntelStatus: () => ({ observers: 1, portals: intel.portals.length }) },
         './transport': { cancelCreepTransfers() {}, getLocalShardState: () => ({ reports: {} }), readRemoteShardState: () => undefined },
     } });
@@ -31,7 +34,7 @@ function world() {
     const planner = loader.load('shard/routePlanner'), realPlan = planner.planPortalRoute;
     planner.planPortalRoute = (...args) => { calls.plans.push(args); return realPlan(...args); };
     const cache = loader.load('shard/routeCache'), routing = loader.load('shard/routing'), verification = loader.load('shard/verification');
-    const w = { clock, memory, avoid, statuses, calls, intel, game, policy, cache, routing, verification,
+    const w = { clock, memory, avoid, avoidByShard, statuses, calls, intel, game, policy, cache, routing, verification,
         add(route) { intel.portals.push(...route.map((hop, index) => ({ ...hop, id: `${intel.portals.length}:${index}`, observedAt: clock.now }))); },
         native(result) { nativeResult = result; },
         advance(milliseconds = 1) { clock.now += milliseconds; game.time++; clock.cpu = 0; },
@@ -252,4 +255,36 @@ test('a failed cache walking check and graph fallback share one native and CPU a
     const options = w.calls.plans[0][5];
     assert.equal(options.maximumLocalRouteChecks, w.policy.portalRouting.maximumLocalRouteChecks - 1);
     assert.equal(options.maximumPlanningCpu, w.policy.portalRouting.maximumPlanningCpu - 2);
+});
+
+
+test('cached geometry does not project the current shard blacklist onto a same-named remote landing', () => {
+    const w = world(); w.avoidByShard.shard0 = ['W3N3'];
+    assert.equal(store(w), true);
+    assert.ok(get(w), 'shard1 W3N3 is allowed even when shard0 W3N3 is forbidden');
+    const native = w.calls.native.length;
+    w.avoidByShard.shard1 = ['W3N3'];
+    assert.equal(get(w), undefined);
+    assert.equal(store(w), false, 'forbidden landing geometry cannot be saved under its new policy');
+    assert.equal(w.calls.native.length, native, 'remote admission never makes a native map query');
+});
+
+test('every shard blacklist contributes to the route cache key, even when the edited room is outside this route', () => {
+    const w = world(); assert.equal(store(w), true);
+    w.avoidByShard.shard2 = ['W8N8', 'W9N9'];
+    assert.equal(get(w), undefined, 'changing a remote shard policy invalidates the previous signature');
+    assert.equal(w.calls.native.length, 0);
+    assert.equal(store(w), true);
+    w.avoidByShard.shard2.reverse();
+    assert.ok(get(w), 'reordering the same configuration retains its sorted signature');
+});
+
+test('cache admission validates both mission endpoints and each portal endpoint on its actual shard', () => {
+    for (const [shard, room] of [['shard0', 'W1N1'], ['shard0', 'W2N1'], ['shard1', 'W3N3'], ['shard1', 'W4N4']]) {
+        const w = world(); assert.equal(store(w, 'W4N4'), true);
+        w.avoidByShard[shard] = [room];
+        assert.equal(get(w, 'W4N4'), undefined);
+        assert.equal(store(w, 'W4N4'), false);
+        assert.equal(w.calls.native.length, 0);
+    }
 });

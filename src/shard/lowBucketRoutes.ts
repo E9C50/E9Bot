@@ -1,5 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
-import { findPathAvoidRooms } from 'settings/settings'
+import { getFindPathAvoidRooms } from 'settings/settings'
 import type { PortalRecord } from './portalTypes'
 import type { PortalHop } from './types'
 import type { LowBucketPlanningLimits } from './planningBudget'
@@ -26,9 +26,10 @@ export function planLowBucketPortalRoute(sourceShard: string, sourceRoom: string
             (!Number.isFinite(limit) || limit - used >= limits.minimumCpuHeadroom)
     }
     const first = coordinates(sourceRoom), goal = coordinates(targetRoom)
-    if (!first || !goal || sourceShard === targetShard || !within() ||
+    if (!first || !goal || sourceShard === targetShard ||
+        getFindPathAvoidRooms(sourceShard).includes(sourceRoom) || getFindPathAvoidRooms(targetShard).includes(targetRoom) || !within() ||
         portals.length > policy.maximumNodes * Math.max(1, policy.maximumHops)) return undefined
-    const avoided = new Set(findPathAvoidRooms), outgoing = new Map<string, PortalRecord[]>(), incoming = new Map<string, Set<string>>()
+    const outgoing = new Map<string, PortalRecord[]>(), incoming = new Map<string, Set<string>>()
     for (let index = 0; index < portals.length; index++) {
         if (!within()) return undefined
         const entry = portals[index]
@@ -37,8 +38,8 @@ export function planLowBucketPortalRoute(sourceShard: string, sourceRoom: string
             !Number.isInteger(entry.x) || !Number.isInteger(entry.y) || entry.x < 0 || entry.x > 49 || entry.y < 0 || entry.y > 49 ||
             !Number.isFinite(entry.observedAt) || entry.observedAt > now || now - entry.observedAt > interShardPolicy.portalDiscovery.intelMaxAge ||
             (entry.expiresAt !== undefined && entry.expiresAt <= now) ||
-            (entry.shard === Game.shard.name && avoided.has(entry.roomName)) ||
-            (entry.destinationShard === Game.shard.name && avoided.has(entry.destinationRoom!))) continue
+            getFindPathAvoidRooms(entry.shard).includes(entry.roomName) ||
+            getFindPathAvoidRooms(entry.destinationShard).includes(entry.destinationRoom!)) continue
         if (!outgoing.has(entry.shard)) outgoing.set(entry.shard, [])
         outgoing.get(entry.shard)!.push(entry)
         if (!incoming.has(entry.destinationShard)) incoming.set(entry.destinationShard, new Set())

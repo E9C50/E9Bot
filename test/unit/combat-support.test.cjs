@@ -106,7 +106,7 @@ function world({ roomName = 'W2N1', life = 1200, capacity = 100, energy = 0 } = 
     };
     const policy = { maximumActiveTasks: 8, minimumTravelLife: 100, travelTicksPerRoom: 65, supportFleeMaxOps: 2000, lootSafetyTicks: 25, lootUrgencyTicks: 100, lootRouteCacheTicks: 100 };
     const loader = createSourceLoader({ globals, modules: {
-        'settings/combat': { combatPolicy: policy }, 'settings/settings': { creepWhiteList: ['friend'], findPathAvoidRooms: ['W9N1'] },
+        'settings/combat': { combatPolicy: policy }, 'settings/settings': { creepWhiteList: ['friend'], getFindPathAvoidRooms: () => ['W9N1'] },
         'settings/roomPolicy': { roomPolicy: { defense: { npcOwners: ['Invader', 'Source Keeper'] } } },
         'shard/scoutMovement': { scoutMovementOptions: { plainCost: 1, swampCost: 1, ignoreSwamps: true } },
     } });

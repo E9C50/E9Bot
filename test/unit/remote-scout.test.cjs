@@ -23,8 +23,8 @@ function world() {
 test('dedicated OUT scout reaches only its assigned remote and never patrols the next OUT', () => {
     const w = world(), behavior = w.role({ targetFlag: 'W1N1_OUT0' });
     behavior.target(w.creep);
-    assert.equal(w.moves[0].target, w.game.flags.W1N1_OUT0);
-    assert.equal(w.moves[0].options.range, 1);
+    assert.deepEqual(w.moves[0].target, new w.Position(25, 25, 'W1N2'));
+    assert.equal(w.moves[0].options.range, 20);
     w.creep.pos = new w.Position(24, 25, 'W1N2');
     w.creep.room.name = 'W1N2'; w.moves.length = 0;
     behavior.target(w.creep);
@@ -39,7 +39,7 @@ test('deleting the assigned OUT does not redirect its paid scout into a later re
     assert.equal(w.moves.length, 0);
     w.game.flags.W1N1_OUT0 = { pos: new w.Position(20, 20, 'W2N2') };
     behavior.target(w.creep);
-    assert.equal(w.moves[0].target.pos.roomName, 'W2N2');
+    assert.equal(w.moves[0].target.roomName, 'W2N2');
 });
 
 test('an ordinary SCOUT retains the existing OUT fallback when its explicit flag is absent', () => {

@@ -1,5 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
-import { findPathAvoidRooms } from 'settings/settings'
+import { getFindPathAvoidRooms } from 'settings/settings'
 import type { PortalRecord } from './portalTypes'
 import type { PortalHop } from './types'
 
@@ -48,7 +48,12 @@ function hopKey(value: PortalHop): string { return JSON.stringify([value.shard, 
 function records(portals: readonly PortalRecord[]): PortalRecord[] {
     const maximum = interShardPolicy.portalRouting.maximumNodes * Math.max(1, interShardPolicy.portalRouting.maximumHops)
     if (!Array.isArray(portals) || portals.length > maximum) return []
-    const now = Date.now(), entrances = new Map<string, PortalRecord>()
+    const now = Date.now(), entrances = new Map<string, PortalRecord>(), avoided = new Map<string, Set<string>>()
+    const blocked = (shardName: string, room: string): boolean => {
+        let rooms = avoided.get(shardName)
+        if (rooms == undefined) { rooms = new Set(getFindPathAvoidRooms(shardName)); avoided.set(shardName, rooms) }
+        return rooms.has(room)
+    }
     for (const value of portals) {
         if (value == null || typeof value != 'object' || typeof value.id != 'string' || !value.id ||
             !shard(value.shard) || !shard(value.destinationShard) || value.shard == value.destinationShard ||
@@ -60,7 +65,8 @@ function records(portals: readonly PortalRecord[]): PortalRecord[] {
         const key = JSON.stringify([value.shard, value.roomName, value.x, value.y]), previous = entrances.get(key)
         if (previous == undefined || value.observedAt > previous.observedAt) entrances.set(key, value)
     }
-    return Array.from(entrances.values())
+    return Array.from(entrances.values()).filter(value =>
+        !blocked(value.shard, value.roomName) && !blocked(value.destinationShard, value.destinationRoom!))
 }
 
 function itinerary(source: string, target: string, valid: readonly PortalRecord[], excluded: ReadonlySet<string> = new Set()): string[] | undefined {
@@ -163,7 +169,7 @@ let walkingAvoid = ''
 let walkingCache = new Map<string, number>()
 
 function walkingContext(): (name: string) => boolean {
-    const avoid = new Set(findPathAvoidRooms), avoidSignature = JSON.stringify(Array.from(avoid).sort())
+    const avoid = new Set(getFindPathAvoidRooms()), avoidSignature = JSON.stringify(Array.from(avoid).sort())
     if (walkingTick != Game.time || walkingShard != Game.shard.name || walkingAvoid != avoidSignature) {
         walkingTick = Game.time; walkingShard = Game.shard.name; walkingAvoid = avoidSignature; walkingCache = new Map()
     }
@@ -179,7 +185,7 @@ function walkingContext(): (name: string) => boolean {
 }
 
 function nearestPortal(currentRoom: string, portals: readonly PortalRecord[], planning: Budget, candidateOnly = false): PortalHop | undefined {
-    const current = point(currentRoom)!, avoided = new Set(findPathAvoidRooms)
+    const current = point(currentRoom)!, avoided = new Set(getFindPathAvoidRooms())
     const allowed = candidateOnly ? (name: string): boolean => !avoided.has(name) : walkingContext()
     if (!allowed(currentRoom)) return undefined
     const candidates = portals.filter(value => allowed(value.roomName)).map(value => {
@@ -255,7 +261,7 @@ export function getExplorationRooms(currentRoom: string, visitedRooms: readonly 
         !Number.isSafeInteger(origin.y - policy.searchRadius) || !Number.isSafeInteger(origin.y + policy.searchRadius)) return []
     const planning = budget(options)
     if (!planning.within()) return []
-    const avoided = new Set(findPathAvoidRooms)
+    const avoided = new Set(getFindPathAvoidRooms())
     const allowed = options.candidateOnly ? (name: string): boolean => !avoided.has(name) : walkingContext()
     if (!allowed(currentRoom)) return []
     const excluded = new Set([...visitedRooms, ...excludedRooms]), candidates: Array<{ name: string; estimated: number }> = []

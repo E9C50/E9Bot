@@ -1,6 +1,6 @@
 import { structurePolicy } from 'settings/structures'
 import { runCreepBoosts } from 'creep/boosting'
-import { findPathAvoidRooms } from "settings/settings";
+import { getFindPathAvoidRooms } from "settings/settings";
 import { getDistance, getOppositeDirection, serializeMovePath } from "utils";
 
 function collectFromRemains(creep: Creep, targets: readonly (Tombstone | Ruin)[], range: number, allResources: boolean): boolean {
@@ -112,7 +112,7 @@ export default class CreepExtension extends Creep {
                     roomCallback: function (roomName) {
                         let costs = new PathFinder.CostMatrix;
 
-                        if (findPathAvoidRooms.includes(roomName)) {
+                        if (getFindPathAvoidRooms().includes(roomName)) {
                             return false
                         }
 

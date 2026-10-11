@@ -52,7 +52,7 @@ function world() {
         globals: { ...constants, Game: game, Creep: class {}, RoomPosition, console: { log: value => logs.push(value) } },
         modules: {
             'settings/bodyPolicy': { bodyPolicy: policy },
-            'settings/settings': { findPathAvoidRooms: [] },
+            'settings/settings': { getFindPathAvoidRooms: () => [] },
             'settings/creep': { roleAdvEnum: { PROCESSER: 'processer' } },
             'settings/labs': { reactionConfig: {}, reactionSource: {} },
             'settings/roomPolicy': { roomPolicy: { labs: { updateInterval: 10, minimumReactionReagent: 1000 } } },

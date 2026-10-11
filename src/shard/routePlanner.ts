@@ -1,5 +1,5 @@
 import { interShardPolicy } from 'settings/interShard'
-import { findPathAvoidRooms } from 'settings/settings'
+import { getFindPathAvoidRooms, getFindPathAvoidRoomsSignature } from 'settings/settings'
 import type { PortalRecord } from './portalTypes'
 import type { PortalHop } from './types'
 
@@ -75,7 +75,9 @@ function portal(record: PortalRecord, now: number): GraphPortal | undefined {
         return undefined
     const from = point(record.shard, record.roomName)
     const to = point(record.destinationShard, record.destinationRoom)
-    if (from === undefined || to === undefined || from.shard === to.shard) return undefined
+    if (from === undefined || to === undefined || from.shard === to.shard ||
+        getFindPathAvoidRooms(from.shard).includes(from.roomName) ||
+        getFindPathAvoidRooms(to.shard).includes(to.roomName)) return undefined
     return {
         from, to, node: -1,
         hop: { shard: from.shard, roomName: from.roomName, x: record.x, y: record.y,
@@ -141,8 +143,8 @@ export function planPortalRoute(
             !(Number.isFinite(policy.maximumPlanningCpu) && used - startCpu >= policy.maximumPlanningCpu) &&
             !(Number.isFinite(limit) && Number.isFinite(policy.minimumCpuHeadroom) && limit - used < policy.minimumCpuHeadroom)
     }
-    const avoided = new Set(findPathAvoidRooms)
-    const avoidSignature = JSON.stringify(Array.from(avoided).sort())
+    const avoided = new Set(getFindPathAvoidRooms(currentShard))
+    const avoidSignature = getFindPathAvoidRoomsSignature()
     if (cacheTick !== Game.time || cacheShard !== currentShard || cacheAvoid !== avoidSignature) {
         cacheTick = Game.time
         cacheShard = currentShard
@@ -159,7 +161,9 @@ export function planPortalRoute(
         statuses.set(roomName, result)
         return result
     }
-    if ((source.shard === currentShard && !allowed(source.roomName)) ||
+    if (getFindPathAvoidRooms(source.shard).includes(source.roomName) ||
+        getFindPathAvoidRooms(target.shard).includes(target.roomName) ||
+        (source.shard === currentShard && !allowed(source.roomName)) ||
         (target.shard === currentShard && !allowed(target.roomName)) || !withinBudget()) return undefined
     const now = Date.now()
     const valid: GraphPortal[] = []

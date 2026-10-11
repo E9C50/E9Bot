@@ -4,21 +4,24 @@ const { createSourceLoader } = require('../helpers/load-typescript.cjs');
 const copy = value => JSON.parse(JSON.stringify(value));
 
 function world() {
-    const cpu = { used: 1.5, queryCost: 0 }, clock = { now: 1000000 }, calls = [];
+    const cpu = { used: 1.5, queryCost: 0 }, clock = { now: 1000000 }, calls = [], avoidByShard = {};
     const game = { time: 1, shard: { name: 'shard3' }, cpu: { bucket: 0, limit: 20, tickLimit: 21,
         getUsed() { cpu.used += cpu.queryCost; return cpu.used; } }, map: {
         findRoute() { calls.push('native-route'); throw new Error('light candidate must not run native route searches'); },
         getRoomStatus() { calls.push('native-status'); throw new Error('light candidate must not scan room status'); },
     } };
     const loader = createSourceLoader({ globals: { Game: game, Date: class extends Date { static now() { return clock.now; } } },
-        modules: { 'settings/settings': { findPathAvoidRooms: [] } } });
+        modules: { 'settings/settings': { findPathAvoidRooms: avoidByShard,
+            getFindPathAvoidRooms: (shard = game.shard.name) => avoidByShard[shard] || [],
+            getFindPathAvoidRoomsSignature: () => JSON.stringify(Object.keys(avoidByShard).sort()
+                .map(shard => [shard, [...new Set(avoidByShard[shard])].sort()])) } } });
     const policy = loader.load('settings/interShard').interShardPolicy;
     const budgets = loader.load('shard/planningBudget'), routes = loader.load('shard/lowBucketRoutes');
     const portal = (shard, room, destinationShard, destinationRoom, extra = {}) => ({ id: `${shard}/${room}`,
         shard, roomName: room, x: 10, y: 10, destinationShard, destinationRoom, observedAt: clock.now, ...extra });
     const plan = portals => routes.planLowBucketPortalRoute('shard3', 'E41N8', 'shard1', 'E41N6', portals,
         budgets.reserveLowBucketPlanning());
-    return { cpu, clock, game, calls, loader, policy, budgets, routes, portal, plan };
+    return { cpu, clock, game, calls, avoidByShard, loader, policy, budgets, routes, portal, plan };
 }
 
 test('bucket zero with 20 CPU can reserve one small step per shard tick while preserving headroom', () => {
@@ -63,4 +66,33 @@ test('CPU allowance exhaustion defers a lightweight candidate without any native
     assert.equal(w.plan([w.portal('shard3', 'E40N10', 'shard2', 'E40N10'),
         w.portal('shard2', 'E40N10', 'shard1', 'E40N10')]), undefined);
     assert.deepEqual(w.calls, []);
+});
+
+
+test('lightweight planning keeps the same remote room independent from the current shard blacklist', () => {
+    const w = world(); w.avoidByShard.shard3 = ['E39N4'];
+    const first = w.portal('shard3', 'E40N10', 'shard2', 'E39N4');
+    const second = w.portal('shard2', 'E39N4', 'shard1', 'E40N10');
+    assert.ok(w.plan([first, second]));
+    assert.deepEqual(w.calls, []);
+});
+
+test('lightweight planning rejects forbidden remote landings and entrances without native queries', () => {
+    for (const blocked of ['landing', 'entrance']) {
+        const w = world();
+        const first = w.portal('shard3', 'E40N10', 'shard2', 'E40N9');
+        const second = w.portal('shard2', 'E40N10', 'shard1', 'E40N10');
+        w.avoidByShard.shard2 = [blocked === 'landing' ? 'E40N9' : 'E40N10'];
+        assert.equal(w.plan([first, second]), undefined);
+        assert.deepEqual(w.calls, []);
+    }
+});
+
+test('lightweight planning checks mission source and target against their respective shard lists', () => {
+    for (const blocked of ['source', 'target']) {
+        const w = world();
+        w.avoidByShard[blocked === 'source' ? 'shard3' : 'shard1'] = [blocked === 'source' ? 'E41N8' : 'E41N6'];
+        assert.equal(w.plan([w.portal('shard3', 'E40N10', 'shard1', 'E40N10')]), undefined);
+        assert.deepEqual(w.calls, []);
+    }
 });

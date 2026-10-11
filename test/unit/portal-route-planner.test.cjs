@@ -15,7 +15,7 @@ function world(overrides = {}) {
     const calls = [];
     const statuses = new Map();
     const noPaths = new Set();
-    const avoided = [];
+    const avoided = [], avoidByShard = { A: avoided };
     const policy = {
         portalDiscovery: { intelMaxAge: 86400000 },
         portalRouting: {
@@ -55,13 +55,16 @@ function world(overrides = {}) {
     };
     const loader = createSourceLoader({
         globals: { Game: game, Date: ClockDate },
-        modules: { 'settings/interShard': { interShardPolicy: policy }, 'settings/settings': { findPathAvoidRooms: avoided } }
+        modules: { 'settings/interShard': { interShardPolicy: policy }, 'settings/settings': { findPathAvoidRooms: avoidByShard,
+            getFindPathAvoidRooms: (shard = game.shard.name) => avoidByShard[shard] || [],
+            getFindPathAvoidRoomsSignature: () => JSON.stringify(Object.keys(avoidByShard).sort()
+                .map(shard => [shard, [...new Set(avoidByShard[shard])].sort()])) } }
     });
     function portal(shard, room, destinationShard, destinationRoom, extra = {}) {
         return { id: `portal${id++}`, shard, roomName: room, x: 25, y: 25,
             destinationShard, destinationRoom, observedAt: now, ...extra };
     }
-    return { ...loader.load('shard/routePlanner'), game, policy, calls, statuses, noPaths, avoided, portal,
+    return { ...loader.load('shard/routePlanner'), game, policy, calls, statuses, noPaths, avoided, avoidByShard, portal,
         setNow: value => { now = value; } };
 }
 
@@ -324,4 +327,48 @@ test('a bounded 640-record four-shard directory completes using only known cross
     assert.equal(result.route[result.route.length - 1].destinationShard, 'D');
     assert.equal(state.calls.length, 0);
     context.diagnostic(`640 known portals: ${elapsed.toFixed(2)} ms local wall-clock, ${result.route.length} hops; no Screeps CPU claim`);
+});
+
+
+test('the same room name is independent on each shard for both portal selection strategies', () => {
+    for (const strategy of ['nearestHop', 'totalCost']) {
+        const w = world({ strategy }); w.game.shard.name = 'shard1';
+        w.avoidByShard.shard3 = ['E39N4'];
+        const door = w.portal('shard1', 'E39N4', 'shard2', 'E0S0');
+        assert.ok(w.planPortalRoute('shard1', 'E39N4', 'shard2', 'E0S0', [door]),
+            'shard3 E39N4 does not ban the source or entrance on shard1');
+        w.avoidByShard.shard1 = ['E39N4'];
+        assert.equal(w.planPortalRoute('shard1', 'E39N4', 'shard2', 'E0S0', [door]), undefined);
+    }
+});
+
+test('remote portal landings and entrances honor their own shard list without remote map queries', () => {
+    for (const strategy of ['nearestHop', 'totalCost']) {
+        const w = world({ strategy }); w.game.shard.name = 'unrelated';
+        w.game.map.findRoute = () => { throw new Error('remote route query'); };
+        w.game.map.getRoomStatus = () => { throw new Error('remote status query'); };
+        const blocked = w.portal('A', 'E0S0', 'B', 'E2S0');
+        const safe = w.portal('A', 'E1S0', 'B', 'E3S0');
+        w.avoidByShard.B = ['E2S0'];
+        const result = w.planPortalRoute('A', 'E0S0', 'B', 'E0S0', [blocked, safe]);
+        assert.equal(result.route[0].destinationRoom, 'E3S0');
+        assert.equal(w.isPortalRouteKnown([blocked], [blocked]), false);
+        const first = w.portal('A', 'E0S0', 'B', 'E1S0');
+        const second = w.portal('B', 'E2S0', 'C', 'E0S0');
+        assert.equal(w.planPortalRoute('A', 'E0S0', 'C', 'E0S0', [first, second]), undefined,
+            'a forbidden remote entrance cannot connect the shard graph');
+        assert.equal(w.calls.length, 0);
+    }
+});
+
+test('remote mission source and final target are checked even when neither is a portal endpoint', () => {
+    for (const blocked of ['source', 'target']) {
+        const w = world(); w.game.shard.name = 'unrelated';
+        w.game.map.findRoute = w.game.map.getRoomStatus = () => { throw new Error('remote map query'); };
+        const door = w.portal('A', 'E1S0', 'B', 'E2S0');
+        assert.ok(w.planPortalRoute('A', 'E0S0', 'B', 'E3S0', [door]));
+        w.avoidByShard[blocked === 'source' ? 'A' : 'B'] = [blocked === 'source' ? 'E0S0' : 'E3S0'];
+        assert.equal(w.planPortalRoute('A', 'E0S0', 'B', 'E3S0', [door]), undefined);
+        assert.equal(w.calls.length, 0);
+    }
 });

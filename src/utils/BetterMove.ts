@@ -77,7 +77,7 @@ require('超级移动优化').deletePathInRoom(roomName);
 5.在控制台输入require('超级移动优化').print()获取性能信息，鼓励发给作者用于优化
 */
 
-import { findPathAvoidRooms, observersFindPathIdList } from "settings/settings";
+import { getFindPathAvoidRooms, observersFindPathIdList } from "settings/settings";
 import { scheduleObservation } from 'runtime/observerScheduling'
 
 /***************************************
@@ -90,7 +90,7 @@ let pathClearDelay = navigationPolicy.pathClearDelay;  // 清理相应时间内�
 let hostileCostMatrixClearDelay = navigationPolicy.hostileCostMatrixClearDelay; // 自动清理相应时间前创建的其他玩家房间的costMatrix
 let coreLayoutRange = navigationPolicy.coreLayoutRange; // 核心布局半径，在离storage这个范围内频繁检查对穿（减少堵路的等待
 
-let avoidRooms = findPathAvoidRooms
+let avoidRooms = getFindPathAvoidRooms()
 let observers = observersFindPathIdList
 let avoidExits = { 'fromRoom': 'toRoom' }   // 【未启用】单向屏蔽房间的一些出口，永不从fromRoom踏入toRoom
 /** @type {{id:string, roomName:string, taskQueue:{path:MyPath, idx:number, roomName:string}[]}[]} */

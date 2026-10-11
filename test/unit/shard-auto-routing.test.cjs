@@ -187,6 +187,33 @@ test('explicit legacy routes stay one-way and roundTrip false allows automatic o
     assert.equal(Object.keys(automatic.home.memory.creepConfig).length, 1);
 });
 
+test('ready automatic routes recheck shard-specific blacklist changes, including their final room', () => {
+    const w = world();
+    w.intel.portals = copy(outward);
+    w.plan('shard0', 'W1N1', 'shard1', 'W4N4', outward);
+    w.api.createShardTask('W1N1', 'shard1/W4N4', {
+        claim: false, builders: 0, haulers: 1, roundTrip: false, verifyRoute: false, explorePortals: false,
+    });
+    const mission = w.mission(), settings = w.loader.load('settings/settings');
+    assert.equal(mission.routing.status, 'ready');
+    const originalSignature = mission.routing.portalSignature;
+    const originalPlans = w.calls.filter(call => call.type === 'plan').length;
+    settings.findPathAvoidRooms.shard3.push('W4N4');
+    w.advance();
+    w.routing.updateMissionRouting(mission, true);
+    assert.equal(mission.routing.status, 'ready', 'same room on another shard remains allowed');
+    assert.notEqual(mission.routing.portalSignature, originalSignature);
+    assert.ok(w.calls.filter(call => call.type === 'plan').length > originalPlans, 'persisted ready routes recheck the new policy');
+
+    settings.findPathAvoidRooms.shard1.push('W4N4');
+    w.plans.clear();
+    w.advance();
+    w.routing.updateMissionRouting(mission, true);
+    assert.equal(mission.routing.status, 'waiting');
+    assert.equal(mission.task.route.length, 0, 'a known portal cannot retain a route to a forbidden final room');
+    assert.match(mission.routing.message, /shard1\/W4N4/);
+});
+
 test('changing to nearest-hop routing migrates a known ready task and withdraws its old verified dispatch', () => {
     const w = world(); w.policy.portalRouting.strategy = 'totalCost';
     const far = [{ ...outward[0], roomName: 'W10N10' }];
