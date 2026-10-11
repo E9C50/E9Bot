@@ -267,7 +267,9 @@ function reconcileResourceJobs(): void {
     for (const room of rooms) {
         const budget: Amounts = {}, manual: Amounts = {}
         const entries = Object.entries(room.memory.terminalSendJob)
-        for (const [, job] of entries) if (!job.kind) manual[job.resourceType] = (manual[job.resourceType] || 0) + job.amount
+        // Match prepare(): suspended shipments stay in Memory without reserving active dispatch stock.
+        for (const [, job] of entries) if (!job.kind && !isRoomEvacuating(job.targetRoom))
+            manual[job.resourceType] = (manual[job.resourceType] || 0) + job.amount
         entries.sort((a, b) => Number(b[1].kind === 'production') - Number(a[1].kind === 'production'))
         for (const [id, job] of entries) {
             if (!job.kind) continue

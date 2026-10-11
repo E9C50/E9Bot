@@ -153,6 +153,60 @@ test('production imports are idempotent and multiple rooms cannot spend the same
     assert.equal(w.getOutgoingResourceAmount(donor.name, 'UH2O'), 4000);
 });
 
+test('a paused manual shipment to an evacuating room does not cancel or block a production import', () => {
+    const w = world(2), donor = w.room('warehouse', { X: 4000 }, { warehouse: true, cooldown: 0,
+        terminal: { energy: 50300, X: 3000 } }), target = w.room('ordinary', { X: 10000 });
+    w.loader.globals.Memory.rooms.retired = { evacuation: { status: 'waiting', targetRoom: donor.name } };
+    const manual = { targetRoom: 'retired', resourceType: 'X', amount: 10000 };
+    donor.memory.terminalSendJob.manual = manual;
+    donor.memory.productionReserve = { lab: { X: 3000 }, factory: { X: 1000 } };
+    assert.equal(w.requestRoomResource(target, 'X', 13000), 3000, 'Lab import promises use only unreserved stock');
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'X'), 3000, 'reconciliation agrees with the initial import budget');
+    assert.equal(donor.memory.terminalSendJob.manual, manual, 'the suspended user command remains intact');
+    w.processTerminalResource(donor);
+    assert.deepEqual(w.sends, [{ from: donor.name, resource: 'X', amount: 3000, target: target.name }]);
+    assert.equal(w.getRoomResourceAmount(donor, 'X'), 4000);
+    assert.equal(w.getResourceKeep(donor, 'X'), 4000, 'both local Lab and Factory commitments survive dispatch');
+    assert.equal(w.getAvailableResource(donor, 'X'), 0);
+    assert.equal(w.getTerminalResourceAmount(donor, 'energy'), 50000);
+    assert.equal(donor.memory.terminalSendJob.manual, manual);
+});
+
+test('cancelling target evacuation restores the unchanged manual shipment stock protection', () => {
+    const w = world(2), donor = w.room('warehouse', { X: 7000 }, { warehouse: true }), target = w.room('ordinary', { X: 10000 });
+    w.loader.globals.Memory.rooms.retired = { evacuation: { status: 'waiting', targetRoom: donor.name } };
+    const manual = { targetRoom: 'retired', resourceType: 'X', amount: 10000 };
+    donor.memory.terminalSendJob.manual = manual;
+    assert.equal(w.requestRoomResource(target, 'X', 13000), 3000);
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'X'), 3000);
+    delete w.loader.globals.Memory.rooms.retired.evacuation;
+    w.game.time++;
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'X'), 0, 'the resumed manual command owns its stock again');
+    assert.equal(w.getOutgoingResourceAmount(donor.name, 'X'), 10000);
+    assert.equal(w.getAvailableResource(donor, 'X'), 0);
+    assert.equal(donor.memory.terminalSendJob.manual, manual);
+    assert.deepEqual(manual, { targetRoom: 'retired', resourceType: 'X', amount: 10000 });
+});
+
+test('active manual shipments still share the production budget when another manual target is evacuating', () => {
+    const w = world(2), donor = w.room('warehouse', { X: 10000 }, { warehouse: true }), target = w.room('ordinary', { X: 10000 });
+    w.loader.globals.Memory.rooms.retired = { evacuation: { status: 'complete', targetRoom: donor.name } };
+    const suspended = { targetRoom: 'retired', resourceType: 'X', amount: 10000 };
+    const active = { targetRoom: 'external', resourceType: 'X', amount: 2000 };
+    donor.memory.terminalSendJob = { suspended, active };
+    donor.memory.productionReserve = { lab: { X: 3000 }, factory: { X: 3000 } };
+    assert.equal(w.requestRoomResource(target, 'X', 13000), 2000);
+    w.planResourceDistribution();
+    assert.equal(w.getIncomingResourceAmount(target.name, 'X'), 2000);
+    assert.equal(w.getOutgoingResourceAmount(donor.name, 'X'), 4000, 'only the active manual and feasible import consume dispatchable stock');
+    assert.equal(w.getAvailableResource(donor, 'X'), 0);
+    assert.equal(donor.memory.terminalSendJob.suspended, suspended);
+    assert.equal(donor.memory.terminalSendJob.active, active);
+});
+
 test('warehouse balancing includes small commodity batches below the bulk transfer threshold', () => {
     const w = world(), donor = w.room('donor', { wire: 400, device: 20 }, { warehouse: true });
     const target = w.room('target', {}, { warehouse: true });
