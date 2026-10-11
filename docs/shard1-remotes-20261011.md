@@ -17,3 +17,9 @@
 ## 验证
 
 `npm run typecheck`、`npm run build` 通过，全量单测 2256/2256 通过。回归覆盖真实 BetterMove 在 shard1/shard3 对 E39N4 的不同处理、OUT 墙上旗子的房间内区导航、Portal 两端所属 shard 检查、低 Bucket 规划、路线缓存和已就绪任务的配置迁移。
+
+源码提交 `b7739d7` 已上传 main 账号官服 default 分支，main 和 source map 回读一致。main SHA256：`a0f6e17b614d3eaa0547767380392cef332a25bf4acccf91a2ccd5f4ae1e5491`。
+
+部署后只读检查：shard3 tick 83565835 的 BetterMove 避让表仍是原五房；shard1 tick 74257120 的避让表为空。tick 74257136 原先停在主房的预订工已走到 `(43,43)`、侦察工到 `(38,38)`；tick 74257150 已获得 E39N4 视野、记录两个 Source 及 Controller `(33,16)`，启动状态从 scouting 推进到 reserving。E39N3 尚未启动，继续执行既有逐矿门槛；期间 E39N6 预订到期，也需要恢复维护。
+
+tick 74257184，E39N4 Controller 已显示自己的预订，`reserveConfirmed=true`、阶段推进到 mining，两个 Source 的矿工需求 `RHARVESTER_645FDED6AD`、`RHARVESTER_0A30557A62` 已入队。此时 Spawn 仍在完成本地矿工接班；尚未把矿工入队视为完成开采或搬运。
