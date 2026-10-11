@@ -26,9 +26,12 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
     let remaining = Math.max(0, income + bonusIncome - essentialUpkeep - maintenance)
     const budget: DevelopmentEconomyBudget = { income: income + bonusIncome,
         upkeep: essentialUpkeep, maintenance, repairing: 0, building: 0, upgrading: 0 }
+    const residentFor = (key: string, config: CreepMemory): Creep | undefined =>
+        residents?.get(`${config.role}\0${config.name}`) || Game.creeps[key]
+    const prepaid = new Set<string>()
     const consumer = (key: string, config: CreepMemory, energyPerWork: number, ceiling: number, exception: boolean): number => {
-        const cost = developmentBodyCostCeiling(room, config.role, config) / lifetime
-        const resident = residents ? residents.has(`${config.role}\0${config.name}`) : Game.creeps[key] !== undefined
+        const cost = prepaid.has(key) ? 0 : developmentBodyCostCeiling(room, config.role, config) / lifetime
+        const resident = residentFor(key, config) !== undefined
         const available = Math.max(0, Math.min(remaining - cost, ceiling))
         const desired = Math.max(0, Math.floor(config.development?.workParts || 0))
         const work = Math.min(desired, Math.floor(available / energyPerWork))
@@ -45,7 +48,7 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
     // Account for that real fixed consumption before granting any new work.
     const legacy = new Set<string>()
     for (const [key, config] of Object.entries(configs)) if (config.role === 'upgrader' && config.development) {
-        const resident = residents?.get(`${config.role}\0${config.name}`) || Game.creeps[key]
+        const resident = residentFor(key, config)
         if (!resident || resident.memory.development?.fullBody) continue
         legacy.add(key)
         const cost = developmentBodyCostCeiling(room, config.role, config) / lifetime
@@ -54,6 +57,13 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
         budget.upkeep += cost; budget.upgrading += work
         remaining = Math.max(0, remaining - cost - work)
     }
+    // Existing full consumers remain paid-for even while their action allowance is zero.
+    // Charge this fixed upkeep before deciding whether a new useful controller worker fits.
+    for (const [key, config] of Object.entries(configs)) if (config.development && !legacy.has(key) &&
+        (config.role === 'builder' || config.role === 'upgrader') && residentFor(key, config)) {
+        const cost = developmentBodyCostCeiling(room, config.role, config) / lifetime
+        prepaid.add(key); budget.upkeep += cost; remaining = Math.max(0, remaining - cost)
+    }
     // Permanent repair capacity stays in the catalog even when its current action quota is zero.
     for (const config of Object.values(configs)) if (config.role === 'repairer' && config.development) {
         const cost = developmentBodyCostCeiling(room, config.role, config) / lifetime
@@ -61,13 +71,34 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
         const work = Math.min(Math.max(0, Math.floor(config.development.workParts || 0)), Math.floor(remaining))
         config.development.workParts = work; remaining -= work; budget.repairing += work
     }
-    // Infrastructure receives the first useful construction intent. New idle consumers
-    // cannot absorb another complete body's upkeep before that work can be funded.
+    // A funded controller worker must survive ordinary construction demand. Otherwise
+    // a room with a permanent building backlog can spend its entire income on builders forever.
+    const upgrades = Object.entries(configs).filter(([key, config]) => config.role === 'upgrader' &&
+        config.development && !legacy.has(key) && (config.development.workParts || 0) > 0)
+    const first = upgrades.find(([key, config]) => residentFor(key, config)) || upgrades[0]
+    let reserved: { key: string; desired: number } | undefined
+    if (first && budget.upgrading === 0) {
+        const [key, config] = first
+        const cost = prepaid.has(key) ? 0 : developmentBodyCostCeiling(room, config.role, config) / lifetime
+        if (remaining >= cost + 1 && upgradeIncome + bonusIncome >= 1) {
+            reserved = { key, desired: Math.floor(config.development!.workParts || 0) }
+            config.development!.workParts = 1
+            budget.upkeep += cost; budget.upgrading += 1; remaining -= cost + 1
+        }
+    }
+    // Remaining construction and upgrading demand shares the real arrived-income budget.
     for (const [key, config] of Object.entries(configs)) if (config.role === 'builder' && config.development) {
         const bootstrap = config.spawnPriority === policy.building.firstCreepPriority
         budget.building += consumer(key, config, BUILD_POWER, Infinity, bootstrap)
     }
     for (const [key, config] of Object.entries(configs)) if (config.role === 'upgrader' && config.development && !legacy.has(key)) {
+        if (key === reserved?.key) {
+            const extra = Math.min(reserved.desired - 1, Math.floor(Math.max(0,
+                Math.min(remaining, upgradeIncome + bonusIncome - 1))))
+            config.development.workParts = 1 + extra
+            remaining -= extra; budget.upgrading += extra
+            continue
+        }
         const emergency = config.spawnPriority === policy.upgrading.downgradeRecoveryPriority
         const ceiling = Math.max(0, Math.min(upgradeIncome + bonusIncome, remaining))
         budget.upgrading += consumer(key, config, 1, ceiling, emergency)

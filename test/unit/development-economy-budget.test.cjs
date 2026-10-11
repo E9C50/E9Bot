@@ -18,16 +18,16 @@ function world() {
 
 const spending = result => result.upkeep + result.maintenance + result.repairing + result.building + result.upgrading;
 
-test('two 10-energy mines reserve complete mining, haul and hub births before their consumers', () => {
+test('two 10-energy mines preserve a funded upgrader after essential fleet upkeep and repairs', () => {
     const w = world();
     const repairer = w.add('repairer', 1), builder = w.add('builder', 1, 4);
     w.add('upgrader', 13);
     const essential = (2 * 2100 + 3 * 2200 + 2200) / 1500;
     const result = w.budget(20, 20, essential, 0);
     assert.ok(spending(result) <= 20);
-    assert.equal(builder.development.workParts, 1, 'one complete construction intent is affordable');
+    assert.equal(w.room.memory.creepConfig.builder_native, undefined, 'the remaining budget cannot also fund a full constructor');
     assert.equal(repairer.development.workParts, 1);
-    assert.equal(w.room.memory.creepConfig.upgrader_native, undefined, 'another full body would make its first WORK unaffordable');
+    assert.ok(w.room.memory.creepConfig.upgrader_native.development.workParts >= 1);
 });
 
 test('a single mine pays the permanent repair fleet without inventing another consumer budget', () => {
@@ -84,4 +84,34 @@ test('necessary bootstrap construction and urgent downgrade work retain their co
     assert.equal(upgrader.development.workParts, 1);
     assert.equal(builder.development.fullBody, true);
     assert.equal(upgrader.development.fullBody, true);
+});
+
+test('stock-funded construction cannot consume every upgrade allowance in the shard1-sized fleet', () => {
+    const w = world(); w.room.energyCapacityAvailable = 2250;
+    const repairer = w.add('repairer', 1), builder = w.add('builder', 8, 4), upgrader = w.add('upgrader', 20);
+    const result = w.budget(20, 20, 9, 15);
+    assert.ok(spending(result) <= 35);
+    assert.equal(repairer.development.workParts, 1);
+    assert.equal(builder.development.workParts, 3);
+    assert.ok(upgrader.development.workParts >= 1, 'real stored energy supports both useful jobs');
+    assert.equal(upgrader.development.fullBody, true);
+    assert.equal(builder.development.fullBody, true);
+});
+
+test('unavoidable resident body upkeep is paid before admitting a new controller worker', () => {
+    const w = world(); const builder = w.add('builder', 4, 4); w.add('upgrader', 8);
+    w.game.creeps[builder.name] = { memory: { development: { fullBody: true } }, getActiveBodyparts: () => 4 };
+    const result = w.budget(6.5, 6.5, 2, 0);
+    assert.ok(spending(result) <= 6.5);
+    assert.equal(builder.development.workParts, 0);
+    assert.equal(w.room.memory.creepConfig.upgrader_native, undefined);
+});
+
+test('an already working legacy controller worker satisfies the upgrade floor without another birth', () => {
+    const w = world(); const existing = w.add('upgrader', 1); w.add('builder', 2, 4); w.add('repairer', 1);
+    w.game.creeps[existing.name] = { memory: { development: {} }, getActiveBodyparts: () => 1 };
+    const result = w.budget(20, 20, 4, 0);
+    assert.ok(spending(result) <= 20);
+    assert.equal(result.upgrading, 1);
+    assert.equal(existing.development.workParts, 1);
 });

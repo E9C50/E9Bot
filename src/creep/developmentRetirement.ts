@@ -1,6 +1,6 @@
 import { isDevelopingRoom } from './development'
 import { developmentPolicy } from 'settings/development'
-import { harvestWorkParts } from './bodyEffectiveness'
+import { harvestWorkParts, energyCarryCapacity } from './bodyEffectiveness'
 import { getSourceMiningWorkTarget } from './developmentEconomy'
 import { hasSourceLinkTransport } from 'room/sourceLinks'
 import { hasOwnedRamparts } from 'room/repairTargets'
@@ -19,6 +19,26 @@ function obsoleteLinkHauler(creep: Creep, home: Room): boolean {
         source.pos.inRangeTo(drop, developmentPolicy.hauling.mineResourceRange))
 }
 
+/** Shrinking the distribution fleet cannot discard the last or still-needed live capacity. */
+function surplusStorageHauler(creep: Creep, home: Room): boolean {
+    const prefix = `${home.name}_DEVELOP_FILLER_STORAGE_`
+    if (!home.storage || !creep.memory.name?.startsWith(prefix) || creep.memory.role !== 'filler') return false
+    const configs = home.memory.creepConfig || {}
+    let required = 0, arrived = 0
+    for (const [name, config] of Object.entries(configs)) {
+        if (config.role !== 'filler' || !config.name?.startsWith(prefix) ||
+            (config.data as FillerData).sourceId !== home.storage.id || (config.data as FillerData).mineId) continue
+        required += Math.max(0, config.development?.carryParts || 0) * CARRY_CAPACITY
+        const successor = Game.creeps[name]
+        if (!successor || successor.name === creep.name || successor.spawning || successor.room.name !== home.name ||
+            successor.memory.spawnRoom !== home.name || successor.getActiveBodyparts(MOVE) <= 0 ||
+            (successor.memory.data as FillerData).mineId || successor.memory.developmentHauler?.mineId ||
+            successor.memory.boostPlan?.steps.length && !successor.memory.boostPlan.completed && !successor.memory.boostPlan.failed) continue
+        arrived += energyCarryCapacity(successor)
+    }
+    return required > 0 && arrived >= required
+}
+
 /** Growth units yield to the normal population only after its essential production is working. */
 export function retireDevelopmentCreep(creep: Creep): boolean {
     if (creep.memory.development === undefined) return false
@@ -32,10 +52,11 @@ export function retireDevelopmentCreep(creep: Creep): boolean {
         creep.getActiveBodyparts(WORK) > 0 && creep.getActiveBodyparts(CARRY) > 0) return false
     const configs = home.memory.creepConfig || {}
     const developing = isDevelopingRoom(home)
+    const surplusDistributor = developing && !configs[creep.name] && surplusStorageHauler(creep, home)
     if (developing) {
         // No catalog yet means the population controller has not had a chance to refresh.
         if (home.memory.creepConfig === undefined || configs[creep.name] ||
-            creep.memory.role === 'filler' && !obsoleteLinkHauler(creep, home)) return false
+            creep.memory.role === 'filler' && !obsoleteLinkHauler(creep, home) && !surplusDistributor) return false
         if (creep.memory.role === 'harvester') {
             const sourceId = (creep.memory.data as HarvesterData).sourceId
             const source = Game.getObjectById<Source>(sourceId)
@@ -75,12 +96,27 @@ export function retireDevelopmentCreep(creep: Creep): boolean {
         if (!successor) return false
     }
     creep.memory.dontPullMe = false
+    if (surplusDistributor) {
+        const mineral = Object.keys(creep.store).find(resource => resource !== RESOURCE_ENERGY && creep.store[resource] > 0) as ResourceConstant | undefined
+        if (mineral) {
+            const receiver = [home.storage, home.terminal].find(target => target && target.store.getFreeCapacity(mineral) > 0)
+            if (receiver) {
+                if (creep.transfer(receiver, mineral) === ERR_NOT_IN_RANGE) creep.moveTo(receiver, { range: 1 })
+            }
+            return true
+        }
+    }
     if (creep.store[RESOURCE_ENERGY] > 0) {
         const receiver = [home.storage, ...home.spawns, ...home.extensions, ...home.containers]
             .find((target): target is StructureStorage | StructureSpawn | StructureExtension | StructureContainer =>
                 target !== undefined && target.store.getFreeCapacity(RESOURCE_ENERGY) > 0)
         if (receiver) {
             if (creep.transfer(receiver, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) creep.moveTo(receiver, { range: 1 })
+            return true
+        }
+        if (surplusDistributor) {
+            if (home.terminal && home.terminal.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+                creep.transfer(home.terminal, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) creep.moveTo(home.terminal, { range: 1 })
             return true
         }
     }

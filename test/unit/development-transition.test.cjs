@@ -193,6 +193,80 @@ test('unselected development miners cannot retire each other and essential fille
     const filler = w.unit('filler', 'filler'); assert.equal(w.retire(filler), false);
 });
 
+test('removed extra Storage distributors unload and retire after the published full fleet has arrived', () => {
+    const w = transitionWorld({ level: 6 });
+    w.home.storage = w.structure('storage', 'storage', 15, 15, 500, 10000);
+    const old = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_0`, 'filler', {
+        work: 0, carry: 16, energy: 50, data: { sourceId: w.home.storage.id },
+    });
+    const keeper = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_1`, 'filler', {
+        work: 0, carry: 16, data: { sourceId: w.home.storage.id },
+    });
+    keeper.store = store(0, 800);
+    w.home.memory.creepConfig[keeper.name] = { role: 'filler', name: keeper.memory.name,
+        data: keeper.memory.data, development: { carryParts: 16, fullBody: true } };
+    assert.equal(w.retire(old), true);
+    assert.deepEqual(w.calls, [{ kind: 'transfer', name: old.name, id: w.home.storage.id }]);
+    old.store.energy = 0; w.calls.length = 0;
+    old.store.X = 25;
+    assert.equal(w.retire(old), true);
+    assert.deepEqual(w.calls, [{ kind: 'transfer', name: old.name, id: w.home.storage.id }], 'minerals are returned before recycling');
+    delete old.store.X; w.calls.length = 0;
+    assert.equal(w.retire(old), true);
+    assert.deepEqual(w.calls, [{ kind: 'recycle', name: old.name }]);
+    assert.equal(w.retire(keeper), false, 'the selected last distributor keeps working');
+});
+
+test('surplus Storage distributors retain their cargo until some home receiver has free space', () => {
+    const w = transitionWorld({ level: 6 });
+    w.home.storage = w.structure('storage', 'storage', 15, 15, 1000, 1000);
+    w.spawn.store = store(300, 300);
+    const old = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_0`, 'filler', {
+        work: 0, carry: 16, energy: 50, data: { sourceId: w.home.storage.id },
+    });
+    const keeper = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_1`, 'filler', {
+        work: 0, carry: 16, data: { sourceId: w.home.storage.id },
+    });
+    keeper.store = store(0, 800);
+    w.home.memory.creepConfig[keeper.name] = { role: 'filler', name: keeper.memory.name,
+        data: keeper.memory.data, development: { carryParts: 16, fullBody: true } };
+    assert.equal(w.retire(old), true);
+    assert.deepEqual(w.calls, [], 'a full room cannot authorize recycling loaded energy');
+    w.home.terminal = w.structure('terminal', 'terminal', 15, 16, 0, 1000);
+    assert.equal(w.retire(old), true);
+    assert.deepEqual(w.calls, [{ kind: 'transfer', name: old.name, id: w.home.terminal.id }]);
+});
+
+test('Storage fleet shrink waits for actual full capacity and cannot retire the last or a Source carrier', () => {
+    const w = transitionWorld({ level: 6 });
+    w.home.storage = w.structure('storage', 'storage', 15, 15, 500, 10000);
+    const old = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_0`, 'filler', {
+        work: 0, carry: 16, data: { sourceId: w.home.storage.id },
+    });
+    assert.equal(w.retire(old), false, 'an empty refreshed catalog cannot remove the last carrier');
+    const keeper = w.unit(`${w.home.name}_DEVELOP_FILLER_STORAGE_1`, 'filler', {
+        work: 0, carry: 16, data: { sourceId: w.home.storage.id }, spawning: true,
+    });
+    keeper.store = store(0, 800);
+    w.home.memory.creepConfig[keeper.name] = { role: 'filler', name: keeper.memory.name,
+        data: keeper.memory.data, development: { carryParts: 16, fullBody: true } };
+    assert.equal(w.retire(old), false, 'a planned or spawning successor is not usable delivery');
+    keeper.spawning = false; keeper.room = w.remote;
+    assert.equal(w.retire(old), false, 'the remaining carrier must be inside its home');
+    keeper.room = w.home; keeper.store = store(0, 750);
+    assert.equal(w.retire(old), false, 'a smaller surviving body does not cover the published capacity');
+    keeper.store = store(0, 800); keeper.memory.boostPlan = { steps: [{ resource: 'KH', parts: 16 }] };
+    assert.equal(w.retire(old), false, 'boost preparation has not released the carrier for work');
+    keeper.memory.boostPlan.completed = true;
+    assert.equal(w.retire(old), true);
+    w.calls.length = 0;
+    const source = w.unit(`${w.home.name}_DEVELOP_FILLER_source_0`, 'filler', {
+        work: 0, carry: 16, data: { sourceId: w.source.id, mineId: w.source.id },
+    });
+    assert.equal(w.retire(source), false, 'normal Source transport is independent of distribution shrink');
+    assert.deepEqual(w.calls, []);
+});
+
 test('one mining seat safely hands over to its affordable published quota without waiting for an impossible fifth WORK', () => {
     const w = transitionWorld({ level: 2 });
     w.home.energyCapacityAvailable = 550;

@@ -536,7 +536,8 @@ test('the actual two-mine publisher funds full fleet upkeep once while old and n
     assert.equal(observed.income, 20);
     const total = () => observed.upkeep + observed.maintenance + observed.repairing + observed.building + observed.upgrading;
     assert.ok(total() <= 20, 'complete fleet births and all native work fit the arrived source income');
-    assert.equal(byRole(configs, 'builder')[0].development.workParts, 1);
+    assert.equal(byRole(configs, 'builder').length, 0, 'ordinary construction waits when only controller work fits after fleet upkeep');
+    assert.ok(requestedWork(byRole(configs, 'upgrader')) >= 1);
     for (const miner of miners) miner.ticksToLive = 180;
     configs = state.release();
     assert.equal(byRole(configs, 'harvester').length, 4, 'both paid predecessors and their full successors are catalogued');
@@ -742,7 +743,7 @@ test('remote upgrade income requires an arrived miner, a visible Source and a li
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 0);
 });
 
-test('construction budgets lower sustainable upgrade WORK and use one worker for road-only jobs', () => {
+test('construction budgets retain controller work and defer unfunded road-only construction', () => {
     const home = room({ capacity: 1300, level: 4 });
     home.containers = [structure('controller-container', 'container', 38, 40, 500)];
     const state = makeWorld(home, { creeps: { miner: worker(home) } });
@@ -755,8 +756,8 @@ test('construction budgets lower sustainable upgrade WORK and use one worker for
     assert.ok(requestedWork(byRole(configs, 'upgrader')) < peaceful);
     home.constructionSites = [{ id: 'road-site', structureType: 'road' }];
     configs = state.release();
-    assert.equal(byRole(configs, 'builder').length, 1);
-    assert.equal(byRole(configs, 'builder')[0].development.workParts, state.policy.building.roadOnlyWorkParts);
+    assert.equal(byRole(configs, 'builder').length, 0, 'a full constructor and its first build action do not fit after the upgrade floor');
+    assert.ok(requestedWork(byRole(configs, 'upgrader')) >= 1);
 });
 
 test('20 real energy per tick funds at most one construction WORK until Storage exceeds its reserve', () => {
@@ -783,27 +784,21 @@ test('20 real energy per tick funds at most one construction WORK until Storage 
     assert.ok(requestedWork(builders) <= 8);
 });
 
-test('high-stock Storage transport covers its bonus upgrade rate or stops at the configured fleet capacity', () => {
+test('high-stock Storage keeps one full distributor until a real controller worker needs more transport', () => {
     for (const capacity of [2300, 300]) {
         const home = room({ capacity, level: 4 });
         home.storage = structure('storage', 'storage', 1, 1, 100000);
         home.containers = [structure('controller-container', 'container', 38, 40, 1000)];
         const state = makeWorld(home);
         const carriers = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
-        const trip = carriers[0].development.travelTicks;
-        const burst = state.policy.upgrading.maximumBonusWorkParts;
-        const wanted = Math.ceil(trip * burst / 50);
         const bodyLimit = state.loader.load('creep/developmentBodies').developmentPartCapacity(home, 'filler', 'carry');
-        const fleetLimit = bodyLimit * state.policy.hauling.maximumCreepsPerSource;
-        const carry = carriers.reduce((sum, config) => sum + config.development.carryParts, 0);
-        assert.equal(carry, Math.min(wanted, fleetLimit));
-        assert.ok(carriers.length <= state.policy.hauling.maximumCreepsPerSource);
-        assert.ok(carriers.every(config => config.development.carryParts <= bodyLimit));
-        if (wanted <= fleetLimit) assert.ok(carry * 50 / trip >= burst);
+        assert.equal(carriers.length, 1, 'stock and future upgrade income do not create idle fleets');
+        assert.equal(carriers[0].development.carryParts, bodyLimit);
+        assert.equal(carriers[0].spawnPriority, 2, 'the first distributor can commission consumers');
     }
 });
 
-test('mine trips terminate at Storage and a low-stock distribution fleet covers real imports before bonus WORK', () => {
+test('mine trips terminate at Storage and imports without consumers retain one full distributor', () => {
     const home = room({ capacity: 1300, level: 4 });
     home.storage = structure('storage', 'storage', 12, 10, 500);
     home.containers = [structure('controller-container', 'container', 38, 40, 300)];
@@ -813,9 +808,9 @@ test('mine trips terminate at Storage and a low-stock distribution fleet covers 
     const delivery = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
     assert.ok(imports.length > 0);
     assert.ok(imports.every(config => config.development.travelTicks === Math.ceil((10 * 2 + 2) * state.policy.hauling.travelMargin)));
-    const wanted = Math.ceil(delivery[0].development.travelTicks * 10 / 50);
-    assert.equal(delivery.reduce((sum, config) => sum + config.development.carryParts, 0), wanted);
-    assert.ok(wanted > state.policy.bodies.defaultHaulerCarryParts);
+    const bodyLimit = state.loader.load('creep/developmentBodies').developmentPartCapacity(home, 'filler', 'carry');
+    assert.equal(delivery.length, 1);
+    assert.equal(delivery[0].development.carryParts, bodyLimit);
     assert.equal(requestedWork(byRole(configs, 'upgrader')), 0, 'planned distribution capacity is not yet live throughput');
 });
 
@@ -869,8 +864,9 @@ test('native Source Link input bypasses Storage distributors without counting th
     let configs = state.release();
     assert.ok(requestedWork(byRole(configs, 'upgrader')) <= Math.floor(10 * state.policy.upgrading.incomeShare));
     const fleet = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
-    assert.equal(fleet.reduce((sum, config) => sum + config.development.carryParts, 0), state.policy.bodies.defaultHaulerCarryParts,
-        'native direct generation is not also planned as an imported Storage stream');
+    assert.equal(fleet.length, 1, 'native direct generation is not also planned as an imported Storage stream');
+    assert.equal(fleet[0].development.carryParts,
+        state.loader.load('creep/developmentBodies').developmentPartCapacity(home, 'filler', 'carry'));
     const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
     distributor.store = store(0, fleet[0].development.travelTicks * 30); state.game.creeps.distributor = distributor;
     assert.ok(requestedWork(byRole(state.release(), 'upgrader')) <= Math.floor(10 * state.policy.upgrading.incomeShare));
@@ -880,7 +876,7 @@ test('native Source Link input bypasses Storage distributors without counting th
     assert.equal(requestedWork(byRole(state.release(), 'upgrader')), 0, 'an inactive native path needs real Storage distribution');
 });
 
-test('remote imports grow the Storage distribution fleet and remain constrained by its live capacity beside an empty Link', () => {
+test('remote imports retain one Storage distributor and remain constrained by its live capacity beside an empty Link', () => {
     const home = room({ capacity: 1300, level: 6 });
     home.storage = structure('storage', 'storage', 24, 24, 500);
     home.controllerLink = structure('controller-link', 'link', 38, 40, 0); home.links = [home.controllerLink];
@@ -896,10 +892,65 @@ test('remote imports grow the Storage distribution fleet and remain constrained 
     assert.equal(requestedWork(byRole(configs, 'upgrader')), 0);
     const fleet = byRole(configs, 'filler').filter(config => config.data.sourceId === home.storage.id);
     const trip = fleet[0].development.travelTicks;
-    assert.equal(fleet.reduce((sum, config) => sum + config.development.carryParts, 0), Math.ceil(trip * 5 / 50));
+    assert.equal(fleet.length, 1);
+    assert.equal(fleet[0].development.carryParts,
+        state.loader.load('creep/developmentBodies').developmentPartCapacity(home, 'filler', 'carry'));
     const distributor = worker(home, { role: 'filler', work: 0, name: 'storage-distributor', data: { sourceId: home.storage.id } });
     distributor.store = store(0, trip * 4); state.game.creeps.distributor = distributor;
     assert.ok(requestedWork(byRole(state.release(), 'upgrader')) <= Math.floor(4 * state.policy.upgrading.incomeShare));
+});
+
+test('arrived and spawning full upgraders grow the Storage fleet only to their funded delivery need', () => {
+    for (const spawning of [false, true]) {
+        const home = room({ capacity: 2300, level: 4 });
+        home.storage = structure('storage', 'storage', 1, 1, 100000);
+        home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+        const upgrader = worker(home, { role: 'upgrader', work: 20, name: 'committed-upgrader', spawning });
+        upgrader.memory.development = { fullBody: true };
+        const miner = worker(home);
+        const state = makeWorld(home, { creeps: { miner, upgrader } });
+        const fleet = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
+        assert.equal(fleet.length, 2, 'a committed large worker can need a second distributor before more workers are published');
+        assert.equal(fleet[0].spawnPriority, 2);
+        assert.equal(fleet[1].spawnPriority, state.policy.hauling.expansionPriority);
+        assert.equal(fleet[1].development.replacement, undefined, 'optional expansion cannot claim a recovery deadline');
+        assert.ok(fleet.every(config => config.development.fullBody));
+    }
+});
+
+test('completed aid and unfunded WORK cannot expand Storage transport, while active aid can', () => {
+    const home = room({ capacity: 1300, level: 4 });
+    home.storage = structure('storage', 'storage', 1, 1, 100000);
+    home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+    const aid = worker(home, { role: 'sBuilder', work: 15, name: 'aid', data: {
+        unitKind: 'builder', phase: 'work', task: { targetRoom: home.name, targetShard: 'shard1', targetLevel: 6 },
+    } });
+    const state = makeWorld(home, { creeps: { aid } });
+    const fleet = () => byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
+    assert.equal(fleet().length, 3, 'an existing aid upgrade task uses its real WORK and available stock');
+    aid.memory.data.done = true;
+    assert.equal(fleet().length, 1, 'finished aid cannot create idle transport capacity');
+    aid.memory.data.done = false; home.storage.store.energy = 500;
+    assert.equal(fleet().length, 1, 'existing WORK without income or spendable stock does not justify extra carriers');
+});
+
+test('idle overlapping Storage fleets retain the healthiest full carrier without renewing surplus deadlines', () => {
+    const home = room({ capacity: 1600, level: 6 });
+    home.storage = structure('storage', 'storage', 24, 24, 300000);
+    home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+    const state = makeWorld(home, { automaticHauling: false });
+    for (const [index, ttl] of [190, 700, 1000].entries()) {
+        const carrier = worker(home, { role: 'filler', work: 0, ttl,
+            name: `${home.name}_DEVELOP_FILLER_STORAGE_${index}`, data: { sourceId: home.storage.id } });
+        carrier.memory.development = { fullBody: true };
+        carrier.name = state.demand.createCreepName('filler', carrier.memory.name);
+        carrier.store = store(0, 800); state.game.creeps[carrier.name] = carrier;
+    }
+    const fleet = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
+    assert.equal(fleet.length, 1);
+    assert.equal(fleet[0].name, `${home.name}_DEVELOP_FILLER_STORAGE_2`);
+    assert.equal(fleet[0].development.carryParts, 16);
+    assert.equal(fleet[0].development.replacement, undefined, 'the aging surplus unit cannot reserve another birth');
 });
 
 test('development Storage hubs publish one legacy-name manager for either a center Link or Terminal', () => {

@@ -31,6 +31,7 @@ export const developmentPolicy = {
     },
     building: { maximumCreeps: 2, workPartsPerCreep: 4, roadOnlyWorkParts: 1, infrastructureMinimumCapacity: 550, firstCreepPriority: 0.75 },
     logistics: { controllerRefillRatio: 0.75, minimumTowerEnergy: 500, emergencySpawnEnergy: 300 },
+    consumers: { missingRolePriority: 2.55 },
     bodies: {
         minerWorkParts: 5,
         stationaryCarryTicks: 2,

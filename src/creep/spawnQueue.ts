@@ -7,6 +7,7 @@ import { previewBodySelection, selectCreepBody } from './bodySelection'
 import { developmentPolicy } from 'settings/development'
 import { isSpawnEnergyCarrier } from './spawnEnergyCarrier'
 import { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
+import { prioritizeDevelopmentConsumers } from './developmentConsumerPriority'
 export { prioritizeDevelopmentRecovery } from './developmentRecoveryPriority'
 
 export function buildSpawnQueue(
@@ -30,6 +31,8 @@ export function buildSpawnQueue(
     if (creepSpawnQueue == undefined || creepSpawnQueue.length == 0) {
         return []
     }
+
+    creepSpawnQueue = prioritizeDevelopmentConsumers(room, creepSpawnQueue, creeps)
 
     const fillers: Creep[] = [], harvesters: Creep[] = []
     for (const name in creeps) {

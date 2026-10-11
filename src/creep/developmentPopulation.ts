@@ -2,7 +2,6 @@ import { addCreepConfig, createCreepName } from './demand'
 import { developmentPolicy as policy } from 'settings/development'
 import { controllerEnergyBuffer, controllerUpgradeSeatCount } from './developmentLogistics'
 import { getSourceMiningWorkTarget } from './developmentEconomy'
-import { developmentRemotePolicy } from 'settings/developmentRemotes'
 import { harvestWorkParts, energyCarryCapacity } from './bodyEffectiveness'
 import { bodyPolicy } from 'settings/bodyPolicy'
 import { rolePolicy } from 'settings/rolePolicy'
@@ -14,6 +13,7 @@ import { developmentPartCapacity } from './developmentBodies'
 import { developmentReplacementPlan, developmentReplacementLead, markDevelopmentReplacement,
     developmentReplacementFunding, DevelopmentReplacementPlan } from './developmentReplacement'
 import { applyDevelopmentEconomyBudget, developmentBodyCostCeiling } from './developmentEconomyBudget'
+import { getDevelopmentRemoteEconomy } from './developmentRemoteEconomy'
 
 function workParts(creep: Creep): number { return creep.getActiveBodyparts(WORK) }
 function range(first: RoomPosition, second: RoomPosition): number {
@@ -219,7 +219,7 @@ function releaseMining(room: Room, supplies: LocalMiningSupply[], plan: Developm
 /** Reusable birth slots provide a full successor without cancelling the old carrier's work. */
 function releaseHaulingFleet(room: Room, creeps: Creep[], prefix: string, count: number, data: FillerData,
     totalCarry: number, plan: DevelopmentReplacementPlan, trip: number, destination: RoomPosition,
-    priority?: number): void {
+    priority?: number | ((index: number) => number | undefined)): void {
     const residents = creeps.filter(creep => creep.memory.role === 'filler' &&
         creep.memory.name?.startsWith(prefix) && /^\d+$/.test(creep.memory.name.slice(prefix.length)))
     const usable = residents.filter(creep => creep.getActiveBodyparts(CARRY) > 0 && creep.getActiveBodyparts(MOVE) > 0)
@@ -238,36 +238,10 @@ function releaseHaulingFleet(room: Room, creeps: Creep[], prefix: string, count:
             name = `${prefix}${nextIndex++}`
         }
         const config = publish(room, 'filler', name, data,
-            { carryParts: Math.min(plan.carry, Math.max(1, totalCarry - index * plan.carry)), travelTicks: trip }, priority)
+            { carryParts: Math.min(plan.carry, Math.max(1, totalCarry - index * plan.carry)), travelTicks: trip },
+            typeof priority === 'function' ? priority(index) : priority)
         if (!Game.creeps[createCreepName('filler', name)]) markDevelopmentReplacement(config, predecessors[predecessorIndex++])
     }
-}
-
-/** 只计已到岗且有运工服务的自动外矿，避免用纸面收入孵化过量升级工。 */
-function remoteIncome(room: Room, creeps: Creep[]): number {
-    let income = 0
-    const sources = new Set<string>()
-    for (const creep of creeps) {
-        const data = (creep.memory.data as { developmentRemote?: {
-            homeRoom: string; targetRoom: string; kind: string; source?: { id: string; x: number; y: number; travelTicks?: number }
-        } }).developmentRemote
-        if (data?.homeRoom != room.name || data.kind != 'harvester' || !data.source || creep.spawning ||
-            creep.room.name != data.targetRoom || Math.max(Math.abs(creep.pos.x - data.source.x), Math.abs(creep.pos.y - data.source.y)) > 1 || sources.has(data.source.id)) continue
-        const state = room.memory.developmentRemotes
-        const intel = state?.intel?.[data.targetRoom]
-        if (!state?.selectedRooms?.includes(data.targetRoom) || intel?.status !== 'safe' || Game.time < intel.seenAt ||
-            Game.time - intel.seenAt >= developmentRemotePolicy.intelMaxAge || !intel.sources.some(source => source.id === data.source!.id)) continue
-        const haulers = creeps.filter(candidate => !candidate.spawning &&
-            (candidate.memory.data as { developmentRemote?: typeof data }).developmentRemote?.kind == 'hauler' &&
-            (candidate.memory.data as { developmentRemote?: typeof data }).developmentRemote?.source?.id == data.source!.id)
-        const transport = haulers.reduce((total, hauler) => total + energyCarryCapacity(hauler), 0) /
-            Math.max(1, data.source.travelTicks || developmentRemotePolicy.travelTicksPerRoom * 2)
-        if (transport <= 0) continue
-        sources.add(data.source.id)
-        const source = Game.getObjectById<Source>(data.source.id)
-        if (source) income += Math.min(source.energyCapacity / ENERGY_REGEN_TIME, harvestWorkParts(creep) * HARVEST_POWER, transport)
-    }
-    return income
 }
 
 /** 沿用已建成的 63bot 资源容器与控制器容器，不移动任何建筑。 */
@@ -304,10 +278,11 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         }
         return fillerPlan
     }
-    const remote = remoteIncome(room, creeps)
+    const remoteEconomy = getDevelopmentRemoteEconomy(room, creeps)
+    const remote = remoteEconomy.income
     const income = local.income + remote
     const lifetime = typeof CREEP_LIFE_TIME === 'number' ? CREEP_LIFE_TIME : 1500
-    let essentialUpkeep = room.sources.reduce((total, source) => total + Math.min(policy.mining.maximumCreepsPerSource,
+    let essentialUpkeep = remoteEconomy.upkeep + room.sources.reduce((total, source) => total + Math.min(policy.mining.maximumCreepsPerSource,
         Math.max(1, source.pos.getFreeSpace().length), Math.ceil(getSourceMiningWorkTarget(source) / Math.max(1, miningCapacity))) * miningPlan.cost / lifetime, 0)
     const stored = room.storage?.store[RESOURCE_ENERGY] || 0
     // RCL6 boosts and RCL7 factories need a mobile native mover independent of the manager's seat.
@@ -356,12 +331,25 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     }
     if (room.storage) {
         const trip = distributionTrip
-        const carry = Math.max(policy.bodies.defaultHaulerCarryParts, Math.ceil(trip * (imports + burst + importedBacklog) / CARRY_CAPACITY))
         const plan = carryingPlan({ sourceId: room.storage.id }), capacityCarry = Math.max(1, plan.carry)
+        // One full distributor can commission consumers and keep Spawn/Tower jobs supplied.
+        // Extra carriers serve real controller workers; builders and repairers withdraw
+        // their own Storage batches and incoming energy alone is not a delivery task.
+        const committedWork = Object.values(Game.creeps).filter(creep =>
+            creep.room.name === room.name && creep.getActiveBodyparts(CARRY) > 0 &&
+            (creep.memory.role === 'upgrader' && creep.memory.spawnRoom === room.name || hasAidUpgradeTask(creep, room)))
+            .reduce((total, creep) => total + workParts(creep), 0)
+        const managerUpkeep = room.centerLink || room.terminal ? developmentBodyCostCeiling(room, 'manager') / lifetime : 0
+        const spendableIncome = Math.max(0, income - essentialUpkeep - plan.cost / lifetime - managerUpkeep - 1)
+        const fundedWork = Math.floor(spendableIncome * (room.constructionSites.length > 0
+            ? policy.upgrading.incomeShareWhileBuilding : policy.upgrading.incomeShare)) + burst + local.backlogWork
+        const deliveryRate = Math.max(0, Math.min(committedWork, fundedWork) - local.directIncome)
+        const carry = Math.max(capacityCarry, Math.ceil(trip * deliveryRate / CARRY_CAPACITY))
         const count = Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(carry / capacityCarry))
         essentialUpkeep += count * plan.cost / lifetime
         releaseHaulingFleet(room, creeps, `${room.name}_DEVELOP_FILLER_STORAGE_`, count,
-            { sourceId: room.storage.id }, carry, plan, trip, room.storage.pos)
+            { sourceId: room.storage.id }, carry, plan, trip, room.storage.pos,
+            index => index === 0 ? undefined : policy.hauling.expansionPriority)
         if (room.centerLink || room.terminal) {
             publish(room, 'manager', `${room.name}_MANAGER`, {},
                 { carryParts: policy.bodies.defaultHaulerCarryParts, stationary: true })
