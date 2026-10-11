@@ -83,9 +83,18 @@ function unoccupied(creep: Creep, x: number, y: number): boolean {
         !(creep.room.lookForAt?.(LOOK_CREEPS, x, y) || []).some(unit => unit.name != creep.name)
 }
 
-/** Keep a seated miner still; moving miners reserve separate source/buffer intersections. */
+/** Prefer a free Container tile; keep productive fallback seats while it is occupied. */
 function miningPosition(creep: Creep, source: Source, buffer: StructureLink | StructureContainer): { position?: RoomPosition; occupied: boolean } {
     const direct = creep.store.getCapacity(RESOURCE_ENERGY) === 0 && buffer.structureType === STRUCTURE_CONTAINER
+    // A miner may have arrived beside the Container before it was built or while
+    // another unit occupied it. Recheck its exact tile before retaining that old seat.
+    if (buffer.structureType === STRUCTURE_CONTAINER && !creep.pos.isEqualTo(buffer)) {
+        const seated = creep.room.containers.some(container => creep.pos.isEqualTo(container) && source.pos.isNearTo(container))
+        // Multiple buffers must not pull a miner off another valid Container.
+        if (seated) return { position: creep.pos, occupied: false }
+        if (unoccupied(creep, buffer.pos.x, buffer.pos.y) && walkable(creep, source, buffer.pos.x, buffer.pos.y))
+            return { position: buffer.pos, occupied: false }
+    }
     if (creep.pos.isNearTo(source) && creep.pos.isNearTo(buffer) && (!direct || creep.pos.isEqualTo(buffer)))
         return { position: creep.pos, occupied: false }
     let selected: RoomPosition | undefined, preferred = Infinity, distance = Infinity
@@ -122,7 +131,8 @@ function resolveStation(creep: Creep, source: Source): MiningStation | null | un
         const seat = station == undefined ? miningPosition(creep, source, container) : undefined
         occupied = occupied || seat?.occupied === true
         const position = station?.position || seat?.position
-        if (position == undefined || !position.isNearTo(container)) continue
+        if (position == undefined || !position.isNearTo(container) ||
+            !position.isEqualTo(container) && creep.store.getCapacity(RESOURCE_ENERGY) === 0) continue
         const energy = container.store[RESOURCE_ENERGY]
         if (station == undefined) station = { position, container }
         if (energy < minimumEnergy) { station.container = container; minimumEnergy = energy }

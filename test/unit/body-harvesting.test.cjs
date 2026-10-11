@@ -205,6 +205,7 @@ test('a full-body development miner switches from Container batches to full-carr
 for (const remote of [false, true]) for (const bufferType of ['link', 'container']) {
     test(`${remote ? 'remote' : 'RCL8'} new 5WORK miner harvests continuously and batches 40 energy every four ticks to a ${bufferType}`, () => {
         const w = world({ remote }); const buffer = w.structure('buffer', bufferType, 11, 11);
+        if (bufferType === 'container') w.creep.pos = buffer.pos;
         // RCL8 has no filler and zero spawn energy; that must not disturb this workstation.
         const spawn = w.structure('spawn', 'spawn', 30, 30, { capacity: 300 }); w.room.spawns.push(spawn);
         w.creep.memory.working = true;
@@ -339,6 +340,99 @@ test('a new miner moves to the source/buffer intersection even when its old read
     assert.equal(seat.isNearTo(w.source), true); assert.equal(seat.isNearTo(link), true);
     assert.equal(w.creep.memory.ready, false);
     w.creep.pos = seat; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+});
+
+for (const remote of [false, true]) test(`${remote ? 'remote' : 'full developing'} miner leaves its old adjacent seat for a free Container`, () => {
+    const w = world({ remote, level: 6, x: 10, y: 11, energy: 0 });
+    w.creep.memory.development = { fullBody: true, stationary: true, workParts: 5 };
+    const container = w.structure('mine-container', 'container', 11, 10);
+    assert.equal(w.behavior.prepare(w.creep), false);
+    assert.equal(w.creep.memory.ready, false);
+    assert.deepEqual(w.actions, [{ type: 'move', x: 11, y: 10, roomName: w.room.name, range: 0 }]);
+    w.creep.pos = container.pos; w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+    w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true);
+    assert.deepEqual(w.actions, [], 'a miner already on the Container remains seated');
+});
+
+test('a Container occupant keeps adjacent mining productive until the exact seat becomes free', () => {
+    const w = world({ remote: true, x: 10, y: 11, energy: 40 });
+    const container = w.structure('mine-container', 'container', 11, 10);
+    const blocker = { name: 'carrier', pos: container.pos }; w.occupants.push(blocker);
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['transfer', 'harvest']);
+    assert.equal(w.actions[0].target, container);
+    w.occupants.pop(); w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), false);
+    assert.deepEqual(w.actions, [{ type: 'move', x: 11, y: 10, roomName: w.room.name, range: 0 }]);
+});
+
+test('a free Container is reserved for only one approaching miner in a tick', () => {
+    const w = world({ remote: true, x: 10, y: 11, energy: 0 });
+    w.structure('mine-container', 'container', 11, 10);
+    assert.equal(w.behavior.prepare(w.creep), false);
+    const second = { ...w.creep, name: 'second', memory: { ...w.creep.memory, ready: true }, pos: w.p(11, 11),
+        moveTo(target, options) { w.actions.push({ type: 'second-move', x: target.x, y: target.y, range: options.range }); return 0; } };
+    w.occupants.push(second);
+    assert.equal(w.behavior.prepare(second), true, 'the second miner retains its separate usable adjacent seat');
+    assert.equal(w.actions.filter(action => action.type.endsWith('move')).length, 1);
+});
+
+test('a zero-CARRY miner waits for an occupied Container instead of harvesting onto an adjacent tile', () => {
+    const w = world({ remote: true, x: 10, y: 11, carry: 0, energy: 0 });
+    const container = w.structure('mine-container', 'container', 11, 10);
+    w.occupants.push({ name: 'incumbent', pos: container.pos });
+    assert.equal(w.behavior.prepare(w.creep), false); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions, []);
+    w.occupants.pop(); w.game.time++;
+    assert.equal(w.behavior.prepare(w.creep), false);
+    assert.deepEqual(w.actions, [{ type: 'move', x: 11, y: 10, roomName: w.room.name, range: 0 }]);
+});
+
+for (const other of [[10, 11], [9, 10]]) test(`an already seated miner keeps its Container when another buffer at ${other} comes first`, () => {
+    const w = world({ remote: true, x: 11, y: 10, energy: 0 });
+    w.structure('other-container', 'container', other[0], other[1]);
+    w.structure('seated-container', 'container', 11, 10);
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+    w.room.containers.reverse(); w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true);
+    assert.deepEqual(w.actions, []);
+});
+
+test('a seated zero-CARRY miner uses its own Container condition rather than a lower-energy adjacent buffer', () => {
+    const w = world({ remote: true, x: 11, y: 10, carry: 0, energy: 0 });
+    const adjacent = w.structure('other-container', 'container', 10, 11, { energy: 0 });
+    const seated = w.structure('seated-container', 'container', 11, 10, { energy: 100, hits: 5000 });
+    let freeReads = 0, bodyReads = 0;
+    const body = w.creep.body;
+    w.creep.store = { energy: 0, getCapacity: () => 0, getUsedCapacity: () => 0,
+        getFreeCapacity() { freeReads++; return 0; } };
+    Object.defineProperty(w.creep, 'body', { get() { bodyReads++; return body; } });
+    w.source.energy = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions, []);
+    assert.equal(freeReads, 1, 'the depleted source still checks the critical Container underfoot');
+    // A zero-CARRY miner cannot withdraw repair energy. After another worker repairs
+    // its real buffer, an adjacent critical Container must not defeat the idle fast path.
+    seated.hits = 5001; adjacent.hits = 5000;
+    w.game.time++; w.actions.length = 0; freeReads = 0; bodyReads = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions, []);
+    assert.equal(freeReads, 0); assert.equal(bodyReads, 0);
+    w.source.energy = 3000; w.room.containers.reverse(); w.game.time++; w.actions.length = 0;
+    assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
+    assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
+});
+
+test('an obstructed Container tile does not pull a carrier miner away from its productive adjacent seat', () => {
+    const w = world({ remote: true, x: 10, y: 11, energy: 0 });
+    w.structure('mine-container', 'container', 11, 10);
+    w.structure('hostile-rampart', 'rampart', 11, 10, { my: false });
     assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
     assert.deepEqual(w.actions.map(action => action.type), ['harvest']);
 });
@@ -535,6 +629,11 @@ for (const linked of [false, true]) test('a mature ' + (linked ? 'Link' : 'Conta
     assert.equal(w.actions[0].target, extension);
     w.game.creeps.carrier = { room: w.room, spawning: false, memory: { role: 'filler', spawnRoom: w.room.name }, getActiveBodyparts: () => 1 };
     w.creep.pos = w.p(10, 11); w.creep.store.energy = 40; w.actions.length = 0; w.game.time++;
+    if (!linked) {
+        assert.equal(w.behavior.prepare(w.creep), false);
+        assert.deepEqual(w.actions, [{ type: 'move', x: 11, y: 11, roomName: w.room.name, range: 0 }]);
+        w.creep.pos = buffer.pos; w.actions.length = 0; w.game.time++;
+    }
     assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
     assert.equal(w.actions[0].type, 'transfer'); assert.equal(w.actions[0].target, buffer, 'arrival returns the mine to its regular workstation');
 });
@@ -556,6 +655,7 @@ test('a mature miner from another home room does not rescue a foreign room carri
     const extension = w.structure('extension', 'extension', 20, 21, { capacity: 50 });
     w.room.spawns.push(spawn); w.room.extensions.push(extension); w.room.energyAvailable = 300; w.room.energyCapacityAvailable = 800;
     w.creep.memory.spawnRoom = 'W2N1'; w.room.memory.creepConfig = { carrier: { role: 'filler', spawnRoom: w.room.name } };
+    w.creep.pos = buffer.pos;
     assert.equal(w.behavior.prepare(w.creep), true); w.behavior.source(w.creep);
     assert.equal(w.actions[0].target, buffer);
     assert.equal(w.actions.some(action => action.target === extension), false);
