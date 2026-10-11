@@ -8,9 +8,12 @@ export function isDevelopingRoom(room: Room | undefined): boolean {
         developmentPolicy.enabled && room.memory.fastUpgrade !== false
 }
 
-/** A living body cannot shrink: spread its WORK intents over ticks to honor a reduced budget. */
+/** Spend stored surplus with full bodies; honor the income budget near the recovery reserve. */
 export function developmentWorkAllowed(creep: Creep): boolean {
     if (!isDevelopingRoom(creep.room)) return true
+    // Income quotas size future births. Paid-for consumers can use real surplus
+    // every tick without borrowing the Terminal reserve or delaying their next action.
+    if ((creep.room.storage?.store[RESOURCE_ENERGY] || 0) > developmentPolicy.upgrading.storageReserve) return true
     const profile = creep.room.memory.creepConfig?.[creep.name]?.development
     // Legacy upgraders keep their paid-for behaviour; automatically spawned large bodies honor their income budget.
     if (creep.memory.role === 'upgrader' && !creep.memory.development?.fullBody) return true
