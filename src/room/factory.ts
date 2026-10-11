@@ -13,6 +13,7 @@ interface RecipeData { source: Recipe['components']; components: Component[]; in
 interface PlanningStock {
     capacity: number
     local(resource: ResourceConstant): number
+    total(resource: ResourceConstant): number
     available(resource: ResourceConstant): number
     global(resource: ResourceConstant): number
     cycles(recipe: Recipe): number
@@ -20,7 +21,7 @@ interface PlanningStock {
 
 export interface FactoryProductionState {
     resourceType: FactoryResource
-    mode: 'commodity' | 'compression'
+    mode: 'commodity' | 'compression' | 'decompression'
     remaining: number
     inputs: Record<string, number>
     createdAt: number
@@ -138,7 +139,7 @@ function planningStock(factory: StructureFactory, getInventory?: () => ResourceI
     const room = factory.room, warehouse = isWarehouseRoom(room)
     const storage = room.storage
     const amounts = new Map<ResourceConstant, number>(), available = new Map<ResourceConstant, number>()
-    const globals = new Map<ResourceConstant, number>(), cycles = new Map<Recipe, number>()
+    const totals = new Map<ResourceConstant, number>(), globals = new Map<ResourceConstant, number>(), cycles = new Map<Recipe, number>()
     let inventory: ResourceInventory | undefined
     const cargo: Partial<Record<ResourceConstant, number>> = {}
     for (const creep of carriers(room)) {
@@ -152,6 +153,11 @@ function planningStock(factory: StructureFactory, getInventory?: () => ResourceI
             if (!amounts.has(resource)) amounts.set(resource, (storage?.store[resource] || 0) +
                 getTerminalResourceAmount(room, resource) + factoryAmount(factory, resource) + (cargo[resource] || 0))
             return amounts.get(resource)!
+        },
+        total(resource) {
+            if (!totals.has(resource)) totals.set(resource,
+                (inventory ||= getInventory ? getInventory() : createResourceInventory()).roomAmount(room, resource))
+            return totals.get(resource)!
         },
         available(resource) {
             if (!available.has(resource)) {
@@ -238,9 +244,39 @@ function chooseCompression(factory: StructureFactory, stock: PlanningStock): Fac
     }
     return selected
 }
+function decompressionAllowed(room: Room, resource: FactoryResource): boolean {
+    const compressed = compressedMinerals[resource as ResourceConstant]
+    const recipe = COMMODITIES[resource]
+    return isWarehouseRoom(room) && !!compressed && !!recipe && recipe.amount > 0 &&
+        (recipe.components[compressed] || 0) > 0
+}
+function decompressionCycles(factory: StructureFactory, resource: FactoryResource, stock: PlanningStock): number {
+    const recipe = COMMODITIES[resource]
+    const missing = resourcePolicy.warehouseRawMineralReserve - stock.total(resource)
+    return missing > 0 ? Math.min(stock.cycles(recipe), Math.ceil(missing / recipe.amount)) : 0
+}
+/** Restore warehouse feedstock from compressed reserves before spending raw surpluses. */
+function chooseDecompression(factory: StructureFactory, stock: PlanningStock): FactoryResource | undefined {
+    if (!isWarehouseRoom(factory.room)) return undefined
+    const effect = activePower(factory)
+    if (effect && effect.level !== factory.level) return undefined
+    let selected: FactoryResource | undefined, lowest = Infinity
+    for (const resource of [...basicMinerals, RESOURCE_GHODIUM] as FactoryResource[]) {
+        const compressed = compressedMinerals[resource]
+        const recipe = COMMODITIES[resource]
+        if (!compressed || !recipe || !(recipe.amount > 0) || !(recipe.components[compressed] > 0) ||
+            !matchingLevel(factory, recipe) || recipe.level && effect?.level !== recipe.level) continue
+        const ratio = stock.total(resource) / resourcePolicy.warehouseRawMineralReserve
+        if (ratio >= 1 || decompressionCycles(factory, resource, stock) <= 0) continue
+        if (!selected || ratio < lowest || ratio === lowest && resource.localeCompare(selected) < 0) {
+            selected = resource; lowest = ratio
+        }
+    }
+    return selected
+}
 function makePlan(factory: StructureFactory, resource: FactoryResource, mode: FactoryProductionState['mode'], stock: PlanningStock): FactoryProductionState {
     const recipe = COMMODITIES[resource]
-    const remaining = stock.cycles(recipe)
+    const remaining = mode === 'decompression' ? decompressionCycles(factory, resource, stock) : stock.cycles(recipe)
     return { resourceType: resource, mode, remaining, createdAt: Game.time,
         inputs: batchInputs(recipe, remaining) }
 }
@@ -281,16 +317,24 @@ export function planFactoryProduction(factory: StructureFactory, getInventory?: 
     let state = room.memory.factoryProduction
     if (state && (state.remaining <= 0 || !canProduceFactoryRecipe(factory, state.resourceType) ||
         state.mode === 'compression' && !compressionAllowed(room, state.resourceType) ||
+        state.mode === 'decompression' && (!decompressionAllowed(room, state.resourceType) ||
+            decompressionCycles(factory, state.resourceType, stock) === 0) ||
         stock.cycles(COMMODITIES[state.resourceType]) === 0)) state = undefined
-    // A newly available commodity preempts mineral compression immediately.
-    const commodity = !state || state.mode === 'compression' ? chooseCommodity(factory, stock) : undefined
+    // A newly available commodity preempts either mineral conversion immediately.
+    const commodity = !state || state.mode !== 'commodity' ? chooseCommodity(factory, stock) : undefined
     if (commodity) state = makePlan(factory, commodity, 'commodity', stock)
+    if (!state || state.mode === 'compression') {
+        const decompressed = chooseDecompression(factory, stock)
+        if (decompressed) state = makePlan(factory, decompressed, 'decompression', stock)
+    }
     if (!state) {
         const compressed = chooseCompression(factory, stock)
         if (compressed) state = makePlan(factory, compressed, 'compression', stock)
     }
     if (state) {
-        state.remaining = Math.min(state.remaining, stock.cycles(COMMODITIES[state.resourceType]))
+        const available = state.mode === 'decompression' ? decompressionCycles(factory, state.resourceType, stock) :
+            stock.cycles(COMMODITIES[state.resourceType])
+        state.remaining = Math.min(state.remaining, available)
         state.inputs = batchInputs(COMMODITIES[state.resourceType], state.remaining)
         room.memory.factoryProduction = state
     } else delete room.memory.factoryProduction
@@ -302,9 +346,11 @@ export function runFactoryProduction(factory: StructureFactory): void {
     if (!state || isRoomEvacuating(factory.room) || factory.cooldown > 0 ||
         productionTick === Game.time && consumed.has(factory.id) ||
         state.mode === 'compression' && !compressionAllowed(factory.room, state.resourceType) ||
+        state.mode === 'decompression' && !decompressionAllowed(factory.room, state.resourceType) ||
         !canProduceFactoryRecipe(factory, state.resourceType)) return
     const recipe = COMMODITIES[state.resourceType]
     const stock = planningStock(factory)
+    if (state.mode === 'decompression' && stock.total(state.resourceType) >= resourcePolicy.warehouseRawMineralReserve) return
     if (!components(recipe).every(([resource, amount]) => factory.store[resource] >= amount &&
         stock.available(resource) >= amount)) return
     // Ingredients are consumed first, so a full factory can produce a shrinking recipe.

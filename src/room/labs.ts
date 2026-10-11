@@ -177,14 +177,17 @@ export function updateLabReactionConfig(room: Room, getInventory?: () => Resourc
     const localTargets = warehouse ? [] : t3Resources.filter(resource =>
         local(resource) + incoming(resource) < resourcePolicy.t3Reserve)
     localTargets.sort((a, b) => local(a) + incoming(a) - local(b) - incoming(b) || global(a) - global(b))
-    const targets = localTargets.length > 0 ? localTargets : [...t3Resources].sort((a, b) => global(a) - global(b))
-    for (const target of targets) {
+    const tryTarget = (target: MineralBoostConstant, isLocal: boolean): boolean => {
         const current = local(target) + incoming(target)
-        const isLocal = localTargets.includes(target as MineralBoostConstant)
         const quantity = isLocal ? Math.min(productionBatch, resourcePolicy.t3Reserve - current) : productionBatch
         const remaining = Math.ceil(quantity / reactionUnit) * reactionUnit
-        if (tryCandidate({ target, targetAmount: current + remaining, local: isLocal, remaining })) return
+        return tryCandidate({ target, targetAmount: current + remaining, local: isLocal, remaining })
     }
+    for (const target of localTargets) if (tryTarget(target, true)) return
+    // Missing local ingredients must not idle Labs that can make another globally needed T3.
+    // Rank only after local shortages fail; global production has no inventory ceiling.
+    const globalTargets = t3Resources.filter(resource => !localTargets.includes(resource)).sort((a, b) => global(a) - global(b))
+    for (const target of globalTargets) if (tryTarget(target, false)) return
     delete config.productionPlan
     if (room.memory.productionReserve) delete room.memory.productionReserve.lab
     setLabReaction(room, undefined)

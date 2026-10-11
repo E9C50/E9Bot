@@ -51,8 +51,9 @@ function world(options = {}) {
             actions.push(['produce', resource]);
             if (options.produceResult !== undefined) return options.produceResult;
             intents.push(() => {
-                for (const [component, amount] of Object.entries(recipes[resource].components)) factory.store[component] -= amount;
-                factory.store[resource] = (factory.store[resource] || 0) + recipes[resource].amount;
+                const recipe = loader.globals.COMMODITIES[resource];
+                for (const [component, amount] of Object.entries(recipe.components)) factory.store[component] -= amount;
+                factory.store[resource] = (factory.store[resource] || 0) + recipe.amount;
             });
             return 0;
         },
@@ -74,8 +75,14 @@ function world(options = {}) {
             isWarehouseRoom: target => !!target.controller.isPowerEnabled && target.storage.store.getCapacity() >= 8000000,
             getGlobalResourceAmount: resource => Object.values(game.rooms).reduce((sum, target) => sum +
                 (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) + (target.factory?.store[resource] || 0), 0),
-            createResourceInventory: () => ({ globalAmount: resource => Object.values(game.rooms).reduce((sum, target) => sum +
-                (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) + (target.factory?.store[resource] || 0), 0) }),
+            createResourceInventory: () => ({
+                roomAmount: (target, resource) => (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) +
+                    (target.factory?.store[resource] || 0) + (target.labs || []).reduce((sum, lab) => sum + (lab.store[resource] || 0), 0) +
+                    Object.values(game.creeps).reduce((sum, creep) => sum + (['manager', 'processer'].includes(creep.memory.role) &&
+                        creep.room?.name === target.name ? creep.store[resource] || 0 : 0), 0),
+                globalAmount: resource => Object.values(game.rooms).reduce((sum, target) => sum +
+                    (target.storage?.store[resource] || 0) + (target.terminal?.store[resource] || 0) + (target.factory?.store[resource] || 0), 0),
+            }),
         },
     } });
     const production = loader.load('room/factory');
@@ -121,6 +128,245 @@ function measuredPlanning(available = true) {
     });
     return { ...w, metrics, resetMetrics() { for (const key in metrics) metrics[key] = 0; } };
 }
+
+function withDecompression(w) {
+    const compressed = { H: 'reductant', O: 'oxidant', U: 'utrium_bar', L: 'lemergium_bar',
+        K: 'keanium_bar', Z: 'zynthium_bar', X: 'purifier', G: 'ghodium_melt' };
+    w.loader.globals.COMMODITIES = { ...recipes, ...Object.fromEntries(Object.entries(compressed).map(([mineral, bar]) =>
+        [mineral, { amount: 500, cooldown: 20, components: { [bar]: 100, energy: 200 } }])) };
+    return w;
+}
+
+test('warehouse decompression replenishes any mapped raw mineral from local compressed stock', () => {
+    const compressed = { H: 'reductant', O: 'oxidant', U: 'utrium_bar', L: 'lemergium_bar',
+        K: 'keanium_bar', Z: 'zynthium_bar', X: 'purifier', G: 'ghodium_melt' };
+    for (const [mineral, bar] of Object.entries(compressed)) {
+        const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, [mineral]: 7000, [bar]: 55960 } }));
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction.resourceType, mineral);
+        assert.equal(w.room.memory.factoryProduction.mode, 'decompression');
+        assert.equal(w.room.memory.factoryProduction.remaining, 20);
+        assert.deepEqual({ ...w.room.memory.factoryProduction.inputs }, { [bar]: 2000, energy: 4000 });
+        assert.equal(w.room.memory.productionReserve.factory[bar], 2000);
+        assert.equal(w.room.memory.productionReserve.factory[mineral], undefined, 'restored raw output remains available to labs and terminal requests');
+    }
+});
+
+test('warehouse decompression selects the lowest replenishment ratio and resolves ties deterministically', () => {
+    const w = withDecompression(world({ warehouse: true, storage: {
+        energy: 100000, X: 50000, O: 100000, U: 0, purifier: 1000, oxidant: 1000,
+    } }));
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'X', 'the lower raw U stock has no compressed ingredient');
+    const tie = withDecompression(world({ warehouse: true, storage: { energy: 100000, purifier: 1000, ghodium_melt: 1000 } }));
+    tie.production.planFactoryProduction(tie.factory);
+    assert.equal(tie.room.memory.factoryProduction.resourceType, 'G', 'ghodium participates and equal ratios use the resource name');
+});
+
+test('commodities preempt warehouse decompression while raw replenishment preempts compression', () => {
+    const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, U: 301000, X: 7000 } }));
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.mode, 'compression');
+    w.storage.store.purifier = 1000;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'X');
+    assert.equal(w.room.memory.factoryProduction.mode, 'decompression');
+    w.storage.store.silicon = 20; w.storage.store.utrium_bar = 100;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'wire');
+    assert.equal(w.room.memory.factoryProduction.mode, 'commodity');
+    const ready = withDecompression(world({ warehouse: true, storage: {
+        energy: 100000, purifier: 1000, silicon: 20, utrium_bar: 100,
+    } }));
+    ready.production.planFactoryProduction(ready.factory);
+    assert.equal(ready.room.memory.factoryProduction.resourceType, 'wire', 'a fresh plan also retains commodity priority');
+});
+
+test('decompression batches cover only the raw deficit and do not oscillate into compression', () => {
+    for (const gap of [1, 500, 501, 1000]) {
+        const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, X: 300000 - gap },
+            factory: { purifier: 2000, energy: 4000 } }));
+        w.production.planFactoryProduction(w.factory);
+        const cycles = Math.ceil(gap / 500);
+        assert.equal(w.room.memory.factoryProduction.remaining, cycles);
+        for (let index = 0; index < cycles; index++) {
+            w.production.runFactoryProduction(w.factory);
+            assert.deepEqual(w.actions, [['produce', 'X']]);
+            w.nextTick();
+        }
+        const raw = w.storage.store.X + w.factory.store.X;
+        assert.ok(raw >= 300000 && raw < 300500);
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, 'the final partial gap never funds a complete reverse compression reaction');
+        w.production.runFactoryProduction(w.factory);
+        assert.deepEqual(w.actions, []);
+    }
+});
+
+test('warehouse decompression logistics supply actual inputs and native production restores the raw reserve', () => {
+    const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, X: 299500, purifier: 100 } }));
+    const worker = w.creep();
+    w.production.planFactoryProduction(w.factory);
+    const actions = [];
+    for (let index = 0; index < 6; index++) {
+        w.production.runFactoryLogistics(worker);
+        w.production.runFactoryProduction(w.factory);
+        actions.push(...w.actions);
+        w.nextTick();
+    }
+    assert.ok(actions.some(action => action[0] === 'withdraw' && action[3] === 'purifier' && action[4] === 100));
+    assert.ok(actions.some(action => action[0] === 'transfer' && action[2] === 'factory' && action[3] === 'energy'));
+    assert.equal(actions.filter(action => action[0] === 'produce' && action[1] === 'X').length, 1);
+    assert.equal(w.storage.store.X + (w.factory.store.X || 0) + (worker.store.X || 0), 300000);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+});
+
+test('decompression shrinks stale batches and execution immediately stops when other logistics fill the reserve', () => {
+    const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, X: 7000 },
+        factory: { purifier: 2000, energy: 4000 } }));
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.remaining, 20);
+    w.storage.store.X = 299500;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.remaining, 1);
+    assert.equal(w.room.memory.factoryProduction.inputs.purifier, 100);
+    w.storage.store.X = 300000;
+    w.production.runFactoryProduction(w.factory);
+    assert.deepEqual(w.actions, [], 'a stale plan cannot decompress after the raw target is already met');
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+});
+
+test('ordinary rooms never automatically decompress and losing warehouse status invalidates an old plan', () => {
+    const ordinary = withDecompression(world({ storage: { energy: 100000, X: 7000, purifier: 1000 } }));
+    ordinary.production.planFactoryProduction(ordinary.factory);
+    assert.equal(ordinary.room.memory.factoryProduction, undefined);
+    for (const change of ['power-disabled', 'ordinary-storage']) {
+        const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, X: 7000 },
+            factory: { purifier: 100, energy: 200 } }));
+        w.production.planFactoryProduction(w.factory);
+        if (change === 'power-disabled') w.room.controller.isPowerEnabled = false;
+        else w.storage.store = store({ energy: 100000, X: 7000 }, 1000000);
+        w.production.runFactoryProduction(w.factory);
+        assert.deepEqual(w.actions, []);
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined);
+    }
+});
+
+test('decompression keeps terminal energy plus boost, lab and outgoing compressed ingredients', () => {
+    const lowEnergy = withDecompression(world({ warehouse: true, storage: { energy: 199, purifier: 100 }, terminal: { energy: 50000 } }));
+    lowEnergy.production.planFactoryProduction(lowEnergy.factory);
+    assert.equal(lowEnergy.room.memory.factoryProduction, undefined);
+    const outgoing = { purifier: 200 };
+    const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, purifier: 500 }, outgoing,
+        memory: { boostNeed: { purifier: 100 }, productionReserve: { lab: { purifier: 100 } } } }));
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.remaining, 1, '500 minus 100 boost, 100 lab and 200 outgoing leaves one 100-input cycle');
+    w.room.memory.productionReserve.lab.purifier = 101;
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction, undefined);
+    w.room.memory.productionReserve.lab.purifier = 100;
+    w.factory.store.purifier = 100; w.storage.store.purifier = 400; w.factory.store.energy = 200;
+    w.production.planFactoryProduction(w.factory);
+    w.room.memory.boostNeed.purifier = 101;
+    w.production.runFactoryProduction(w.factory);
+    assert.deepEqual(w.actions, [], 'new reservations are rechecked before the native intent');
+});
+
+test('loaded decompression ingredients may use only energy above the 50000 terminal reserve', () => {
+    const w = withDecompression(world({ warehouse: true, storage: { X: 299500 }, terminal: { energy: 50000 },
+        factory: { purifier: 100, energy: 200 } }));
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.remaining, 1);
+    w.production.runFactoryProduction(w.factory);
+    w.nextTick();
+    assert.equal(w.terminal.store.energy, 50000);
+    assert.equal(w.factory.store.energy, 0);
+    assert.equal(w.storage.store.X + w.factory.store.X, 300000);
+});
+
+test('decompression requires a legal mapped reverse recipe, compatible power and sufficient factory capacity', () => {
+    for (const invalid of ['missing', 'wrong-component', 'zero-output', 'level', 'effect', 'capacity']) {
+        const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, purifier: 100 },
+            capacity: invalid === 'capacity' ? 200 : 50000 }));
+        if (invalid === 'missing') delete w.loader.globals.COMMODITIES.X;
+        if (invalid === 'wrong-component') w.loader.globals.COMMODITIES.X.components = { oxidant: 100, energy: 200 };
+        if (invalid === 'zero-output') w.loader.globals.COMMODITIES.X.amount = 0;
+        if (invalid === 'level') w.loader.globals.COMMODITIES.X.level = 1;
+        if (invalid === 'effect') w.factory.effects = [{ effect: 19, level: 1, ticksRemaining: 20 }];
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, invalid);
+    }
+});
+
+test('decompression counts raw stock already in the factory and reads shared local ingredients once per pass', () => {
+    const atTarget = withDecompression(world({ warehouse: true, storage: { energy: 100000, X: 299500, purifier: 100 },
+        factory: { X: 500 } }));
+    atTarget.production.planFactoryProduction(atTarget.factory);
+    assert.equal(atTarget.room.memory.factoryProduction, undefined);
+    const w = withDecompression(world({ warehouse: true, storage: { energy: 100000, purifier: 100, oxidant: 100 } }));
+    let energyReads = 0, capacityReads = 0;
+    for (const stock of [w.storage, w.terminal, w.factory]) stock.store = new Proxy(stock.store, { get(target, key) {
+        if (key === 'energy') energyReads++;
+        if (stock === w.factory && key === 'getCapacity') capacityReads++;
+        return target[key];
+    } });
+    const totalReads = [];
+    w.production.planFactoryProduction(w.factory, () => ({
+        roomAmount: (room, resource) => {
+            totalReads.push(resource);
+            return (room.storage.store[resource] || 0) + (room.terminal.store[resource] || 0) + (room.factory.store[resource] || 0);
+        },
+        globalAmount: () => assert.fail('decompression ranks local shortages'),
+    }));
+    assert.equal(w.room.memory.factoryProduction.mode, 'decompression');
+    assert.equal(energyReads, 3, 'all reverse candidates share one energy read per local store');
+    assert.equal(capacityReads, 1, 'factory capacity is captured once for the planning pass');
+    assert.equal(new Set(totalReads).size, totalReads.length, 'ranking and batch sizing share each total raw-stock read');
+});
+
+test('decompressed raw output in transit stays counted after its Factory task is cleared and never reopens conversion', () => {
+    for (const clearTask of [false, true]) {
+        const w = withDecompression(world({ warehouse: true, realNetwork: true, storage: { energy: 100000, X: 299500 },
+            factory: { X: 500, purifier: 1000, energy: 4000 } }));
+        const worker = w.creep();
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined);
+        w.production.runFactoryLogistics(worker);
+        assert.deepEqual(w.actions, [['withdraw', worker.name, 'factory', 'X', 500]]);
+        w.nextTick();
+        assert.equal(worker.store.X, 500);
+        assert.equal(w.factory.store.X, 0);
+        const task = { ...worker.memory.factoryLogistics };
+        if (clearTask) delete worker.memory.factoryLogistics;
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined, '300000 raw includes the output being carried, even without a retained Factory task');
+        w.room.memory.factoryProduction = { resourceType: 'X', mode: 'decompression', remaining: 20,
+            inputs: { purifier: 2000, energy: 4000 }, createdAt: 0 };
+        w.production.runFactoryProduction(w.factory);
+        assert.deepEqual(w.actions, [], 'execution also rejects a stale plan while the reserve is in transit');
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.room.memory.factoryProduction, undefined);
+        worker.memory.factoryLogistics = task;
+        w.production.runFactoryLogistics(worker);
+        assert.deepEqual(w.actions, [['transfer', worker.name, 'terminal', 'X', 500]]);
+        w.nextTick();
+        w.production.planFactoryProduction(w.factory);
+        assert.equal(w.storage.store.X + w.terminal.store.X + w.factory.store.X, 300000);
+        assert.equal(w.room.memory.factoryProduction, undefined, 'returning the output never creates surplus for reverse compression');
+    }
+});
+
+test('decompression shortage ranking includes raw minerals held in Labs and ordinary manager cargo', () => {
+    const w = withDecompression(world({ warehouse: true, realNetwork: true, storage: {
+        energy: 100000, X: 299000, O: 200000, purifier: 1000, oxidant: 1000,
+    }, labs: [{ store: store({ X: 500 }) }] }));
+    w.creep('manager', 11, 11, { X: 500 });
+    w.production.planFactoryProduction(w.factory);
+    assert.equal(w.room.memory.factoryProduction.resourceType, 'O', 'X already has its 300000 reserve across Labs and a manager without any Factory task');
+    assert.equal(w.room.memory.factoryProduction.mode, 'decompression');
+});
 
 test('factory planning parses static recipes once and reads each shared ingredient and global candidate only once per pass', () => {
     const w = measuredPlanning();

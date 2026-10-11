@@ -151,6 +151,43 @@ test('ordinary labs replenish a local T3 shortage before a globally scarcer full
     assert.equal(room.memory.productionReserve.lab.UH2O, 1000);
 });
 
+test('an unavailable local T3 shortage falls back to feasible global production and resumes when supplied', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 19000, XLHO2: 20000, LHO2: 3000, X: 3000 });
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XLHO2');
+    assert.equal(room.memory.roomLabConfig.productionPlan.local, false);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+    assert.equal(room.memory.roomLabConfig.labReactionConfig, 'XLHO2');
+    assert.equal(room.memory.productionReserve.lab.LHO2, 3000);
+    assert.equal(room.memory.productionReserve.lab.UH2O, undefined, 'an impossible shortage leaves no ingredient reservation');
+    room.storage.store.UH2O = 1000;
+    w.game.time += 10;
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(room.memory.roomLabConfig.productionPlan.local, true, 'a supplied local shortage preempts the global batch');
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 1000);
+    assert.equal(room.memory.productionReserve.lab.LHO2, undefined);
+});
+
+test('high global T3 inventories still start successive batches of the least stocked compound', () => {
+    const w = world(), room = w.addRoom('W1N1', { XUH2O: 500000, XLHO2: 750000, UH2O: 6000, LHO2: 3000, X: 6000 }, true);
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(room.memory.roomLabConfig.productionPlan.local, false);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000);
+    room.memory.roomLabConfig.productionPlan.remaining = 0;
+    room.memory.roomLabConfig.reactionAmount = 0;
+    room.storage.store.XUH2O += 3000;
+    room.storage.store.UH2O -= 3000;
+    room.storage.store.X -= 3000;
+    w.game.time += 10;
+    w.update(room);
+    assert.equal(room.memory.roomLabConfig.productionPlan.target, 'XUH2O');
+    assert.equal(room.memory.roomLabConfig.productionPlan.targetAmount, 506000);
+    assert.equal(room.memory.roomLabConfig.productionPlan.remaining, 3000, 'the inventory target is not a production cap');
+    assert.equal(room.memory.roomLabConfig.reactionAmount, 3000);
+});
+
 test('an ordinary room can feed its own labs from the 300k native-mineral backup', () => {
     const w = world(), room = w.addRoom('W1N1', { U: 3000, H: 6000, O: 290000, X: 3000 });
     room.mineral = { mineralType: 'O' };
