@@ -8,22 +8,35 @@ import { getReserveFlagForRoom } from './reserveFlags'
 import { releaseReserveFlagConfigs } from './reserveFlagPopulation'
 import { bodyPolicy } from 'settings/bodyPolicy'
 
-/** One publication-wide index; a queued or travelling miner cannot promise real remote output. */
-function productiveRemoteSources(): Map<string, Set<string>> {
-    const result = new Map<string, Set<string>>()
+/** One publication-wide index; only arrived paid workers can restore a missing production partner. */
+function arrivedRemoteSources(): { miners: Map<string, Set<string>>; haulers: Map<string, Set<string>> } {
+    const miners = new Map<string, Set<string>>(), haulers = new Map<string, Set<string>>()
     for (const name in Game.creeps) {
         const creep = Game.creeps[name], memory = creep.memory
-        if (memory.role !== roleAdvEnum.RHARVESTER || !memory.spawnRoom || creep.spawning || creep.ticksToLive === 0) continue
-        const data = memory.data as RemoteHarvesterData & { developmentRemote?: { retiring?: boolean } }, boost = memory.boostPlan
-        if (!data?.sourceId || !data.targetRoom || data.developmentRemote?.retiring || boost?.steps.length && !boost.completed && !boost.failed ||
-            creep.room.name !== data.targetRoom || creep.pos.roomName !== data.targetRoom || creep.getActiveBodyparts(WORK) <= 0) continue
-        const source = Game.rooms[data.targetRoom]?.sources?.find(source => source.id === data.sourceId)
-        if (!source || Math.max(Math.abs(creep.pos.x - source.pos.x), Math.abs(creep.pos.y - source.pos.y)) > 1) continue
-        const sources = result.get(memory.spawnRoom)
+        if (memory.role !== roleAdvEnum.RHARVESTER && memory.role !== roleAdvEnum.RFILLER ||
+            !memory.spawnRoom || creep.spawning || creep.ticksToLive === 0) continue
+        const data = memory.data as Partial<RemoteHarvesterData & RemoteFillerData> & {
+            developmentRemote?: { retiring?: boolean }
+            disabledMinerRetiring?: boolean
+        }, boost = memory.boostPlan
+        if (!data || data.developmentRemote?.retiring || data.disabledMinerRetiring ||
+            boost?.steps.length && !boost.completed && !boost.failed ||
+            creep.pos.roomName !== creep.room.name) continue
+        const mining = memory.role === roleAdvEnum.RHARVESTER
+        const sourceId = mining ? data.sourceId : data.sourceFlag
+        if (!sourceId) continue
+        if (mining) {
+            if (creep.room.name !== data.targetRoom || creep.getActiveBodyparts(WORK) <= 0) continue
+        } else if (Game.flags[sourceId] || data.targetFlag && Game.flags[data.targetFlag] ||
+            creep.getActiveBodyparts(CARRY) <= 0 || creep.getActiveBodyparts(MOVE) <= 0 ||
+            !Game.rooms[memory.spawnRoom]?.spawns.some(spawn => spawn.id === data.targetFlag)) continue
+        const source = Game.rooms[creep.room.name]?.sources?.find(source => source.id === sourceId)
+        if (!source || Math.max(Math.abs(creep.pos.x - source.pos.x), Math.abs(creep.pos.y - source.pos.y)) > (mining ? 1 : 3)) continue
+        const index = mining ? miners : haulers, sources = index.get(memory.spawnRoom)
         if (sources) sources.add(source.id)
-        else result.set(memory.spawnRoom, new Set([source.id]))
+        else index.set(memory.spawnRoom, new Set([source.id]))
     }
-    return result
+    return { miners, haulers }
 }
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
@@ -57,7 +70,7 @@ export function releaseBootstrapBuilderConfig(): void {
 
 export function releaseJobsCreepConfig(): void {
     releaseBootstrapBuilderConfig()
-    const productive = productiveRemoteSources()
+    const arrived = arrivedRemoteSources()
     for (const roomName in Game.rooms) {
         const room: Room = Game.rooms[roomName]
         if (!room.my || isRoomEvacuating(room)) continue
@@ -107,7 +120,7 @@ export function releaseJobsCreepConfig(): void {
 
         for (const { flag, target, sources, decision } of remotes) {
             const priority = populationPolicy.remote.startupPriorities
-            const serving = productive.get(room.name)
+            const serving = arrived.miners.get(room.name), haulingSources = arrived.haulers.get(room.name)
             // Reserving depends on a room name, never on Source visibility. The full native body waits for 650 energy.
             if (room.level > populationPolicy.remote.reserveAfterLevel &&
                 room.energyCapacityAvailable >= populationPolicy.remote.minimumReserveCapacity && !getReserveFlagForRoom(room, flag.pos.roomName)) {
@@ -132,6 +145,8 @@ export function releaseJobsCreepConfig(): void {
                     const config = room.memory.creepConfig[name]
                     if (config) {
                         config.spawnPriority = decision.maintenance ? priority.maintenance : priority.harvester
+                        if (decision.maintenance && !Game.creeps[name] && haulingSources?.has(source.id))
+                            config.spawnPriority = populationPolicy.remote.pipelinePriorities.harvester
                         // Fixed Source miners need their mining body even before a Container or vision exists.
                         if (room.memory.bodyProfiles?.[roleAdvEnum.RHARVESTER]?.stationary === undefined &&
                             bodyPolicy.profiles[roleAdvEnum.RHARVESTER]?.stationary === undefined)

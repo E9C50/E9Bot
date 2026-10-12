@@ -198,6 +198,7 @@ test('productive maintenance priority requires an arrived live WORK miner assign
         ['no vision', (w) => { delete w.game.rooms[w.target.name]; }],
         ['boosting', (_w, miner) => { miner.memory.boostPlan = { tier: 1, steps: [{ resource: 'UO', parts: 1 }], completed: false }; }],
         ['retiring', (_w, miner) => { miner.memory.data.developmentRemote = { retiring: true }; }],
+        ['disabled miner retiring after healing', (_w, miner) => { miner.memory.data.disabledMinerRetiring = true; }],
     ];
     for (const [label, invalidate] of invalid) {
         const w = world({ second: false }); maintainedMiner(w);
@@ -241,6 +242,110 @@ test('productive promotions preserve pending age for generic maintenance in othe
     assert.equal(w.home.memory.creepSpawnWaitingSince[otherHauler], since);
     assert.ok(w.home.memory.creepSpawnQueue.indexOf(otherReserver) < w.home.memory.creepSpawnQueue.indexOf(reserver));
     assert.ok(w.home.memory.creepSpawnQueue.indexOf(otherHauler) < w.home.memory.creepSpawnQueue.indexOf(hauler));
+});
+
+function arriveRemoteHauler(w) {
+    const hauler = w.born('rFiller');
+    hauler.room = w.target;
+    hauler.pos = new w.loader.globals.RoomPosition(w.mine.pos.x + 3, w.mine.pos.y, w.target.name);
+    return hauler;
+}
+
+test('an arrived empty manual hauler restores its missing Source miner ahead of roads without expanding the fleet', () => {
+    const w = world({ second: false });
+    const idle = { id: 'idle-source', pos: new w.loader.globals.RoomPosition(35, 35, w.target.name), room: w.target, energyCapacity: 1500 };
+    w.target.sources.push(idle); maintainedMiner(w);
+    arriveRemoteHauler(w);
+    w.unit('other-source-miner', 'rHarvester', { sourceId: idle.id, targetRoom: w.target.name }, w.target, 36, 35);
+    w.release();
+    const [miner, config] = w.published('rHarvester'), [reserver] = w.published('reserver');
+    const hauler = Object.entries(w.home.memory.creepConfig).find(([, config]) => config.role === 'rFiller' && config.data.sourceFlag === idle.id)[0];
+    assert.equal(config.spawnPriority, 2.576);
+    assert.equal(w.configs('rHarvester').find(config => config.data.sourceId === idle.id).spawnPriority, 2.6,
+        'transport capacity is bound to its assigned Source');
+    assert.equal(w.configs('rHarvester').length, 2);
+    assert.equal(w.configs('rFiller').length, 2);
+    const road = w.demand.addCreepConfig(w.home, 'rBuilder', 'repair-road', {});
+    w.home.memory.creepConfig[road].spawnPriority = 2.58;
+    const queue = Array.from(w.loader.load('creep/spawnQueue').buildSpawnQueue(w.home));
+    assert.ok(queue.indexOf(reserver) < queue.indexOf(hauler));
+    assert.ok(queue.indexOf(hauler) < queue.indexOf(miner));
+    assert.ok(queue.indexOf(miner) < queue.indexOf(road));
+});
+
+test('a loaded hauler restores its missing miner only while actually at that Source', () => {
+    const w = world({ second: false }); maintainedMiner(w);
+    const hauler = arriveRemoteHauler(w);
+    hauler.store.energy = 900; hauler.memory.working = true;
+    w.release(); assert.equal(w.published('rHarvester')[1].spawnPriority, 2.576);
+    hauler.room = w.home; hauler.pos = w.home.spawns[0].pos;
+    w.release(); assert.equal(w.published('rHarvester')[1].spawnPriority, 2.6,
+        'return cargo and an earlier arrival do not promise current transport at the mine');
+    hauler.store.energy = 0; hauler.memory.working = false;
+    hauler.room = w.target; hauler.pos = new w.loader.globals.RoomPosition(w.mine.pos.x + 1, w.mine.pos.y, w.target.name);
+    w.release(); assert.equal(w.published('rHarvester')[1].spawnPriority, 2.576);
+});
+
+test('missing-miner recovery requires a live mobile manual hauler at its visible assigned Source', () => {
+    const invalid = [
+        ['spawning', (_w, hauler) => { hauler.spawning = true; }],
+        ['dead', (_w, hauler) => { hauler.ticksToLive = 0; }],
+        ['no active CARRY', (_w, hauler) => { hauler.body.filter(part => part.type === 'carry').forEach(part => { part.hits = 0; }); }],
+        ['no active MOVE', (_w, hauler) => { hauler.body.filter(part => part.type === 'move').forEach(part => { part.hits = 0; }); }],
+        ['builder', (_w, hauler) => { hauler.memory.role = 'rBuilder'; }],
+        ['another home', (_w, hauler) => { hauler.memory.spawnRoom = 'E42N6'; }],
+        ['another Source', (_w, hauler) => { hauler.memory.data.sourceFlag = 'unrelated-source'; }],
+        ['wrong destination', (_w, hauler) => { hauler.memory.data.targetFlag = 'another-home-spawn'; }],
+        ['travelling', (w, hauler) => { hauler.room = w.home; hauler.pos = w.home.spawns[0].pos; }],
+        ['outside Source range', (w, hauler) => { hauler.pos = new w.loader.globals.RoomPosition(w.mine.pos.x + 4, w.mine.pos.y, w.target.name); }],
+        ['position in another room', (w, hauler) => { hauler.pos = new w.loader.globals.RoomPosition(w.mine.pos.x, w.mine.pos.y, w.home.name); }],
+        ['no vision', (w) => { delete w.game.rooms[w.target.name]; }],
+        ['boosting', (_w, hauler) => { hauler.memory.boostPlan = { tier: 1, steps: [{ resource: 'KH', parts: 1 }], completed: false }; }],
+        ['retiring', (_w, hauler) => { hauler.memory.data.developmentRemote = { retiring: true }; }],
+        ['ordinary source flag', (w, hauler) => { w.game.flags[hauler.memory.data.sourceFlag] = { name: hauler.memory.data.sourceFlag, pos: w.mine.pos }; }],
+        ['ordinary target flag', (w, hauler) => { w.game.flags[hauler.memory.data.targetFlag] = { name: hauler.memory.data.targetFlag, pos: w.home.spawns[0].pos }; }],
+    ];
+    for (const [label, invalidate] of invalid) {
+        const w = world({ second: false }); maintainedMiner(w);
+        const hauler = arriveRemoteHauler(w); invalidate(w, hauler); w.release();
+        assert.equal(w.published('rHarvester')[1].spawnPriority, 2.6, label);
+    }
+});
+
+test('arrived haul capacity never bypasses a new manual mine startup or admits the next mine', () => {
+    const w = world(); w.release();
+    w.born('reserver'); w.target.controller.reservation = { username: 'me', ticksToEnd: 100 }; w.release();
+    const miner = w.born('rHarvester'); w.release();
+    arriveRemoteHauler(w); delete w.game.creeps[miner.name]; w.release();
+    assert.equal(w.home.memory.remoteCommissioning.rooms[w.target.name].maintenance, false);
+    assert.equal(w.published('rHarvester')[1].spawnPriority, 2.8);
+    assert.equal(w.published('reserver', w.other), undefined, 'the first mine still needs real production and delivery');
+});
+
+test('arrived haul capacity cannot add or promote a miner while its paid slot is alive or spawning', () => {
+    for (const state of ['working', 'spawning', 'travelling']) {
+        const w = world({ second: false }); maintainedMiner(w);
+        const miner = w.born('rHarvester'); arriveRemoteHauler(w);
+        if (state === 'spawning') miner.spawning = true;
+        if (state === 'travelling') { miner.room = w.home; miner.pos = w.home.spawns[0].pos; }
+        w.release();
+        assert.equal(w.published('rHarvester')[1].spawnPriority, 2.6, state);
+        assert.equal(w.configs('rHarvester').length, 1, state);
+        assert.ok(!w.home.memory.creepSpawnQueue.includes(miner.name), state);
+    }
+});
+
+test('missing-miner recovery keeps generic maintenance waiting ages in other manual mines', () => {
+    const w = world(); w.release();
+    for (const record of Object.values(w.home.memory.remoteCommissioning.rooms)) record.maintenance = true;
+    w.release();
+    const [otherMiner] = w.published('rHarvester', w.other);
+    const since = w.home.memory.creepSpawnWaitingSince[otherMiner];
+    arriveRemoteHauler(w); w.release();
+    const [miner, config] = w.published('rHarvester');
+    assert.equal(config.spawnPriority, 2.576);
+    assert.equal(w.home.memory.creepSpawnWaitingSince[otherMiner], since);
+    assert.ok(w.home.memory.creepSpawnQueue.indexOf(miner) < w.home.memory.creepSpawnQueue.indexOf(otherMiner));
 });
 
 test('two manual OUT mines commission one at a time; published configs and incomplete births cannot unlock the second', () => {

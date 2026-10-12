@@ -30,7 +30,7 @@ export const populationPolicy = {
         reserveAfterLevel: 2,
         minimumReserveCapacity: 650,
         startupPriorities: { maintenance: 2.6, reserver: 2.7, harvester: 2.8, hauler: 2.9, scout: 2.95 },
-        pipelinePriorities: { reserver: 2.57, hauler: 2.575 },
+        pipelinePriorities: { reserver: 2.57, hauler: 2.575, harvester: 2.576 },
     },
     defense: {
         enemyGroupRange: 2,

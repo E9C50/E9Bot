@@ -2,12 +2,14 @@ import { getClosestTarget, getDistance } from "utils"
 import { prepareStationaryMining, runStationaryMining } from 'creep/stationaryMining'
 import { retireSourceLinkMiner } from 'creep/sourceLinkMining'
 import { sourceLinkWithCenter } from 'room/sourceLinks'
+import { retireDisabledRemoteHarvester } from 'creep/remoteHarvesterRetirement'
 
 export default (data: CreepData): ICreepConfig => ({
     isNeed: (room: Room, creepName: string) => {
         return true
     },
     prepare(creep) {
+        if (retireDisabledRemoteHarvester(creep, data as RemoteHarvesterData)) return false
         const source = Game.getObjectById<Source>((data as RemoteHarvesterData).sourceId)
         if (retireSourceLinkMiner(creep, source || undefined)) return false
         const creepData: RemoteHarvesterData = data as RemoteHarvesterData
