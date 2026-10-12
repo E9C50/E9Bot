@@ -30,7 +30,7 @@ function context(creep: Creep, data: RemoteBuilderData): RoadContext | undefined
     if (atWar || isRoomEvacuating(home) || !hasRemoteRoadRoom(home, creep.room.name) || !isRemoteRoadRoomSafe(creep.room, home)) {
         goHome(creep, home); return
     }
-    const work = getRemoteRoadWork(home)
+    const work = getRemoteRoadWork(home, undefined, data.buildTarget)
     if (!work) { goHome(creep, home); return }
     const value = { home, work }
     contexts.set(creep, value)

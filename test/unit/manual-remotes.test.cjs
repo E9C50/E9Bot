@@ -99,6 +99,150 @@ function world({ level = 3, capacity = 800, visible = true, second = true } = {}
     };
 }
 
+function maintainedMiner(w) {
+    w.release();
+    w.home.memory.remoteCommissioning.rooms[w.target.name].maintenance = true;
+    w.release();
+    return w.published('rHarvester');
+}
+
+test('manual OUT fixed-source miners retain their full mining body before construction and after losing vision', () => {
+    for (const [capacity, work, carry, move] of [[1800, 11, 2, 11], [2300, 14, 3, 14]]) {
+        const w = world({ level: 5, capacity, second: false });
+        const [, config] = maintainedMiner(w);
+        assert.equal(config.bodyProfile?.stationary, true);
+        assert.equal(config.development, undefined, 'manual work must stay eligible at RCL8');
+        const selection = w.loader.load('creep/bodySelection');
+        const before = Array.from(selection.previewBodySelection(w.home, config, 0).body);
+        assert.equal(before.filter(part => part === 'work').length, work);
+        assert.equal(before.filter(part => part === 'carry').length, carry, 'unbuilt stations retain energy for bootstrap construction');
+        assert.equal(before.filter(part => part === 'move').length, move);
+        w.target.containers.push({ id: 'source-container', pos: new w.loader.globals.RoomPosition(w.mine.pos.x + 1, w.mine.pos.y, w.target.name) });
+        assert.deepEqual(Array.from(selection.previewBodySelection(w.home, config, 0).body), before);
+        delete w.game.rooms[w.target.name];
+        // getObjectById cannot return native Sources outside visible rooms.
+        w.game.getObjectById = () => null;
+        w.release();
+        assert.deepEqual(Array.from(selection.previewBodySelection(w.home, w.published('rHarvester')[1], 0).body), before,
+            'cached manual Source demand must not regress to a moving builder body');
+    }
+});
+
+test('manual OUT station defaults preserve explicit global and room stationary preferences', () => {
+    for (const [global, room, expectedWork] of [[false, undefined, 5], [true, false, 5], [false, true, 11]]) {
+        const w = world({ level: 5, capacity: 1800, second: false });
+        w.loader.load('settings/bodyPolicy').bodyPolicy.profiles.rHarvester = { stationary: global, boostTier: 0 };
+        if (room !== undefined) w.home.memory.bodyProfiles = { rHarvester: { stationary: room } };
+        const [, config] = maintainedMiner(w);
+        assert.equal(config.bodyProfile?.stationary, undefined, 'an explicit preference stays authoritative in the native planner');
+        const plan = w.loader.load('creep/bodySelection').previewBodySelection(w.home, config, 0);
+        assert.equal(plan.body.filter(part => part === 'work').length, expectedWork);
+    }
+});
+
+test('manual OUT station defaults retain unrelated user body constraints', () => {
+    const w = world({ level: 5, capacity: 1800, second: false });
+    w.loader.load('settings/bodyPolicy').bodyPolicy.profiles.rHarvester = { workParts: 3, terrain: 'road', boostTier: 0 };
+    w.home.memory.bodyProfiles = { rHarvester: { maximumCost: 1000 } };
+    const [, config] = maintainedMiner(w);
+    const plan = w.loader.load('creep/bodySelection').previewBodySelection(w.home, config, 0);
+    assert.deepEqual(Array.from(plan.body), ['work', 'work', 'work', 'carry', 'move', 'move']);
+});
+
+test('mature manual OUT fixed-source miners wait for their full native body and remain spawnable', () => {
+    const w = world({ level: 8, capacity: 12900, second: false });
+    const [name, config] = maintainedMiner(w);
+    assert.equal(config.development, undefined);
+    const plan = w.loader.load('creep/bodySelection').previewBodySelection(w.home, config, 0);
+    const cost = plan.body.reduce((total, part) => total + w.loader.globals.BODYPART_COST[part], 0);
+    assert.equal(plan.body.length, 50);
+    assert.ok(plan.body.filter(part => part === 'carry').length > 0);
+    w.home.memory.creepSpawnQueue = [name];
+    w.home.energyAvailable = cost - 1; w.spawn.doWork(); assert.equal(w.calls.length, 0);
+    w.home.energyAvailable = cost; w.spawn.doWork(); assert.equal(w.calls.length, 1);
+    assert.deepEqual(Array.from(w.calls[0].body), Array.from(plan.body));
+});
+
+test('maintained productive OUT rooms restore reservation and only the serving Source haul ahead of generic maintenance', () => {
+    const w = world({ capacity: 1800, second: false });
+    const idle = { id: 'idle-source', pos: new w.loader.globals.RoomPosition(35, 35, w.target.name), room: w.target, energyCapacity: 1500 };
+    w.target.sources.push(idle);
+    maintainedMiner(w); w.born('rHarvester'); w.release();
+    const [reserver] = w.published('reserver'), [hauler] = w.published('rFiller');
+    const priorities = w.loader.load('settings/population').populationPolicy.remote;
+    assert.equal(w.home.memory.creepConfig[reserver].spawnPriority, priorities.pipelinePriorities.reserver);
+    assert.equal(w.home.memory.creepConfig[hauler].spawnPriority, priorities.pipelinePriorities.hauler);
+    assert.equal(w.configs('rFiller').find(config => config.data.sourceFlag === idle.id).spawnPriority, priorities.startupPriorities.maintenance);
+    assert.equal(w.configs('rHarvester').find(config => config.data.sourceId === idle.id).spawnPriority, priorities.startupPriorities.maintenance);
+    const names = [];
+    for (const [label, role, priority] of [['rescue','harvester',1], ['consumer','builder',2.55],
+        ['road','rBuilder',2.58], ['stock','upgrader',2.59]]) {
+        const name = w.demand.addCreepConfig(w.home, role, label, {});
+        w.home.memory.creepConfig[name].spawnPriority = priority; names.push(name);
+    }
+    const queue = Array.from(w.loader.load('creep/spawnQueue').buildSpawnQueue(w.home));
+    const order = [names[0], names[1], reserver, hauler, names[2], names[3]];
+    for (let index = 1; index < order.length; index++) assert.ok(queue.indexOf(order[index-1]) < queue.indexOf(order[index]));
+});
+
+test('productive maintenance priority requires an arrived live WORK miner assigned to a visible Source', () => {
+    const invalid = [
+        ['spawning', (_w, miner) => { miner.spawning = true; }],
+        ['dead', (_w, miner) => { miner.ticksToLive = 0; }],
+        ['no active WORK', (_w, miner) => { miner.body.find(part => part.type === 'work').hits = 0; }],
+        ['builder', (_w, miner) => { miner.memory.role = 'rBuilder'; }],
+        ['another home', (_w, miner) => { miner.memory.spawnRoom = 'E42N6'; }],
+        ['another Source', (_w, miner) => { miner.memory.data.sourceId = 'unrelated-source'; }],
+        ['travelling', (w, miner) => { miner.room = w.home; miner.pos = w.home.spawns[0].pos; }],
+        ['not at Source', (w, miner) => { miner.pos = new w.loader.globals.RoomPosition(25, 25, w.target.name); }],
+        ['no vision', (w) => { delete w.game.rooms[w.target.name]; }],
+        ['boosting', (_w, miner) => { miner.memory.boostPlan = { tier: 1, steps: [{ resource: 'UO', parts: 1 }], completed: false }; }],
+        ['retiring', (_w, miner) => { miner.memory.data.developmentRemote = { retiring: true }; }],
+    ];
+    for (const [label, invalidate] of invalid) {
+        const w = world({ second: false }); maintainedMiner(w);
+        const miner = w.born('rHarvester'); invalidate(w, miner); w.release();
+        assert.equal(w.published('reserver')[1].spawnPriority, 2.6, label);
+        assert.equal(w.published('rFiller')[1].spawnPriority, 2.6, label);
+    }
+});
+
+test('productive pipeline priority promotes only missing slots and does not produce duplicate paid workers', () => {
+    const w = world({ second: false }); maintainedMiner(w); w.born('rHarvester'); w.release();
+    const reserver = w.born('reserver'), hauler = w.born('rFiller'); w.release();
+    assert.equal(w.published('reserver')[1].spawnPriority, 2.6);
+    assert.equal(w.published('rFiller')[1].spawnPriority, 2.6);
+    assert.ok(!w.home.memory.creepSpawnQueue.includes(reserver.name));
+    assert.ok(!w.home.memory.creepSpawnQueue.includes(hauler.name));
+});
+
+test('an arrived miner in a new OUT still follows sequential reserver-miner-hauler startup priorities', () => {
+    const w = world(); w.release();
+    w.born('reserver'); w.target.controller.reservation = { username: 'me', ticksToEnd: 100 }; w.release();
+    w.born('rHarvester'); w.release();
+    assert.equal(w.published('reserver')[1].spawnPriority, 2.7);
+    assert.equal(w.published('rFiller')[1].spawnPriority, 2.9);
+    assert.equal(w.published('reserver', w.other), undefined, 'the first mine still owes its first real energy delivery');
+});
+
+test('productive promotions preserve pending age for generic maintenance in other OUT rooms', () => {
+    const w = world(); w.release();
+    for (const record of Object.values(w.home.memory.remoteCommissioning.rooms)) record.maintenance = true;
+    w.release();
+    const [otherReserver] = w.published('reserver', w.other), [otherHauler] = w.published('rFiller', w.other);
+    const since = w.home.memory.creepSpawnWaitingSince[otherHauler];
+    const miner = w.born('rHarvester'); w.release();
+    assert.equal(w.published('rFiller')[1].spawnPriority, 2.575);
+    assert.equal(w.home.memory.creepSpawnWaitingSince[otherHauler], since);
+    assert.equal(w.home.memory.creepSpawnWaitingSince[otherReserver], since);
+    delete w.game.creeps[miner.name]; w.release();
+    const [reserver] = w.published('reserver'), [hauler] = w.published('rFiller');
+    assert.equal(w.home.memory.creepConfig[hauler].spawnPriority, 2.6);
+    assert.equal(w.home.memory.creepSpawnWaitingSince[otherHauler], since);
+    assert.ok(w.home.memory.creepSpawnQueue.indexOf(otherReserver) < w.home.memory.creepSpawnQueue.indexOf(reserver));
+    assert.ok(w.home.memory.creepSpawnQueue.indexOf(otherHauler) < w.home.memory.creepSpawnQueue.indexOf(hauler));
+});
+
 test('two manual OUT mines commission one at a time; published configs and incomplete births cannot unlock the second', () => {
     const w = world(); w.release();
     assert.deepEqual(w.queuedRoles(), ['reserver']);

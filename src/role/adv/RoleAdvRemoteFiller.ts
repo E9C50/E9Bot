@@ -2,6 +2,7 @@ import { getClosestTarget, getDistance } from "utils"
 import { rolePolicy } from "settings/rolePolicy"
 import { supportWithTowers } from 'role/support/towers'
 import { deliverHaulerEnergy, withHaulerTraffic } from 'creep/haulerDelivery'
+import { collectManualRemoteEnergy } from 'creep/manualRemoteHauling'
 
 export default (data: CreepData): ICreepConfig => withHaulerTraffic({
     isNeed: (room: Room, creepName: string) => {
@@ -18,6 +19,8 @@ export default (data: CreepData): ICreepConfig => withHaulerTraffic({
         }
 
         const creepData: RemoteFillerData = data as RemoteFillerData
+        const manual = collectManualRemoteEnergy(creep, creepData)
+        if (manual !== undefined) return manual
         const sourceFlag: Flag = Game.flags[creepData.sourceFlag]
         const targetFlag: Flag = Game.flags[creepData.targetFlag]
         const sourceTarget = Game.getObjectById(creepData.sourceFlag) as Source

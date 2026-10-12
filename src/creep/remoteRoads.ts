@@ -209,7 +209,7 @@ function construct(home: Room, routes: RemoteRoadRoute[]): void {
     }
 }
 /** Resolve only real, visible sites/roads; never hand a builder an unmaterialized construction intent. */
-export function getRemoteRoadWork(home: Room, targetRoom?: string): RemoteRoadWork | undefined {
+export function getRemoteRoadWork(home: Room, targetRoom?: string, preferredRepairId?: string): RemoteRoadWork | undefined {
     if (!policy.enabled || homePaused(home)) return undefined
     const configured = activeRemotes(home).filter(name => !targetRoom || name === targetRoom)
     const routes = Object.values(home.memory.remoteRoads?.routes || {}).filter(route => configured.includes(route.targetRoom) &&
@@ -220,7 +220,7 @@ export function getRemoteRoadWork(home: Room, targetRoom?: string): RemoteRoadWo
         const selected = tiles.get(name) || new Set<number>()
         coordinates.forEach(coordinate => selected.add(coordinate)); tiles.set(name, selected)
     }
-    let build: ConstructionSite | undefined, repair: Structure | undefined
+    let build: ConstructionSite | undefined, repair: Structure | undefined, preferred: Structure | undefined
     for (const name of new Set([...active, ...tiles.keys()])) {
         const room = Game.rooms[name]
         if (!room || !isRemoteRoadRoomSafe(room, home)) continue
@@ -228,9 +228,14 @@ export function getRemoteRoadWork(home: Room, targetRoom?: string): RemoteRoadWo
         const selected = (pos: RoomPosition): boolean => active.includes(name) || !!lane?.has(pos.x * 50 + pos.y)
         if (!build) build = sites.find(site => site.my && selected(site.pos))
         for (const road of structures) if (road.structureType === STRUCTURE_ROAD && selected(road.pos) &&
-            road.hits < road.hitsMax * policy.repairRatio && (!repair || road.hits / road.hitsMax < repair.hits / repair.hitsMax)) repair = road
+            road.hits < road.hitsMax * policy.repairRatio) {
+            if (road.id === preferredRepairId) preferred = road
+            if (!repair || road.hits / road.hitsMax < repair.hits / repair.hitsMax) repair = road
+        }
     }
-    const target = repair || build
+    // Finish the selected road's repair batch before travelling to another room's
+    // lowest-ratio road. Admission, lane safety and the repair threshold still apply.
+    const target = preferred || repair || build
     if (target) return { roomName: target.pos.roomName, x: target.pos.x, y: target.pos.y, id: target.id, kind: repair ? 'repair' : 'build' }
     return undefined
 }
@@ -262,8 +267,14 @@ export function releaseRemoteRoadConfigs(publish: typeof addCreepConfig): void {
         // Reuse the legacy manual maintenance name instead of breeding another worker at migration.
         const name = publish(home, 'rBuilder', `${home.name}_OSBUILDER_${home.name}`, data)
         const config = home.memory.creepConfig[name]
-        if (config) { config.spawnPriority = policy.builderPriority; config.bodyProfile = { boostTier: 0, terrain: 'plain', maximumCost: policy.builderMaximumCost } }
+        if (config) {
+            // Preserve local recovery and its first consumers, but keep paid roads
+            // from decaying behind a perpetual remote-fleet birth backlog.
+            config.spawnPriority = work.kind === 'repair' ? policy.repairPriority : policy.builderPriority
+            config.bodyProfile = { boostTier: 0, terrain: 'plain' }
+        }
         if (Game.creeps[name]) {
+            data.buildTarget = (Game.creeps[name].memory.data as RemoteBuilderData)?.buildTarget
             data.roadBuildTarget = (Game.creeps[name].memory.data as RemoteBuilderData)?.roadBuildTarget
             Game.creeps[name].memory.data = data
         }

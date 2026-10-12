@@ -15,5 +15,5 @@ export const remoteRoadPolicy = {
     freeSitesForLocalConstruction: 20,
     repairRatio: 0.5,
     builderPriority: 4.5,
-    builderMaximumCost: 800,
+    repairPriority: 2.58,
 }

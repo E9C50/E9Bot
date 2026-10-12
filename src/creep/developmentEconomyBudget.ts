@@ -76,14 +76,20 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
     const upgrades = Object.entries(configs).filter(([key, config]) => config.role === 'upgrader' &&
         config.development && !legacy.has(key) && (config.development.workParts || 0) > 0)
     const first = upgrades.find(([key, config]) => residentFor(key, config)) || upgrades[0]
-    let reserved: { key: string; desired: number } | undefined
+    let reserved: { key: string; desired: number; work: number } | undefined
     if (first && budget.upgrading === 0) {
         const [key, config] = first
         const cost = prepaid.has(key) ? 0 : developmentBodyCostCeiling(room, config.role, config) / lifetime
         if (remaining >= cost + 1 && upgradeIncome + bonusIncome >= 1) {
-            reserved = { key, desired: Math.floor(config.development!.workParts || 0) }
-            config.development!.workParts = 1
-            budget.upkeep += cost; budget.upgrading += 1; remaining -= cost + 1
+            const desired = Math.floor(config.development!.workParts || 0)
+            const available = Math.floor(Math.max(0, Math.min(remaining - cost, upgradeIncome + bonusIncome)))
+            const building = Object.values(configs).some(candidate => candidate.role === 'builder' &&
+                (candidate.development?.workParts || 0) > 0)
+            const share = building ? policy.upgrading.incomeShareWhileBuilding : policy.upgrading.incomeShare
+            const work = Math.min(desired, available, Math.max(1, Math.floor(available * share)))
+            reserved = { key, desired, work }
+            config.development!.workParts = work
+            budget.upkeep += cost; budget.upgrading += work; remaining -= cost + work
         }
     }
     // Remaining construction and upgrading demand shares the real arrived-income budget.
@@ -93,14 +99,14 @@ export function applyDevelopmentEconomyBudget(room: Room, income: number, upgrad
     }
     for (const [key, config] of Object.entries(configs)) if (config.role === 'upgrader' && config.development && !legacy.has(key)) {
         if (key === reserved?.key) {
-            const extra = Math.min(reserved.desired - 1, Math.floor(Math.max(0,
-                Math.min(remaining, upgradeIncome + bonusIncome - 1))))
-            config.development.workParts = 1 + extra
+            const extra = Math.min(reserved.desired - reserved.work, Math.floor(Math.max(0,
+                Math.min(remaining, upgradeIncome + bonusIncome - budget.upgrading))))
+            config.development.workParts = reserved.work + extra
             remaining -= extra; budget.upgrading += extra
             continue
         }
         const emergency = config.spawnPriority === policy.upgrading.downgradeRecoveryPriority
-        const ceiling = Math.max(0, Math.min(upgradeIncome + bonusIncome, remaining))
+        const ceiling = Math.max(0, Math.min(upgradeIncome + bonusIncome - budget.upgrading, remaining))
         budget.upgrading += consumer(key, config, 1, ceiling, emergency)
     }
     return budget

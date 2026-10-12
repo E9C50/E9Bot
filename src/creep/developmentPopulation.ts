@@ -75,11 +75,11 @@ function storageHaulingTrip(room: Room, buffer: StructureLink | StructureContain
     return Math.ceil((range(room.storage!.pos, destination) * 2 + 2) * policy.hauling.travelMargin)
 }
 
-function storageDistribution(room: Room, creeps: Creep[], trip: number): number {
+function storageDistribution(room: Room, creeps: Creep[], trip: number, includeSpawning = false): number {
     let capacity = 0
     const prefix = `${room.name}_DEVELOP_FILLER_`
     for (const creep of creeps) {
-        if (creep.spawning || creep.room.name !== room.name || creep.memory.role !== 'filler') continue
+        if (creep.spawning && !includeSpawning || creep.room.name !== room.name || creep.memory.role !== 'filler') continue
         const data = creep.memory.data as FillerData, name = creep.memory.name
         const dedicated = name?.startsWith(`${prefix}STORAGE_`)
         if (!dedicated && (name?.startsWith(prefix) || data.mineId || creep.memory.developmentHauler?.mineId ||
@@ -301,7 +301,12 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const imports = Math.max(0, local.income - local.directIncome) + remote
     const upgradeIncome = local.directIncome + Math.min(imports, distribution)
     const headroom = Math.max(0, distribution - imports)
-    const upgradeBurst = Math.min(burst, Math.floor(headroom))
+    // A working distribution lane can commission a stock-funded consumer before
+    // that consumer's real body justifies another carrier. Bound expansion by
+    // the configured fleet's native carrying capacity, not unbounded Storage stock.
+    const stockDistribution = burst > 0 && room.storage && distribution > 0 ? Math.max(distribution,
+        carryingPlan({ sourceId: room.storage.id }).carry * CARRY_CAPACITY * policy.hauling.maximumCreepsPerSource / distributionTrip) : distribution
+    const upgradeBurst = Math.min(burst, Math.floor(Math.max(0, stockDistribution - Math.min(imports, distribution))))
     const importedBacklog = Math.max(0, local.backlogWork - local.controllerBacklogWork)
     const upgradeBacklog = local.controllerBacklogWork + Math.min(importedBacklog, Math.floor(Math.max(0, headroom - upgradeBurst)))
     for (const source of room.sources) {
@@ -329,6 +334,7 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
             { sourceId, mineId: source.id }, totalCarry, plan, trip, source.pos,
             sourceHaulers ? policy.hauling.expansionPriority : undefined)
     }
+    let pendingStockDistribution = false
     if (room.storage) {
         const trip = distributionTrip
         const plan = carryingPlan({ sourceId: room.storage.id }), capacityCarry = Math.max(1, plan.carry)
@@ -344,12 +350,17 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         const fundedWork = Math.floor(spendableIncome * (room.constructionSites.length > 0
             ? policy.upgrading.incomeShareWhileBuilding : policy.upgrading.incomeShare)) + burst + local.backlogWork
         const deliveryRate = Math.max(0, Math.min(committedWork, fundedWork) - local.directIncome)
+        const stockDeliveryDeficit = burst > 0 && deliveryRate > distribution
+        // Commission transport for paid-for WORK before committing another stock-funded
+        // worker. A real spawning carrier can cover that commitment; a queue entry cannot.
+        pendingStockDistribution = stockDeliveryDeficit && deliveryRate > storageDistribution(room, creeps, trip, true)
         const carry = Math.max(capacityCarry, Math.ceil(trip * deliveryRate / CARRY_CAPACITY))
         const count = Math.min(policy.hauling.maximumCreepsPerSource, Math.ceil(carry / capacityCarry))
         essentialUpkeep += count * plan.cost / lifetime
         releaseHaulingFleet(room, creeps, `${room.name}_DEVELOP_FILLER_STORAGE_`, count,
             { sourceId: room.storage.id }, carry, plan, trip, room.storage.pos,
-            index => index === 0 ? undefined : policy.hauling.expansionPriority)
+            index => index === 0 ? undefined : stockDeliveryDeficit ?
+                policy.hauling.surplusDistributionPriority : policy.hauling.expansionPriority)
         if (room.centerLink || room.terminal) {
             publish(room, 'manager', `${room.name}_MANAGER`, {},
                 { carryParts: policy.bodies.defaultHaulerCarryParts, stationary: true })
@@ -426,12 +437,14 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
     const applyBudget = (): void => { applyDevelopmentEconomyBudget(room, Math.max(0, income - externalWork),
         Math.max(0, upgradeIncome - externalWork), essentialUpkeep,
         upgradeBurst + upgradeBacklog, new Map(creeps.map(creep => [`${creep.memory.role}\0${creep.memory.name}`, creep]))) }
-    if (!energySource || remaining <= 0 || count >= maximum) { applyBudget(); return }
+    if (!energySource || remaining <= 0 || count >= maximum || pendingStockDistribution) { applyBudget(); return }
     const workPerCreep = Math.max(1, developmentPartCapacity(room, 'upgrader', WORK,
         { sourceId: buffer?.id || energySource.id }, buffer != undefined))
     const downgradeRecovery = room.controller!.ticksToDowngrade <= policy.controller.constructionDowngradeWarningTicks
+    let pendingUpgrades = upgrades.filter(creep => creep.spawning).length
     for (let index = 0; remaining > 0 && count < maximum &&
         index < upgrades.length + maximum + policy.replacement.maximumReplacementsPerRoom; index++) {
+        if (upgradeBurst > 0 && pendingUpgrades >= policy.upgrading.maximumPendingSurplusUpgraders) break
         const name = `${room.name}_DEVELOP_UPGRADER_${index}`
         if (Game.creeps[createCreepName('upgrader', name)]) continue
         const emergency = downgradeRecovery && upgrades.length === 0 && count === 0
@@ -439,12 +452,13 @@ export function releaseDevelopmentBaseConfig(room: Room): void {
         publish(room, 'upgrader', name, { sourceId: buffer?.id || energySource.id },
             { workParts: work, stationary: buffer != undefined },
             emergency ? policy.upgrading.downgradeRecoveryPriority :
-                upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority : undefined)
+                upgrades.length === 0 && count === 0 ? policy.upgrading.firstCreepPriority :
+                    upgradeBurst > 0 ? policy.upgrading.surplusExpansionPriority : undefined)
         if (emergency) {
             const config = room.memory.creepConfig[createCreepName('upgrader', name)]
             if (config) config.bodyProfile = { boostTier: 0 }
         }
-        remaining -= workPerCreep; count++
+        remaining -= workPerCreep; count++; pendingUpgrades++
     }
     applyBudget()
 }

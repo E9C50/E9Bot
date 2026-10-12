@@ -10,6 +10,7 @@ export const developmentPolicy = {
         minimumLoadRatio: 1, partialLoadIdleTicks: 10, emergencyLoadEnergy: 50,
         mineResourceRange: 1, waitingRange: 2,
         expansionPriority: 3.2,
+        surplusDistributionPriority: 2.585,
     },
     upgrading: {
         selfHarvestLoadRatio: 1,
@@ -27,6 +28,8 @@ export const developmentPolicy = {
         backlogEnergyPerWork: 1000,
         maximumBacklogWorkParts: 10,
         firstCreepPriority: 5,
+        surplusExpansionPriority: 2.59,
+        maximumPendingSurplusUpgraders: 1,
         downgradeRecoveryPriority: 1.5,
     },
     building: { maximumCreeps: 2, workPartsPerCreep: 4, roadOnlyWorkParts: 1, infrastructureMinimumCapacity: 550, firstCreepPriority: 0.75 },

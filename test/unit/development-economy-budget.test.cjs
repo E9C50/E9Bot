@@ -92,10 +92,30 @@ test('stock-funded construction cannot consume every upgrade allowance in the sh
     const result = w.budget(20, 20, 9, 15);
     assert.ok(spending(result) <= 35);
     assert.equal(repairer.development.workParts, 1);
-    assert.equal(builder.development.workParts, 3);
+    assert.equal(builder.development.workParts, 1);
     assert.ok(upgrader.development.workParts >= 1, 'real stored energy supports both useful jobs');
     assert.equal(upgrader.development.fullBody, true);
     assert.equal(builder.development.fullBody, true);
+});
+
+test('ordinary construction preserves the funded capacity of the first upgrader instead of only one WORK', () => {
+    const w = world(); w.room.energyCapacityAvailable = 1800;
+    w.add('repairer', 1);
+    const builder = w.add('builder', 8, 4), upgrader = w.add('upgrader', 11);
+    const result = w.budget(25, 20, 8, 15);
+    assert.equal(upgrader.development.workParts, 11);
+    assert.ok(builder.development.workParts > 0, 'funded construction still uses the remaining budget');
+    assert.ok(spending(result) <= 40, 'neither role invents income beyond arrived production and stock allowance');
+});
+
+test('several full upgrade bodies share one real controller delivery allowance', () => {
+    const w = world();
+    const first = w.add('upgrader', 13);
+    w.room.memory.creepConfig.next = { ...first, name: 'next', development: { ...first.development } };
+    const result = w.budget(40, 3, 5, 0);
+    assert.equal(result.upgrading, 3, 'each additional upgrader spends the unallocated transport remainder');
+    assert.equal(w.room.memory.creepConfig.next, undefined, 'no second body is queued without deliverable energy');
+    assert.ok(spending(result) <= 40);
 });
 
 test('unavoidable resident body upkeep is paid before admitting a new controller worker', () => {

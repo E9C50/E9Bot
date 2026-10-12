@@ -834,6 +834,89 @@ test('only arrived Storage distributors finance automatic upgrade WORK, never mi
     assert.ok(requestedWork(byRole(state.release(), 'upgrader')) <= Math.floor(10 * state.policy.upgrading.incomeShare));
 });
 
+function surplusUpgradeWorld({ stock = 300000 } = {}) {
+    const home = room({ capacity: 1800, level: 5, sources: [[22, 5], [14, 21]] });
+    home.controller.pos = position(26, 43);
+    home.storage = structure('storage', 'storage', 15, 27, stock);
+    const buffer = structure('controller-container', 'container', 24, 43, 300);
+    home.containers = [buffer];
+    const upgrader = worker(home, { role: 'upgrader', work: 11, name: `${home.name}_DEVELOP_UPGRADER_0`,
+        x: 24, y: 42, data: { sourceId: buffer.id } });
+    upgrader.memory.development = { fullBody: true };
+    const distributor = worker(home, { role: 'filler', work: 0, name: `${home.name}_DEVELOP_FILLER_STORAGE_0`,
+        x: 15, y: 28, data: { sourceId: home.storage.id } });
+    distributor.store = store(0, 900);
+    distributor.getActiveBodyparts = part => part === 'carry' || part === 'move' ? 18 : 0;
+    const state = makeWorld(home, { creeps: {
+        first: worker(home, { source: home.sources[0], name: 'first' }),
+        second: worker(home, { source: home.sources[1], name: 'second' }),
+        [`UPGRADER_${upgrader.memory.name}`]: upgrader,
+        [`FILLER_${distributor.memory.name}`]: distributor,
+    } });
+    return { state, upgrader, distributor };
+}
+
+test('surplus Storage commissions one useful upgrade expansion before growing its real delivery fleet', () => {
+    const { state, upgrader } = surplusUpgradeWorld();
+    let configs = state.release();
+    const upgrades = byRole(configs, 'upgrader');
+    const pending = upgrades.filter(config => config.name !== upgrader.memory.name);
+    assert.equal(pending.length, 1, 'one stock-funded expansion slot is enough to break the consumer/transport deadlock');
+    assert.equal(pending[0].spawnPriority, state.policy.upgrading.surplusExpansionPriority);
+    assert.ok(requestedWork(upgrades) > 11, 'spendable stock funds actual extra upgrading capability');
+    assert.equal(byRole(configs, 'filler').filter(config => config.data.sourceId === state.home.storage.id).length, 1,
+        'an unspawned consumer does not create extra idle distributors');
+    const plan = state.loader.load('creep/bodySelection').previewBodySelection(state.home, pending[0], 0);
+    assert.equal(plan.body.filter(part => part === 'work').length, 11, 'the expansion keeps the maximum complete body');
+    const successor = worker(state.home, { role: 'upgrader', name: pending[0].name, spawning: true,
+        work: 11, x: 24, y: 42, data: pending[0].data });
+    successor.memory.development = { ...pending[0].development };
+    state.game.creeps[state.demand.createCreepName('upgrader', pending[0].name)] = successor;
+    configs = state.release();
+    assert.equal(byRole(configs, 'upgrader').filter(config => !state.game.creeps[state.demand.createCreepName('upgrader', config.name)]).length, 0,
+        'a spawning expansion occupies the single pending slot');
+    const delivery = byRole(configs, 'filler').filter(config => config.data.sourceId === state.home.storage.id);
+    assert.equal(delivery.length, 2,
+        'the committed second upgrader now justifies its real extra delivery capacity');
+    assert.equal(delivery[1].spawnPriority, state.policy.hauling.surplusDistributionPriority);
+    assert.ok(delivery[1].spawnPriority < state.policy.upgrading.surplusExpansionPriority);
+    assert.ok(delivery[1].spawnPriority < state.loader.load('settings/population').populationPolicy.remote.startupPriorities.maintenance);
+
+    successor.spawning = false;
+    configs = state.release();
+    assert.equal(byRole(configs, 'upgrader').filter(config => !state.game.creeps[state.demand.createCreepName('upgrader', config.name)]).length, 0,
+        'the arrived second worker cannot commission a third while its required delivery lane is only queued');
+    const carrier = worker(state.home, { role: 'filler', work: 0, name: delivery[1].name, spawning: true, data: delivery[1].data });
+    carrier.store = store(0, 900);
+    carrier.getActiveBodyparts = part => part === 'carry' || part === 'move' ? 18 : 0;
+    state.game.creeps[state.demand.createCreepName('filler', carrier.memory.name)] = carrier;
+    assert.equal(byRole(state.release(), 'upgrader').filter(config => !state.game.creeps[state.demand.createCreepName('upgrader', config.name)]).length, 1,
+        'a real spawning carrier commits enough capacity for the next single expansion');
+});
+
+test('upgrade expansion needs spendable Storage stock and an arrived distribution lane', () => {
+    for (const change of [state => { state.home.storage.store.energy = state.policy.upgrading.storageReserve; },
+        state => { state.home.storage.store.energy = state.policy.upgrading.storageReserve + state.policy.upgrading.energyPerBonusWork - 1; },
+        (_state, distributor) => { distributor.spawning = true; },
+        (_state, distributor) => { distributor.room = { name: 'W1N2' }; }]) {
+        const { state, upgrader, distributor } = surplusUpgradeWorld();
+        change(state, distributor);
+        const upgrades = byRole(state.release(), 'upgrader');
+        assert.equal(upgrades.filter(config => config.name !== upgrader.memory.name).length, 0);
+    }
+});
+
+test('stock-funded upgrade work cannot exceed the controller fleet carrying ceiling', () => {
+    const { state, distributor } = surplusUpgradeWorld();
+    state.home.memory.bodyProfiles = { filler: { carryParts: 1, maximumCost: 100 } };
+    distributor.store = store(0, 50);
+    distributor.getActiveBodyparts = part => part === 'carry' || part === 'move' ? 1 : 0;
+    const configs = state.release();
+    const trip = byRole(configs, 'filler').find(config => config.data.sourceId === state.home.storage.id).development.travelTicks;
+    assert.ok(requestedWork(byRole(configs, 'upgrader')) <= Math.floor(150 / trip),
+        'even abundant Storage cannot fund more work than three configured distributors can deliver');
+});
+
 test('Storage reserves and source overflow cannot bypass live distribution throughput, while controller stock can be spent locally', () => {
     const home = room({ capacity: 1300, level: 4 });
     home.storage = structure('storage', 'storage', 24, 24, 100000);
@@ -912,10 +995,25 @@ test('arrived and spawning full upgraders grow the Storage fleet only to their f
         const fleet = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
         assert.equal(fleet.length, 2, 'a committed large worker can need a second distributor before more workers are published');
         assert.equal(fleet[0].spawnPriority, 2);
-        assert.equal(fleet[1].spawnPriority, state.policy.hauling.expansionPriority);
+        assert.equal(fleet[1].spawnPriority, state.policy.hauling.surplusDistributionPriority);
         assert.equal(fleet[1].development.replacement, undefined, 'optional expansion cannot claim a recovery deadline');
         assert.ok(fleet.every(config => config.development.fullBody));
     }
+});
+
+test('Storage delivery expansion keeps its ordinary priority without spendable stock', () => {
+    const home = room({ capacity: 2300, level: 4, sources: [[10, 10], [30, 10]] });
+    home.storage = structure('storage', 'storage', 1, 1, 10000);
+    home.memory.bodyProfiles = { filler: { carryParts: 10 } };
+    home.containers = [structure('controller-container', 'container', 38, 40, 300)];
+    const upgrader = worker(home, { role: 'upgrader', work: 20, name: 'committed-upgrader' });
+    upgrader.memory.development = { fullBody: true };
+    const state = makeWorld(home, { creeps: { upgrader,
+        first: worker(home), second: worker(home, { source: home.sources[1] }),
+    } });
+    const fleet = byRole(state.release(), 'filler').filter(config => config.data.sourceId === home.storage.id);
+    assert.ok(fleet.length > 1, 'arrived income can justify extra delivery without using Storage reserves');
+    assert.ok(fleet.slice(1).every(config => config.spawnPriority === state.policy.hauling.expansionPriority));
 });
 
 test('completed aid and unfunded WORK cannot expand Storage transport, while active aid can', () => {

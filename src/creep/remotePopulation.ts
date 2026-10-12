@@ -6,6 +6,25 @@ import { getRemoteCommissioningSources, remoteCommissioningDecision } from './re
 import { hasRemoteHomeEconomy } from './remoteHomeEconomy'
 import { getReserveFlagForRoom } from './reserveFlags'
 import { releaseReserveFlagConfigs } from './reserveFlagPopulation'
+import { bodyPolicy } from 'settings/bodyPolicy'
+
+/** One publication-wide index; a queued or travelling miner cannot promise real remote output. */
+function productiveRemoteSources(): Map<string, Set<string>> {
+    const result = new Map<string, Set<string>>()
+    for (const name in Game.creeps) {
+        const creep = Game.creeps[name], memory = creep.memory
+        if (memory.role !== roleAdvEnum.RHARVESTER || !memory.spawnRoom || creep.spawning || creep.ticksToLive === 0) continue
+        const data = memory.data as RemoteHarvesterData & { developmentRemote?: { retiring?: boolean } }, boost = memory.boostPlan
+        if (!data?.sourceId || !data.targetRoom || data.developmentRemote?.retiring || boost?.steps.length && !boost.completed && !boost.failed ||
+            creep.room.name !== data.targetRoom || creep.pos.roomName !== data.targetRoom || creep.getActiveBodyparts(WORK) <= 0) continue
+        const source = Game.rooms[data.targetRoom]?.sources?.find(source => source.id === data.sourceId)
+        if (!source || Math.max(Math.abs(creep.pos.x - source.pos.x), Math.abs(creep.pos.y - source.pos.y)) > 1) continue
+        const sources = result.get(memory.spawnRoom)
+        if (sources) sources.add(source.id)
+        else result.set(memory.spawnRoom, new Set([source.id]))
+    }
+    return result
+}
 
 /** 新占领房还没有 Spawn 时，由最近的可支援房孵化自采能的 rBuilder。 */
 export function releaseBootstrapBuilderConfig(): void {
@@ -38,6 +57,7 @@ export function releaseBootstrapBuilderConfig(): void {
 
 export function releaseJobsCreepConfig(): void {
     releaseBootstrapBuilderConfig()
+    const productive = productiveRemoteSources()
     for (const roomName in Game.rooms) {
         const room: Room = Game.rooms[roomName]
         if (!room.my || isRoomEvacuating(room)) continue
@@ -87,6 +107,7 @@ export function releaseJobsCreepConfig(): void {
 
         for (const { flag, target, sources, decision } of remotes) {
             const priority = populationPolicy.remote.startupPriorities
+            const serving = productive.get(room.name)
             // Reserving depends on a room name, never on Source visibility. The full native body waits for 650 energy.
             if (room.level > populationPolicy.remote.reserveAfterLevel &&
                 room.energyCapacityAvailable >= populationPolicy.remote.minimumReserveCapacity && !getReserveFlagForRoom(room, flag.pos.roomName)) {
@@ -96,6 +117,8 @@ export function releaseJobsCreepConfig(): void {
                 const config = room.memory.creepConfig[name]
                 if (config) {
                     config.spawnPriority = decision.maintenance ? priority.maintenance : priority.reserver
+                    if (decision.maintenance && !Game.creeps[name] && sources.some(source => serving?.has(source.id)))
+                        config.spawnPriority = populationPolicy.remote.pipelinePriorities.reserver
                     config.bodyProfile = { boostTier: 0, terrain: 'plain' }
                 }
             }
@@ -106,13 +129,25 @@ export function releaseJobsCreepConfig(): void {
                     const name = addCreepConfig(room, roleAdvEnum.RHARVESTER, `${room.name}_RHARVESTER_${source.id}`, {
                         sourceId: source.id, targetRoom: flag.pos.roomName,
                     } as RemoteHarvesterData)
-                    if (room.memory.creepConfig[name]) room.memory.creepConfig[name].spawnPriority = decision.maintenance ? priority.maintenance : priority.harvester
+                    const config = room.memory.creepConfig[name]
+                    if (config) {
+                        config.spawnPriority = decision.maintenance ? priority.maintenance : priority.harvester
+                        // Fixed Source miners need their mining body even before a Container or vision exists.
+                        if (room.memory.bodyProfiles?.[roleAdvEnum.RHARVESTER]?.stationary === undefined &&
+                            bodyPolicy.profiles[roleAdvEnum.RHARVESTER]?.stationary === undefined)
+                            config.bodyProfile = { ...config.bodyProfile, stationary: true }
+                    }
                 }
                 if (hauling) {
                     const name = addCreepConfig(room, roleAdvEnum.RFILLER, `${room.name}_RFILLER_${source.id}_${room.spawns[0].id}`, {
                         sourceFlag: source.id, targetFlag: room.spawns[0].id,
                     } as RemoteFillerData)
-                    if (room.memory.creepConfig[name]) room.memory.creepConfig[name].spawnPriority = decision.maintenance ? priority.maintenance : priority.hauler
+                    const config = room.memory.creepConfig[name]
+                    if (config) {
+                        config.spawnPriority = decision.maintenance ? priority.maintenance : priority.hauler
+                        if (decision.maintenance && !Game.creeps[name] && serving?.has(source.id))
+                            config.spawnPriority = populationPolicy.remote.pipelinePriorities.hauler
+                    }
                 }
             }
         }

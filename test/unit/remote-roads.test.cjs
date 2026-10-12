@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createSourceLoader } = require('../helpers/load-typescript.cjs');
+const nativeBodies = require('../helpers/native-bodies.cjs');
 
 function world({ manual = true, level = 3, phase = 'hauling', maintenance = false, sources = 1, incomplete = false } = {}) {
     const calls = { paths: [], sites: [], published: [] }, objects = new Map();
@@ -48,7 +49,8 @@ function world({ manual = true, level = 3, phase = 'hauling', maintenance = fals
     }
     const record = addRemote(home, target, { manual });
     let path = [new Position(26, 25, home.name), ...Array.from({ length: 5 }, (_, i) => new Position(i + 2, 15, target.name))];
-    const loader = createSourceLoader({ globals: { Game: game, Memory: memory, RoomPosition: Position,
+    const loader = createSourceLoader({ globals: { ...nativeBodies.globals, Game: game, Memory: memory, RoomPosition: Position,
+        BODYPART_COST: { work: 100, carry: 50, move: 50, claim: 600, tough: 10, attack: 80, ranged_attack: 150, heal: 250 },
         PathFinder: { CostMatrix: Matrix, search(origin, goal, options) {
             calls.paths.push({ origin, goal, options }); return { incomplete, path: path.map(pos => new Position(pos.x, pos.y,
                 pos.roomName === home.name ? origin.roomName : pos.roomName === target.name ? goal.pos.roomName : pos.roomName)) };
@@ -58,9 +60,10 @@ function world({ manual = true, level = 3, phase = 'hauling', maintenance = fals
         STRUCTURE_ROAD: 'road', STRUCTURE_CONTAINER: 'container', STRUCTURE_RAMPART: 'rampart', STRUCTURE_WALL: 'constructedWall',
         STRUCTURE_INVADER_CORE: 'invaderCore', STRUCTURE_KEEPER_LAIR: 'keeperLair', STRUCTURE_TOWER: 'tower', STRUCTURE_EXTRACTOR: 'extractor',
         TERRAIN_MASK_WALL: 1, TERRAIN_MASK_SWAMP: 2, MAX_CONSTRUCTION_SITES: 100, OK: 0, ERR_FULL: -8,
+        RESOURCE_ENERGY: 'energy', ERR_NOT_IN_RANGE: -9,
         OBSTACLE_OBJECT_TYPES: ['spawn', 'extension', 'constructedWall', 'tower', 'storage', 'link'],
         CONTROLLER_STRUCTURES: { extension: { 3: 10 }, road: { 3: 2500 }, container: { 3: 5 } },
-    }, modules: { './remoteHomeEconomy': { hasRemoteHomeEconomy: owner => owner.economy },
+    }, modules: { ...nativeBodies.modules, './remoteHomeEconomy': { hasRemoteHomeEconomy: owner => owner.economy },
         'room/sourceLinks': { redundantSourceContainer: () => false } } });
     const api = loader.load('creep/remoteRoads'), policy = loader.load('settings/remoteRoads').remoteRoadPolicy;
     const construction = loader.load('planning/construction'), building = loader.load('settings/construction').constructionPolicy.building;
@@ -78,7 +81,7 @@ function world({ manual = true, level = 3, phase = 'hauling', maintenance = fals
         release: () => api.releaseRemoteRoadConfigs(publish), step, setPath: positions => { path = positions; } };
 }
 
-test('manual and automatic hauling mines plan compact source lanes and publish one affordable unboosted maintenance worker only for visible work', () => {
+test('manual and automatic hauling mines plan compact source lanes and publish one unboosted maintenance worker only for visible work', () => {
     for (const manual of [true, false]) {
         const w = world({ manual }); w.release();
         assert.equal(w.calls.paths.length, 1); assert.equal(w.calls.sites.length, w.policy.maximumNewSitesPerTick);
@@ -91,9 +94,42 @@ test('manual and automatic hauling mines plan compact source lanes and publish o
         const demand = w.calls.published[0], config = w.home.memory.creepConfig[demand.name];
         assert.equal(demand.role, 'rBuilder'); assert.equal(demand.data.roadHome, w.home.name);
         assert.equal(demand.data.targetRoom, w.target.name); assert.equal(demand.data.sourceFlag, w.target.sources[0].id);
-        assert.equal(config.spawnPriority, 4.5); assert.equal(config.bodyProfile.boostTier, 0); assert.equal(config.bodyProfile.maximumCost, 800);
+        assert.equal(config.spawnPriority, 4.5); assert.equal(config.bodyProfile.boostTier, 0); assert.equal(config.bodyProfile.maximumCost, undefined);
         assert.equal(w.api.hasRemoteRoadRoom(w.home, w.target.name), true);
     }
+});
+
+test('existing road repairs precede remote fleet upkeep while construction retains its ordinary priority and single slot', () => {
+    const w = world({ maintenance: true });
+    w.release(); w.item(w.target, 'road', 2, 15, { site: true });
+    const damaged = w.item(w.target, 'road', 3, 15, { hits: 100 });
+    w.step(); w.release();
+    assert.equal(w.calls.published.length, 1);
+    const repair = w.calls.published[0], config = w.home.memory.creepConfig[repair.name];
+    assert.equal(config.spawnPriority, w.policy.repairPriority);
+    assert.ok(config.spawnPriority > 2.55, 'home recovery, immediate invader defense and the first funded consumer keep precedence');
+    assert.ok(config.spawnPriority < 2.6, 'a maintained lane does not decay behind perpetual remote upkeep births');
+    assert.equal(w.api.getRemoteRoadWork(w.home).id, damaged.id);
+    damaged.hits = damaged.hitsMax; w.step(); w.release();
+    assert.equal(w.calls.published.length, 1);
+    assert.equal(w.calls.published[0].name, repair.name, 'repair and construction reuse one permanent worker slot');
+    assert.equal(w.home.memory.creepConfig[repair.name].spawnPriority, w.policy.builderPriority);
+});
+
+test('road maintenance retains its complete capacity body even while the pool holds only 800 energy', () => {
+    const w = world({ level: 5 }); w.home.energyCapacityAvailable = 1800; w.home.energyAvailable = 800;
+    w.release(); w.item(w.target, 'road', 2, 15, { hits: 100 }); w.step(); w.release();
+    const demand = w.calls.published[0], config = w.home.memory.creepConfig[demand.name];
+    const selection = w.loader.load('creep/bodySelection');
+    const preview = selection.previewBodySelection(w.home, config, 0);
+    const cost = preview.body.reduce((total, part) => total + w.loader.globals.BODYPART_COST[part], 0);
+    assert.ok(cost > 800 && cost <= 1800, 'the native worker uses current capacity rather than a fixed small-worker ceiling');
+    assert.ok(preview.body.includes('work') && preview.body.includes('carry') && preview.body.includes('move'));
+    assert.deepEqual(Array.from(selection.selectCreepBody(w.home, config, false).body), Array.from(preview.body),
+        'the Spawn cost guard receives the same complete body instead of an immediately affordable smaller one');
+    assert.ok(cost > w.home.energyAvailable, 'the existing Spawn guard must wait for the complete body cost');
+    w.home.energyAvailable = 1800;
+    assert.deepEqual(Array.from(selection.selectCreepBody(w.home, config, false).body), Array.from(preview.body));
 });
 
 test('new remotes wait for hauling while paid maintenance survives fleet recovery and denied admission never opens a new lane', () => {
@@ -243,22 +279,76 @@ test('maintenance resolves visible work and the most damaged road while excludin
     assert.equal(w.api.getRemoteRoadWork(w.home, 'W9N9'), undefined);
 });
 
+test('a road worker finishes its selected repair batch before following a lower-ratio road in another remote', () => {
+    const w = world({ maintenance: true }), other = w.room('W3N1');
+    w.addRemote(w.home, other, { maintenance: true });
+    w.game.flags[`${w.home.name}_OUT0`] = { pos: new w.Position(25, 25, w.target.name) };
+    w.game.flags[`${w.home.name}_OUT1`] = { pos: new w.Position(25, 25, other.name) };
+    w.release(); w.step(); w.release();
+    const first = w.item(w.target, 'road', 2, 15, { hits: 100, hitsMax: 5000 });
+    const second = w.item(other, 'road', 3, 15, { hits: 200, hitsMax: 5000 });
+    w.item(w.target, 'container', 9, 10, { site: true });
+    w.step(); w.release();
+    const demand = w.calls.published[0], calls = [];
+    const creep = { name: demand.name, room: w.target, pos: new w.Position(2, 15, w.target.name),
+        store: { energy: 100 }, memory: { data: demand.data },
+        repair(target) { calls.push({ type: 'repair', id: target.id }); return target.pos.roomName === this.room.name ? 0 : -9; },
+        build() { assert.fail('local construction cannot overtake any eligible road repair'); },
+        moveTo(target) { calls.push({ type: 'move', roomName: (target.pos || target).roomName }); } };
+    w.game.creeps[creep.name] = creep;
+    const worker = w.loader.load('role/support/remoteRoadWork');
+    worker.targetRemoteRoadWork(creep, creep.memory.data);
+    assert.equal(creep.memory.data.buildTarget, first.id);
+    for (const hits of [600, 1100, 1600, 2100]) {
+        first.hits = hits; w.step();
+        assert.equal(w.api.getRemoteRoadWork(w.home).id, second.id, 'the other room now has the globally lowest ratio');
+        w.release();
+        assert.equal(creep.memory.data.buildTarget, first.id, 'population refresh preserves the active repair target');
+        worker.targetRemoteRoadWork(creep, creep.memory.data);
+        assert.equal(calls.at(-1).id, first.id, 'the worker keeps repairing the selected road below its maintenance threshold');
+        assert.equal(calls.some(call => call.type === 'move'), false);
+    }
+    first.hits = 2500; w.step();
+    worker.targetRemoteRoadWork(creep, creep.memory.data);
+    assert.equal(creep.memory.data.buildTarget, second.id, 'the completed repair batch releases its target at exactly half health');
+    assert.equal(calls.at(-1).roomName, other.name);
+});
+
+test('preferred repair ids cannot retain completed, removed or unrelated roads or construction targets', () => {
+    const w = world(); w.release();
+    const first = w.item(w.target, 'road', 2, 15, { hits: 400 });
+    const worst = w.item(w.target, 'road', 3, 15, { hits: 100 });
+    const unrelated = w.item(w.home, 'road', 30, 30, { hits: 10 });
+    const site = w.item(w.target, 'container', 9, 10, { site: true });
+    w.step();
+    assert.equal(w.api.getRemoteRoadWork(w.home, undefined, first.id).id, first.id);
+    for (const id of [unrelated.id, site.id, 'gone-road'])
+        assert.equal(w.api.getRemoteRoadWork(w.home, undefined, id).id, worst.id);
+    first.hits = 500; w.step();
+    assert.equal(w.api.getRemoteRoadWork(w.home, undefined, first.id).id, worst.id);
+    first.hits = 400; w.target.structures = w.target.structures.filter(item => item !== first); w.step();
+    assert.equal(w.api.getRemoteRoadWork(w.home, undefined, first.id).id, worst.id);
+});
+
 test('hostiles, foreign controllers, foreign reservations, cores, keeper lairs, towers and evacuation pause work', () => {
     for (const change of [w => { w.target.enemies.push({}); }, w => { w.target.controller.owner = { username: 'enemy' }; },
         w => { w.target.controller.reservation = { username: 'enemy' }; }, w => { w.target.hostiles.push({ structureType: 'invaderCore' }); },
         w => { w.target.hostiles.push({ structureType: 'keeperLair' }); }, w => { w.target.hostiles.push({ structureType: 'tower' }); },
         w => { w.target.memory.evacuation = {}; }, w => { w.memory.warMode[w.target.name] = true; }]) {
-        const w = world(); w.release(); w.item(w.target, 'road', 2, 15, { site: true }); change(w); w.step(); w.release();
+        const w = world(); w.release(); w.item(w.target, 'road', 2, 15, { site: true });
+        const repair = w.item(w.target, 'road', 3, 15, { hits: 100 }); change(w); w.step(); w.release();
         assert.equal(w.calls.paths.length, 1); assert.equal(w.calls.published.length, 0);
-        assert.equal(w.api.getRemoteRoadWork(w.home), undefined); assert.equal(w.api.isRemoteRoadRoomSafe(w.target, w.home), false);
+        assert.equal(w.api.getRemoteRoadWork(w.home, undefined, repair.id), undefined); assert.equal(w.api.isRemoteRoadRoomSafe(w.target, w.home), false);
     }
 });
 
 test('removing manual flags or automatic selection retires cached road lanes and immediately invalidates worker room membership', () => {
     for (const manual of [true, false]) {
         const w = world({ manual }); w.release(); w.item(w.target, 'road', 2, 15, { site: true });
+        const repair = w.item(w.target, 'road', 3, 15, { hits: 100 });
         if (manual) delete w.game.flags[`${w.home.name}_OUT0`]; else w.home.memory.developmentRemotes.selectedRooms = [];
-        w.step(); assert.equal(w.api.hasRemoteRoadRoom(w.home, w.target.name), false); assert.equal(w.api.getRemoteRoadWork(w.home), undefined);
+        w.step(); assert.equal(w.api.hasRemoteRoadRoom(w.home, w.target.name), false);
+        assert.equal(w.api.getRemoteRoadWork(w.home, undefined, repair.id), undefined);
         w.release(); assert.equal(w.calls.published.length, 0); assert.equal(Object.keys(w.home.memory.remoteRoads.routes).length, 0);
     }
 });
