@@ -15,7 +15,8 @@ function store(resources = {}, capacity = 300000) {
 
 /** Native stores change only after all room work and the Manager intent have run. */
 function world({ storage = { energy: 600000 }, terminal = { energy: 50000 },
-    storageCapacity = 1000000, terminalCapacity = 300000, managerCapacity = 2450, scanInterval = 25 } = {}) {
+    warehouse = false, storageCapacity = warehouse ? 8000000 : 1000000,
+    terminalCapacity = 300000, managerCapacity = 2450, scanInterval = 25 } = {}) {
     const events = [], intents = [], incoming = new Map();
     const order = { id: 'energy-buyer', type: 'buy', resourceType: 'energy',
         remainingAmount: 10000000, amount: 10000000, price: 1, roomName: 'W5N1' };
@@ -38,7 +39,7 @@ function world({ storage = { energy: 600000 }, terminal = { energy: 50000 },
                 return 0;
             }
         } };
-    const room = { name: 'W1N1', my: true, controller: { my: true, level: 8, isPowerEnabled: false },
+    const room = { name: 'W1N1', my: true, controller: { my: true, level: 8, isPowerEnabled: warehouse },
         memory: { terminalAmount: {}, terminalSendJob: {}, boostNeed: {} }, labs: [],
         storage: { id: 'storage', store: store(storage, storageCapacity) },
         terminal: { id: 'terminal', my: true, cooldown: 0, store: store(terminal, terminalCapacity),
@@ -135,6 +136,42 @@ test('last surplus energy batch survives a Manager withdrawal down to exactly 40
     assert.equal(w.room.storage.store.energy, 400000);
     assert.equal(w.room.terminal.store.energy, 50000);
     assert.equal(w.events.filter(event => event.kind === 'deliver' && event.target === 'storage').length, 0);
+});
+
+test('warehouse Manager completes the last surplus batch while retaining 1M plus 50k terminal energy', () => {
+    const w = world({ warehouse: true, storage: { energy: 1001100 } });
+    w.step();
+    assert.equal(w.room.storage.store.energy, 1000000);
+    assert.equal(w.manager.store.energy, 1100);
+    w.step();
+    assert.equal(w.room.terminal.store.energy, 51100);
+    w.until(() => w.events.some(event => event.kind === 'sale'));
+    const sale = w.events.find(event => event.kind === 'sale');
+    assert.equal(sale.amount, 1000);
+    assert.equal(sale.fee, 100);
+    assert.equal(w.room.storage.store.energy, 1000000);
+    assert.equal(w.room.terminal.store.energy, 50000);
+    assert.equal(w.events.filter(event => event.kind === 'deliver' && event.target === 'storage').length, 0);
+    assert.equal(w.room.memory.terminalAmount.X, 5000, 'central mineral reserves coexist with sale staging');
+});
+
+test('full warehouse Storage stages a 100k sale to release capacity without spending the 1M floor', () => {
+    const w = world({ warehouse: true, storage: { energy: 1200000, wire: 6800000 } });
+    assert.equal(w.room.storage.store.getFreeCapacity(), 0);
+    w.until(() => w.events.some(event => event.kind === 'sale'));
+    assert.equal(w.events.find(event => event.kind === 'sale').amount, 100000);
+    assert.ok(w.room.storage.store.getFreeCapacity() >= 110000);
+    assert.ok(w.room.storage.store.energy >= 1000000);
+});
+
+test('warehouse explicit mineral transfer completes before surplus energy sale', () => {
+    const w = world({ warehouse: true, storage: { energy: 1200000, H: 10000 }, terminal: { energy: 50000, H: 5000 } });
+    w.room.memory.terminalSendJob.hydrogen = { targetRoom: 'external', resourceType: 'H', amount: 5000 };
+    w.until(() => w.events.some(event => event.kind === 'send'), 10);
+    assert.equal(w.events.filter(event => event.kind === 'sale').length, 0);
+    w.until(() => w.events.some(event => event.kind === 'sale'));
+    assert.equal(w.events.find(event => event.kind === 'sale' || event.kind === 'send').kind, 'send');
+    assert.ok(w.room.storage.store.energy >= 1000000);
 });
 
 test('full Storage and a 50k terminal stage a large sale and release storage capacity', () => {

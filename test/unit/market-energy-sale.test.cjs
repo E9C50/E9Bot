@@ -24,7 +24,7 @@ function world({ orders = [{ id: 'buy', amount: 2000000, remainingAmount: 200000
         deal(id, amount, room) { deals.push({ id, amount, room }); return typeof dealResult === 'function' ? dealResult(id) : dealResult; }
     } };
     const roomPolicy = { market: { scanInterval, staggerScans: true, ordinaryEnergyStorageReserve: 400000,
-        ordinaryEnergyMaximumSaleAmount: 100000, maximumDealsPerTick: 10,
+        warehouseEnergyStorageReserve: 1000000, energyMaximumSaleAmount: 100000, maximumDealsPerTick: 10,
         defaultMinimumPrice: 20, defaultSaleAmount: 10000, energyValue: 20, minimumOrderAmount: 100 },
         terminal: { centerResourceReserve: 5000 } };
     const loader = createSourceLoader({ globals: { Game: game, Memory: {}, RESOURCE_ENERGY: 'energy', ORDER_BUY: 'buy',
@@ -115,7 +115,7 @@ test('ordinary energy-sale planning reads zero Lab or Factory energy while prese
     room.factory = { store: { get energy() { factoryReads++; return 20000; } } };
     room.terminal.cooldown = 0;
     for (let tick = 0; tick < 25; tick++) {
-        w.processOrdinaryEnergySale(room);
+        w.processEnergySale(room);
         assert.equal(room.memory.terminalAmount.energy, 51100, 'only the same 1100 movable surplus can be staged');
         w.tick();
     }
@@ -123,7 +123,7 @@ test('ordinary energy-sale planning reads zero Lab or Factory energy while prese
     assert.equal(factoryReads, 0, 'previous whole-room-minus-fixed algebra read Factory twice per planning pass');
     assert.equal(w.queries(), 1, 'market scan cadence and shared order cache remain unchanged');
     room.storage.store.energy = 400000;
-    w.processOrdinaryEnergySale(room);
+    w.processEnergySale(room);
     assert.equal(room.memory.terminalAmount.energy, 50000, 'fresh native storage changes still cancel a no-longer-funded sale');
     assert.equal(w.deals.length, 0);
 });
@@ -138,7 +138,7 @@ test('a room without a movable energy surplus avoids native terminal capacity an
         labs: { get() { assert.fail('no sale budget uses fixed Lab stock'); } },
         factory: { get() { assert.fail('no sale budget uses fixed Factory stock'); } },
     });
-    w.processOrdinaryEnergySale(room);
+    w.processEnergySale(room);
     assert.equal(room.memory.terminalAmount.energy, 50000);
     assert.equal(w.queries(), 0);
     assert.equal(w.deals.length, 0);
@@ -163,12 +163,77 @@ test('a positive ordinary-room buy price does not inherit the legacy 20-credit f
     assert.equal(w.deals[0].amount, 100000);
 });
 
-test('warehouse rooms keep their existing lower threshold and never stage the ordinary reserve', () => {
-    const w = world(), room = w.add('W1N1', { warehouse: true, storage: { energy: 350000 }, terminal: { energy: 65000 } });
+test('warehouse energy below or at 1M plus the 50k terminal reserve cannot use either legacy sale list', () => {
+    for (const energy of [350000, 600001, 1000000]) {
+        const w = world(), room = w.add('W1N1', { warehouse: true, storage: { energy } });
+        w.processRoomMarket(room);
+        assert.equal(w.queries(), 0);
+        assert.equal(room.memory.terminalAmount.energy, 50000);
+        assert.deepEqual(w.deals, []);
+    }
+});
+
+test('warehouse last surplus batch includes its fee and survives movement out of Storage', () => {
+    const w = world(), room = w.add('W1N1', { warehouse: true, storage: { energy: 1001100 } });
     w.processRoomMarket(room);
-    assert.equal(w.deals[0].amount, 10000);
+    assert.equal(room.memory.terminalAmount.energy, 51100);
+    assert.equal(w.deals.length, 0);
+    room.storage.store.energy -= 1100;
+    room.terminal.store.energy += 1100;
+    w.tick(); w.setDue(false); w.processRoomMarket(room);
+    assert.equal(w.deals[0].amount, 1000);
+    assert.equal(w.network.getRoomResourceAmount(room, 'energy'), 1050000);
+    assert.equal(w.network.getTerminalResourceAmount(room, 'energy'), 50000);
+});
+
+test('warehouses sell large batches at a positive price and share executable stock with ordinary rooms', () => {
+    const w = world({ orders: [{ id: 'cheap', amount: 150000, remainingAmount: 1000000, price: 0.001, roomName: 'W5N1' }] });
+    const warehouse = w.add('W1N1', { warehouse: true, storage: { energy: 1000000 }, terminal: { energy: 160000 } });
+    const ordinary = w.add('W2N1', { storage: { energy: 400000 }, terminal: { energy: 160000 } });
+    w.processRoomMarket(warehouse); w.processRoomMarket(ordinary);
+    assert.deepEqual(w.deals.map(deal => deal.amount), [100000, 50000]);
+    assert.equal(w.queries(), 1);
+    assert.equal(w.network.getRoomResourceAmount(warehouse, 'energy'), 1050000);
+});
+
+test('warehouse staging respects cooldown, terminal space, outgoing cargo and production commitments', () => {
+    const w = world(), room = w.add('W1N1', { warehouse: true, storage: { energy: 1100000 },
+        terminal: { energy: 50000, H: 200000 } });
+    room.memory.terminalSendJob.promised = { resourceType: 'energy', amount: 60000, targetRoom: 'W9N9' };
+    room.memory.productionReserve = { factory: { energy: 10000 } };
+    room.terminal.cooldown = 10;
+    w.processRoomMarket(room);
+    assert.equal(room.memory.terminalAmount.energy, 80000, 'only 30k including fee is uncommitted');
+    assert.equal(w.deals.length, 0);
+    w.tick(); w.setDue(false); w.processRoomMarket(room);
+    assert.equal(room.memory.terminalAmount.energy, 80000);
+    assert.equal(w.queries(), 1);
+    delete room.memory.terminalSendJob.promised;
+    w.tick(); w.setDue(true); w.processRoomMarket(room);
+    assert.equal(room.memory.terminalAmount.energy, 100000, 'available terminal space caps staged energy');
+});
+
+test('warehouse fixed energy and a loss of sale surplus never consume the 1M floor', () => {
+    const w = world(), room = w.add('W1N1', { warehouse: true, storage: { energy: 1001100 } });
+    w.processRoomMarket(room);
+    assert.equal(w.queries(), 1);
+    room.storage.store.energy = 1000000;
+    Object.defineProperties(room, {
+        labs: { get() { assert.fail('fixed Lab energy is not movable surplus'); } },
+        factory: { get() { assert.fail('fixed Factory energy is not movable surplus'); } }
+    });
+    w.tick(); w.setDue(false); w.processRoomMarket(room);
     assert.equal(room.memory.terminalAmount.energy, 50000);
-    assert.equal(w.network.getRoomResourceAmount(room, 'energy'), 404000);
+    assert.equal(w.deals.length, 0);
+    assert.equal(w.queries(), 1);
+});
+
+test('power-enabled rooms whose Storage capacity is only 1M retain the ordinary 400k floor', () => {
+    const w = world(), room = w.add('W1N1', { storage: { energy: 400000 }, terminal: { energy: 160000 } });
+    room.controller.isPowerEnabled = true;
+    w.processRoomMarket(room);
+    assert.equal(w.deals[0].amount, 100000);
+    assert.equal(w.network.getRoomResourceAmount(room, 'energy'), 450000);
 });
 
 test('warehouse automatic sales leave all raw mineral surplus for compression in either sale list', () => {

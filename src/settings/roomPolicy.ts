@@ -41,7 +41,8 @@ export const roomPolicy = {
         scanInterval: 25,
         staggerScans: true,
         ordinaryEnergyStorageReserve: 400000,
-        ordinaryEnergyMaximumSaleAmount: 100000,
+        warehouseEnergyStorageReserve: 1000000,
+        energyMaximumSaleAmount: 100000,
         maximumDealsPerTick: 10,
         defaultMinimumPrice: 20,
         defaultSaleAmount: 10000,
@@ -80,15 +81,8 @@ export interface ResourceSalePolicy {
     sellAmount: number
 }
 
-/** 仓库房沿用原能量出售规则；普通房另按 400k Storage 留存自动出售。 */
-export const roomResourceSales: ResourceSalePolicy[] = [
-    {
-        resourceType: RESOURCE_ENERGY,
-        threshold: 600000,
-        minPrice: 20,
-        sellAmount: 10000,
-    },
-]
+/** 非能量自动出售规则；能量统一按普通房 400k / 仓库房 1M 留存备货出售。 */
+export const roomResourceSales: ResourceSalePolicy[] = []
 
 export const centerResourceSales: ResourceSalePolicy[] = [
     {
@@ -156,12 +150,6 @@ export const centerResourceSales: ResourceSalePolicy[] = [
         threshold: 300000,
         minPrice: 0.001,
         sellAmount: 5000,
-    },
-    {
-        resourceType: RESOURCE_ENERGY,
-        threshold: 300000,
-        minPrice: 0.001,
-        sellAmount: 10000,
     },
 ]
 

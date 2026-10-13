@@ -104,9 +104,8 @@ function dealResource(room: Room, order: Order, resource: ResourceConstant, amou
 }
 
 /** Local cargo remains part of the batch while Manager moves it out of Storage. */
-function energySaleBudget(room: Room): number {
+function energySaleBudget(room: Room, storageReserve: number): number {
     const movable = getRoomMovableResourceAmount(room, RESOURCE_ENERGY)
-    const storageReserve = roomPolicy.market.ordinaryEnergyStorageReserve
     return Math.max(0, Math.min(movable - storageReserve - resourcePolicy.terminalEnergyReserve,
         movable - storageReserve - getResourceKeep(room, RESOURCE_ENERGY) - getOutgoingResourceAmount(room.name, RESOURCE_ENERGY)))
 }
@@ -121,7 +120,7 @@ function selectEnergyPlan(room: Room, budget: number, headroom: number): EnergyS
     let bestPrice = 0, selected: Order | undefined
     for (const order of cache.orders) {
         if (!order.roomName || !Number.isFinite(order.price) || order.price <= 0 || Game.market.orders?.[order.id]) continue
-        const sample = Math.min(executableAmount(order), roomPolicy.market.ordinaryEnergyMaximumSaleAmount, budget, headroom)
+        const sample = Math.min(executableAmount(order), roomPolicy.market.energyMaximumSaleAmount, budget, headroom)
         if (sample <= 0) continue
         // One fee calculation per candidate; only the winning order needs an exact budget search.
         const price = order.price * sample / (sample + resourceTransactionCost(room, order.roomName, sample))
@@ -129,15 +128,17 @@ function selectEnergyPlan(room: Room, budget: number, headroom: number): EnergyS
     }
     if (!selected) return undefined
     const amount = affordableSendAmount(room, RESOURCE_ENERGY, selected.roomName!,
-        Math.min(executableAmount(selected), roomPolicy.market.ordinaryEnergyMaximumSaleAmount),
+        Math.min(executableAmount(selected), roomPolicy.market.energyMaximumSaleAmount),
         resourcePolicy.terminalEnergyReserve + Math.min(budget, headroom))
     return amount > 0 ? { orderId: selected.id, amount } : undefined
 }
 
-/** Stage an entire ordinary-room surplus batch, including its fee, before making a deal. */
-export function processOrdinaryEnergySale(room: Room, due = true): void {
+/** Stage surplus energy and its fee above the room's storage and terminal reserves. */
+export function processEnergySale(room: Room, due = true): void {
     prepareMarket()
-    if (!room.storage || !room.terminal || isWarehouseRoom(room) || isRoomEvacuating(room)) return
+    if (!room.storage || !room.terminal || isRoomEvacuating(room)) return
+    const storageReserve = isWarehouseRoom(room) ? roomPolicy.market.warehouseEnergyStorageReserve :
+        roomPolicy.market.ordinaryEnergyStorageReserve
     const reserve = resourcePolicy.terminalEnergyReserve
     room.memory.terminalAmount ||= { energy: reserve }
     let plan = energyPlans.get(room.name)
@@ -151,7 +152,7 @@ export function processOrdinaryEnergySale(room: Room, due = true): void {
         retryEnergyRooms.delete(room.name)
         demand.energy = reserve
     }
-    const budget = energySaleBudget(room)
+    const budget = energySaleBudget(room, storageReserve)
     if (budget <= 0) { clear(); return }
     const headroom = terminalEnergyHeadroom(room)
     if (headroom <= 0) { clear(); return }
@@ -177,8 +178,8 @@ export function processOrdinaryEnergySale(room: Room, due = true): void {
     const terminalEnergy = getTerminalResourceAmount(room, RESOURCE_ENERGY)
     if (terminalEnergy < demand.energy) return
     const liquidBudget = Math.min((room.storage.store.energy || 0) + terminalEnergy -
-        roomPolicy.market.ordinaryEnergyStorageReserve - reserve,
-        getAvailableResource(room, RESOURCE_ENERGY) - roomPolicy.market.ordinaryEnergyStorageReserve)
+        storageReserve - reserve,
+        getAvailableResource(room, RESOURCE_ENERGY) - storageReserve)
     if (plan.amount + fee > liquidBudget) return
     if (dealResource(room, order, RESOURCE_ENERGY, plan.amount)) {
         console.log(`卖出energy [${room.name}] => [${order.roomName}]，单价为：${order.price}，数量为：${plan.amount}`)
@@ -253,10 +254,10 @@ export function processRoomMarket(room: Room): void {
     const warehouse = isWarehouseRoom(room)
     // Warehouse raw surplus feeds compression; selling it would compete with that stock policy.
     const canAutoSell = (resource: ResourceConstant): boolean =>
-        !warehouse || !basicMinerals.includes(resource) && resource !== 'G'
-    if (!warehouse) processOrdinaryEnergySale(room, due)
+        resource !== RESOURCE_ENERGY && (!warehouse || !basicMinerals.includes(resource) && resource !== 'G')
+    processEnergySale(room, due)
     if (due) for (const sale of roomResourceSales)
-        if ((warehouse || sale.resourceType !== RESOURCE_ENERGY) && canAutoSell(sale.resourceType))
+        if (canAutoSell(sale.resourceType))
         sellResource(
             room,
             sale.resourceType,

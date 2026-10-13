@@ -28,13 +28,13 @@ Manager 默认 49 CARRY + 1 MOVE，共 50 部件、2500 能量。成熟房按能
 
 显式发送任务保留，失败任务记录 `lastError`、`failures`、`retryAfter` 并退避重试；等待期间不霸占备货。自动任务包含 `kind`，库存减少或目标失效时裁减不能兑现的承诺，使接收房可以寻找新供给。
 
-## 普通房能量出售
+## 能量出售
 
-普通房自动将超过 Storage 400000 常备量的能量，通过市场买单直接卖出；Terminal 的 50000 能量另行保留。预算按 Storage、Terminal 和本地 Manager/Processer 搬运中的能量合计保留 450000，终端里的既有余量也可出售，Lab/Factory 内部能量不作可卖库存。这样搬入终端或拿在搬运工手里时不会取消最后一批。出售量和手续费共同占用超额预算，同时保护已有发送承诺、生产和 Boost 预留。仓库房不套用这项规则，沿用已有仓库出售策略。
+普通房自动保留 Storage 400000 常备能量，仓库房保留 1000000，超过部分通过市场买单直接卖出；Terminal 的 50000 能量另行保留。预算按 Storage、Terminal 和本地 Manager/Processer 搬运中的能量合计，分别保留 450000 / 1050000，终端里的既有余量也可出售，Lab/Factory 内部能量不作可卖库存。这样搬入终端或拿在搬运工手里时不会取消最后一批。出售量和手续费共同占用超额预算，同时保护已有发送承诺、生产和 Boost 预留。仓库与普通房使用同一批量备货流程，旧出售列表中的能量规则不再执行，避免绕过留存底线。
 
-Manager 根据下一笔成交量、手续费和终端保底备货，全部备齐后再成交，单笔最多 100000。按扣除运输能量后的综合收益选择有效买单，不再以普通房旧规则的 600000 能量和 20 综合单价作为门槛。终端发送任务优先，冷却期间继续备货。能量订单由同 shard 房间共享周期缓存，正常每 25 tick 更新、CPU 恢复期每 250 tick 更新；库存、冷却和本 tick 已成交额度仍即时检查。
+Manager 根据下一笔成交量、手续费和终端保底备货，全部备齐后再成交，单笔最多 100000。按扣除运输能量后的综合收益选择价格为正的有效买单。终端发送任务优先，冷却期间继续备货。能量订单由同 shard 房间共享周期缓存，正常每 25 tick 更新、CPU 恢复期每 250 tick 更新；库存、冷却和本 tick 已成交额度仍即时检查。
 
-终端已有的超额能量可以先出售腾空间，再继续从 Storage 备货；市场批次使用终端实际可用空间，Manager 仍遵守同 tick 接收容量预约。订单失效或资金不足时，下 tick 改选其他缓存买单；所有出售共用每 tick 10 笔成交上限。留存量、批次上限和成交上限分别配置于 `roomPolicy.market.ordinaryEnergyStorageReserve`、`ordinaryEnergyMaximumSaleAmount` 和 `maximumDealsPerTick`。
+终端已有的超额能量可以先出售腾空间，再继续从 Storage 备货；市场批次使用终端实际可用空间，Manager 仍遵守同 tick 接收容量预约。订单失效或资金不足时，下 tick 改选其他缓存买单；所有出售共用每 tick 10 笔成交上限。普通房、仓库房留存量分别配置于 `roomPolicy.market.ordinaryEnergyStorageReserve`、`warehouseEnergyStorageReserve`，批次上限和成交上限为 `energyMaximumSaleAmount` 和 `maximumDealsPerTick`。
 
 2026-10-08 23:25（北京时间）只读检查 shard3，实际自有 9 个普通房和 E38N6 仓库。以下为检查时的 Storage 状态；普通房终端能量均约 50000。
 
