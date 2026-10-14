@@ -208,3 +208,182 @@ test('simultaneous survivors reserve a shared deficit instead of draining duplic
     assert.equal(w.carrier.store.energy + other.store.energy, 1800);
     assert.equal(w.terminal.store.energy, 6709);
 });
+
+test('an active recovery bridge funds its complete distributor from Storage before waiting on mining output', () => {
+    const w = world(); w.miner(); w.storage.store.energy = 200000; w.container.store.energy = 2000;
+    w.carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time - 1 };
+    w.carrier.pos = w.storage.pos;
+    const binding = JSON.stringify(w.carrier.memory.data), lane = JSON.stringify(w.carrier.memory.developmentHauler);
+    assert.equal(w.tick(), true);
+    assert.equal(w.calls.find(call => call.method === 'withdraw').target, w.storage.id);
+    assert.equal(w.carrier.memory.productionRecoveryCargo.targetEnergy, 2200);
+    for (let i = 0; i < 160 && w.room.energyAvailable < 2200; i++) w.tick();
+    assert.equal(w.room.energyAvailable, 2200);
+    assert.equal(w.storage.store.energy, 198100, 'only the complete distributor deficit is taken');
+    assert.equal(w.container.store.energy, 2000); assert.equal(w.controllerBuffer.store.energy, 2000);
+    assert.equal(w.terminal.store.energy, 8509); assert.equal(w.room.memory.productionRecoveryTerminalDebt, undefined);
+    assert.equal(JSON.stringify(w.carrier.memory.data), binding);
+    assert.equal(JSON.stringify(w.carrier.memory.developmentHauler), lane);
+});
+
+test('simultaneous recovery bridges reserve one distributor deficit from shared Storage', () => {
+    const w = world(), other = w.filler('other', 2000); w.miner(); w.storage.store.energy = 200000;
+    w.carrier.store = { energy: 0, getCapacity: () => 2000, getFreeCapacity() { return 2000 - this.energy; } };
+    for (const carrier of [w.carrier, other]) {
+        carrier.pos = w.storage.pos;
+        carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time - 1 };
+    }
+    w.tick(() => { w.api.runFillerProductionRecovery(w.carrier); w.api.runFillerProductionRecovery(other); });
+    assert.equal(w.carrier.store.energy + other.store.energy, 1900);
+    assert.equal(w.storage.store.energy, 198100);
+    assert.equal(w.calls.filter(call => call.method === 'withdraw').length, 1);
+});
+
+test('same-tick production delivery is not counted again as energy still in transit', () => {
+    const w = world(), other = w.filler('other', 2000); w.miner(); w.storage.store.energy = 200000;
+    w.carrier.store.energy = 600;
+    w.carrier.memory.productionRecoveryCargo = { targetEnergy: 2200 };
+    w.carrier.pos = w.room.extensions[0].pos; other.pos = w.storage.pos;
+    for (const carrier of [w.carrier, other]) carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time - 1 };
+    w.tick(() => { w.api.runFillerProductionRecovery(w.carrier); w.api.runFillerProductionRecovery(other); });
+    assert.equal(w.room.energyAvailable, 350); assert.equal(w.carrier.store.energy, 550);
+    assert.equal(other.store.energy, 1300, 'new cargo covers the actual remaining deficit after a 50-energy transfer');
+    assert.equal(w.room.energyAvailable + w.carrier.store.energy + other.store.energy, 2200);
+});
+
+test('a recovery bridge keeps the mining fallback when Storage is empty without borrowing terminal reserves', () => {
+    const w = world(); w.miner(); w.terminal.store.energy = 50000;
+    w.carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time - 1 };
+    assert.equal(w.tick(), true);
+    assert.equal(w.calls.some(call => call.method === 'withdraw'), false, 'empty mines do not cause another terminal loan');
+    w.container.store.energy = 2000;
+    assert.equal(w.tick(), true);
+    assert.equal(w.calls.find(call => call.method === 'withdraw').target, w.container.id);
+    assert.equal(w.carrier.store.energy, 600); assert.equal(w.terminal.store.energy, 50000);
+    assert.equal(w.room.memory.productionRecoveryTerminalDebt, undefined);
+});
+
+test('a real permanent distributor ends the bridge before it takes any Storage stock', () => {
+    const w = world(); w.miner(); w.storage.store.energy = 200000;
+    w.carrier.memory.productionRecoverySpawn = { roomName: w.room.name, tick: w.game.time - 1 };
+    const distributor = w.filler('distributor'); distributor.memory.data = { sourceId: w.storage.id };
+    delete distributor.memory.developmentHauler;
+    const binding = JSON.stringify(w.carrier.memory.data), lane = JSON.stringify(w.carrier.memory.developmentHauler);
+    assert.equal(w.tick(), false);
+    assert.equal(w.carrier.memory.productionRecoverySpawn, undefined);
+    assert.equal(w.storage.store.energy, 200000); assert.equal(w.calls.length, 0);
+    assert.equal(JSON.stringify(w.carrier.memory.data), binding);
+    assert.equal(JSON.stringify(w.carrier.memory.developmentHauler), lane);
+});
+
+for (const phase of ['source', 'target']) test(`the filler ${phase} hook can commission a missing Storage lane while miners are healthy`, () => {
+    const w = world(); w.miner(); w.storage.store.energy = 200000; w.carrier.pos = w.storage.pos;
+    const binding = JSON.stringify(w.carrier.memory.data), lane = JSON.stringify(w.carrier.memory.developmentHauler);
+    assert.equal(w.carrier.memory.productionRecoverySpawn, undefined);
+    assert.equal(w.tick(() => w.behavior()[phase](w.carrier)), true);
+    assert.equal(w.calls.find(call => call.method === 'withdraw').target, w.storage.id);
+    assert.equal(w.carrier.memory.productionRecoverySpawn.roomName, w.room.name);
+    assert.equal(w.carrier.memory.productionRecoveryCargo.targetEnergy, 2200);
+    assert.equal(w.terminal.store.energy, 8509); assert.equal(w.room.memory.productionRecoveryTerminalDebt, undefined);
+    assert.equal(JSON.stringify(w.carrier.memory.data), binding);
+    assert.equal(JSON.stringify(w.carrier.memory.developmentHauler), lane);
+});
+
+test('only the nearest usable mine carrier starts a new Storage bridge and other mines retain their jobs', () => {
+    const w = world(), other = w.filler('other'); w.miner(); w.storage.store.energy = 200000;
+    w.carrier.pos = w.storage.pos;
+    let scans = 0;
+    w.game.creeps = new Proxy(w.game.creeps, { ownKeys(target) { scans++; return Reflect.ownKeys(target); } });
+    w.tick(() => {
+        assert.equal(w.api.runFillerProductionRecovery(other), false);
+        const firstScans = scans;
+        assert.equal(w.api.runFillerProductionRecovery(other), false);
+        assert.equal(scans, firstScans, 'another nonselected call reuses the room decision');
+        assert.equal(w.api.runFillerProductionRecovery(w.carrier), true);
+    });
+    assert.equal(w.previews, 1, 'the full distributor target is previewed once for the room');
+    assert.ok(w.carrier.memory.productionRecoverySpawn);
+    assert.equal(other.memory.productionRecoverySpawn, undefined);
+    assert.equal(other.store.energy, 0); assert.equal(w.carrier.store.energy, 600);
+});
+
+test('the bridge selection rechecks body damage next tick instead of retaining a failed carrier', () => {
+    const w = world(), other = w.filler('other'); w.miner(); w.storage.store.energy = 200000;
+    w.carrier.pos = w.storage.pos;
+    assert.equal(w.tick(() => w.api.runFillerProductionRecovery(other)), false);
+    assert.equal(w.previews, 1);
+    w.carrier.getActiveBodyparts = part => part === 'carry' ? 0 : 12;
+    assert.equal(w.tick(() => w.api.runFillerProductionRecovery(other)), true);
+    assert.ok(other.memory.productionRecoverySpawn);
+    assert.equal(w.carrier.memory.productionRecoverySpawn, undefined);
+    assert.equal(w.previews, 2);
+});
+
+test('an existing permanent Storage distributor blocks new bridges and is rechecked after it dies', () => {
+    const w = world(), other = w.filler('other'); w.miner(); w.storage.store.energy = 200000;
+    const distributor = w.filler('distributor'); distributor.memory.data = { sourceId: w.storage.id };
+    delete distributor.memory.developmentHauler;
+    w.carrier.pos = w.storage.pos;
+    w.tick(() => {
+        assert.equal(w.api.runFillerProductionRecovery(w.carrier), false);
+        assert.equal(w.api.runFillerProductionRecovery(other), false);
+    });
+    assert.equal(w.previews, 0); assert.equal(w.calls.length, 0);
+    assert.equal(w.carrier.memory.productionRecoverySpawn, undefined);
+    delete w.game.creeps.distributor;
+    assert.equal(w.tick(), true);
+    assert.equal(w.carrier.memory.productionRecoveryCargo.targetEnergy, 2200);
+    assert.equal(w.calls.find(call => call.method === 'withdraw').target, w.storage.id);
+});
+
+for (const kind of ['damaged move', 'preparing boost', 'foreign home', 'unknown mine']) test(`a ${kind} carrier cannot take a new Storage bridge`, () => {
+    const w = world(); w.miner(); w.storage.store.energy = 200000;
+    if (kind === 'damaged move') w.carrier.getActiveBodyparts = part => part === 'move' ? 0 : 12;
+    if (kind === 'preparing boost') w.carrier.memory.boostPlan = { steps: [{}], completed: false, failed: false };
+    if (kind === 'foreign home') w.carrier.memory.spawnRoom = 'E40N5';
+    if (kind === 'unknown mine') { w.carrier.memory.data.mineId = 'unknown'; w.carrier.memory.developmentHauler.mineId = 'unknown'; }
+    assert.equal(w.tick(), false);
+    assert.equal(w.carrier.memory.productionRecoverySpawn, undefined); assert.equal(w.calls.length, 0);
+});
+
+test('no queued complete Storage distributor means no new bridge, and its absence is rechecked next tick', () => {
+    const w = world(); w.miner(); w.storage.store.energy = 200000; w.carrier.pos = w.storage.pos;
+    const demand = w.room.memory.creepConfig.distributor; delete w.room.memory.creepConfig.distributor;
+    assert.equal(w.tick(), false);
+    assert.equal(w.previews, 0); assert.equal(w.carrier.memory.productionRecoverySpawn, undefined);
+    w.room.memory.creepConfig.distributor = demand;
+    assert.equal(w.tick(), true);
+    assert.equal(w.previews, 1); assert.equal(w.carrier.memory.productionRecoveryCargo.targetEnergy, 2200);
+});
+
+test('new Storage bridge selection and complete body targets are independent between rooms in the same tick', () => {
+    const w = world(), other = w.filler('other'); const firstMiner = w.miner();
+    const secondName = 'E40N5', position = (x, y) => Object.assign(new w.storage.pos.constructor(x, y), { roomName: secondName });
+    const source = { ...w.source, id: 'second-mine', pos: position(42, 32) };
+    const storage = { ...w.storage, id: 'second-storage', pos: position(18, 29), store: { energy: 100000, getFreeCapacity: () => 900000 } };
+    const secondRoom = { ...w.room, name: secondName, energyAvailable: 300, sources: [source], storage, containers: [], links: [],
+        controller: { ...w.room.controller, pos: position(9, 29) },
+        memory: { creepConfig: { distributor: { ...w.room.memory.creepConfig.distributor, spawnRoom: secondName,
+            data: { sourceId: storage.id }, testBody: [...Array(20).fill('carry'), ...Array(20).fill('move')] } } } };
+    source.room = secondRoom; w.game.rooms[secondName] = secondRoom;
+    other.room = secondRoom; other.pos = storage.pos; other.memory.spawnRoom = secondName;
+    other.memory.data = { sourceId: source.id, mineId: source.id }; delete other.memory.developmentHauler;
+    w.game.creeps.secondMiner = { ...firstMiner, name: 'secondMiner', room: secondRoom, pos: source.pos,
+        memory: { ...firstMiner.memory, spawnRoom: secondName, data: { sourceId: source.id } } };
+    w.storage.store.energy = 200000; w.carrier.pos = w.storage.pos;
+    w.tick(() => { assert.equal(w.api.runFillerProductionRecovery(w.carrier), true); assert.equal(w.api.runFillerProductionRecovery(other), true); });
+    assert.equal(w.previews, 2);
+    assert.equal(w.carrier.memory.productionRecoveryCargo.targetEnergy, 2200);
+    assert.equal(other.memory.productionRecoveryCargo.targetEnergy, 2000);
+    assert.equal(other.memory.productionRecoverySpawn.roomName, secondName);
+    assert.equal(w.carrier.store.energy, 600); assert.equal(other.store.energy, 600);
+});
+
+test('healthy RCL8 mining keeps its existing fast path even with Storage stock and a queued distributor', () => {
+    const w = world(); w.miner(); w.room.controller.level = 8; w.storage.store.energy = 200000;
+    w.carrier.getActiveBodyparts = () => assert.fail('RCL8 must not enter the new bridge candidate scan');
+    let scans = 0;
+    w.game.creeps = new Proxy(w.game.creeps, { ownKeys(target) { scans++; return Reflect.ownKeys(target); } });
+    assert.equal(w.tick(), false);
+    assert.equal(scans, 1); assert.equal(w.previews, 0); assert.equal(w.calls.length, 0);
+});

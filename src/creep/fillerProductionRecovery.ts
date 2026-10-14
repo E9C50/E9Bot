@@ -4,6 +4,7 @@ import { resourcePolicy } from 'settings/resourcePolicy'
 import { sourceLinkWithCenter } from 'room/sourceLinks'
 import { isSpawnEnergyCarrier } from './spawnEnergyCarrier'
 import { developmentPolicy } from 'settings/development'
+import { isDevelopingRoom } from './development'
 import { haulerEnergyPickupReserved, reserveHaulerEnergyPickup } from './haulerPickup'
 import { committedTerminalEnergy, recordTerminalEnergyWithdrawal } from './terminalEnergyWithdrawal'
 
@@ -98,6 +99,8 @@ export function getProductionRecoveryDistributor(room: Room): { name: string; co
 }
 
 function hasPermanentDistributor(room: Room): boolean {
+    const cached = permanentDistributors.get(room)
+    if (cached !== undefined) return cached
     for (const name in Game.creeps) {
         const carrier = Game.creeps[name], data = carrier.memory.data as FillerData
         // A native Storage survivor can take back its own job; a temporary mine
@@ -105,8 +108,9 @@ function hasPermanentDistributor(room: Room): boolean {
         if (carrier.memory.role !== 'filler' ||
             (room.storage ? data?.sourceId !== room.storage.id || data.mineId || carrier.memory.developmentHauler?.mineId :
                 (carrier.memory as RecoveryMemory).productionRecoverySpawn !== undefined)) continue
-        if (isSpawnEnergyCarrier(room, carrier)) return true
+        if (isSpawnEnergyCarrier(room, carrier)) { permanentDistributors.set(room, true); return true }
     }
+    permanentDistributors.set(room, false)
     return false
 }
 
@@ -127,12 +131,47 @@ function usableMiner(room: Room, creep: Creep): boolean {
 }
 
 let tick = -1, shard = ''
-const withdrawn = new Map<string, number>(), delivered = new Map<string, number>()
+const withdrawn = new Map<string, number>(), delivered = new Map<string, number>(), cargoDelivered = new Map<string, number>()
 const productionRooms = new Map<Room, boolean>()
+const permanentDistributors = new Map<Room, boolean>()
+const distributorDemands = new Map<Room, { name: string; cost: number } | undefined>()
+const storageBridges = new Map<Room, string | undefined>()
 let productionIndexed = false
 function sync(): void {
     if (tick === Game.time && shard === Game.shard.name) return
-    tick = Game.time; shard = Game.shard.name; withdrawn.clear(); delivered.clear(); productionRooms.clear(); productionIndexed = false
+    tick = Game.time; shard = Game.shard.name; withdrawn.clear(); delivered.clear(); cargoDelivered.clear(); productionRooms.clear(); productionIndexed = false
+    permanentDistributors.clear(); distributorDemands.clear(); storageBridges.clear()
+}
+
+function distributorDemandForTick(room: Room): { name: string; cost: number } | undefined {
+    if (!distributorDemands.has(room)) distributorDemands.set(room, getProductionRecoveryDistributor(room))
+    return distributorDemands.get(room)
+}
+
+/** One healthy mine carrier covers a missing Storage lane until its full native replacement arrives. */
+function storageBridgeForTick(room: Room): string | undefined {
+    if (storageBridges.has(room)) return storageBridges.get(room)
+    storageBridges.set(room, undefined)
+    if (hasPermanentDistributor(room)) return undefined
+    const demand = distributorDemandForTick(room)
+    if (!demand || room.energyAvailable >= demand.cost) return undefined
+    let selected: Creep | undefined, nearest = Infinity, hasBridge = false
+    for (const name in Game.creeps) {
+        const carrier = Game.creeps[name], memory = carrier.memory, data = memory.data as FillerData | undefined
+        const mineId = data?.mineId || memory.developmentHauler?.mineId
+        if (memory.role !== 'filler' || carrier.spawning || carrier.ticksToLive === 0 || carrier.room !== room ||
+            memory.spawnRoom && memory.spawnRoom !== room.name || !room.sources.some(source => source.id === mineId) ||
+            memory.boostPlan?.steps.length && !memory.boostPlan.completed && !memory.boostPlan.failed ||
+            carrier.getActiveBodyparts(CARRY) <= 0 || carrier.getActiveBodyparts(MOVE) <= 0) continue
+        const bridge = memory.productionRecoverySpawn?.roomName === room.name
+        const distance = carrier.pos.getRangeTo(room.storage!)
+        if (!selected || bridge && !hasBridge || bridge === hasBridge &&
+            (distance < nearest || distance === nearest && carrier.name.localeCompare(selected.name) < 0)) {
+            selected = carrier; nearest = distance; hasBridge = bridge
+        }
+    }
+    storageBridges.set(room, selected?.name)
+    return selected?.name
 }
 
 function productionForTick(room: Room): boolean {
@@ -146,6 +185,17 @@ function productionForTick(room: Room): boolean {
         }
     }
     return productionRooms.get(room) || false
+}
+
+/** Native transfers leave Store unchanged until next tick; count only cargo still in transit. */
+function recoveryEnergyNeeded(room: Room, targetEnergy: number): number {
+    let inTransit = 0
+    for (const name in Game.creeps) {
+        const carrier = Game.creeps[name]
+        if (carrier.room.name === room.name && (carrier.memory as RecoveryMemory).productionRecoveryCargo)
+            inTransit += Math.max(0, carrier.store[RESOURCE_ENERGY] - (cargoDelivered.get(name) || 0))
+    }
+    return targetEnergy - room.energyAvailable - inTransit - (withdrawn.get(room.name) || 0) - (delivered.get(room.name) || 0)
 }
 
 function deliverRecoveryCargo(creep: Creep, targetEnergy: number): boolean {
@@ -168,6 +218,7 @@ function deliverRecoveryCargo(creep: Creep, targetEnergy: number): boolean {
     else if (result === OK) {
         delivered.set(selected.id, (delivered.get(selected.id) || 0) + amount)
         delivered.set(room.name, committed + amount)
+        cargoDelivered.set(creep.name, (cargoDelivered.get(creep.name) || 0) + amount)
     }
     creep.memory.dontPullMe = false
     return true
@@ -199,7 +250,12 @@ export function runFillerProductionRecovery(creep: Creep): boolean {
         room.energyAvailable >= room.energyCapacityAvailable) return false
     sync()
     const production = productionForTick(room)
-    const bridge = memory.productionRecoverySpawn?.roomName === room.name
+    let bridge = memory.productionRecoverySpawn?.roomName === room.name
+    if (production && !bridge && isDevelopingRoom(room) && room.storage?.my !== false &&
+        (room.storage?.store[RESOURCE_ENERGY] || 0) > 0 && storageBridgeForTick(room) === creep.name) {
+        memory.productionRecoverySpawn = { roomName: room.name, tick: Game.time }
+        bridge = true
+    }
     const permanentDistributor = (bridge || (room.memory as RecoveryRoomMemory).productionRecoveryTerminalDebt !== undefined) && hasPermanentDistributor(room)
     if (production && permanentDistributor) { delete memory.productionRecoverySpawn; delete memory.productionRecoveryLoad }
     else if (bridge) memory.productionRecoverySpawn!.tick = Game.time
@@ -211,8 +267,32 @@ export function runFillerProductionRecovery(creep: Creep): boolean {
         if (!bridge) return false
         // Keep the replacement miner on its workstation until real home distribution
         // arrives. A spawning distributor does not take over this temporary lane yet.
-        const target = getProductionRecoveryDistributor(room)?.cost || room.energyCapacityAvailable
+        const target = distributorDemandForTick(room)?.cost || room.energyCapacityAvailable
         if (room.energyAvailable >= target) return true
+        const needed = recoveryEnergyNeeded(room, target)
+        if (needed <= 0) return true
+        const storage = room.storage
+        const available = storage && storage.my !== false ?
+            Math.max(0, storage.store[RESOURCE_ENERGY] - (withdrawn.get(storage.id) || 0)) : 0
+        if (storage && available > 0) {
+            // Existing central stock can fund the handover without waiting for a fresh mine batch.
+            if (creep.store[RESOURCE_ENERGY] > 0) {
+                memory.productionRecoveryCargo = { targetEnergy: target }
+                return deliverRecoveryCargo(creep, target)
+            }
+            const amount = Math.min(needed, creep.store.getFreeCapacity(RESOURCE_ENERGY), available)
+            if (amount > 0) {
+                const result = creep.withdraw(storage, RESOURCE_ENERGY, amount)
+                if (result === ERR_NOT_IN_RANGE) creep.moveTo(storage, { range: 1 })
+                else if (result === OK) {
+                    memory.productionRecoveryCargo = { targetEnergy: target }
+                    withdrawn.set(storage.id, (withdrawn.get(storage.id) || 0) + amount)
+                    withdrawn.set(room.name, (withdrawn.get(room.name) || 0) + amount)
+                }
+            }
+            creep.memory.dontPullMe = false
+            return true
+        }
         if (loadTemporaryProduction(creep) && creep.store[RESOURCE_ENERGY] > 0) {
             memory.productionRecoveryCargo = { targetEnergy: target }
             return deliverRecoveryCargo(creep, target)
@@ -228,13 +308,7 @@ export function runFillerProductionRecovery(creep: Creep): boolean {
         memory.productionRecoveryCargo = { targetEnergy: miner.cost }
         return deliverRecoveryCargo(creep, miner.cost)
     }
-    let inTransit = 0
-    for (const name in Game.creeps) {
-        const carrier = Game.creeps[name]
-        if (carrier.room.name === room.name && (carrier.memory as RecoveryMemory).productionRecoveryCargo)
-            inTransit += carrier.store[RESOURCE_ENERGY]
-    }
-    const needed = miner.cost - room.energyAvailable - inTransit - (withdrawn.get(room.name) || 0) - (delivered.get(room.name) || 0)
+    const needed = recoveryEnergyNeeded(room, miner.cost)
     if (needed <= 0) return bridge
     let stock: StructureStorage | StructureContainer | StructureTerminal | undefined
     const available = (target: StructureStorage | StructureContainer | StructureTerminal): number =>
